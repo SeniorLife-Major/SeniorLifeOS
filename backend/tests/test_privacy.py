@@ -1,19 +1,28 @@
 """Tests for identifier validation and redaction. All identifiers are fake."""
 
+import json
+import os
 import random
 import unittest
 from unittest.mock import MagicMock, patch
 
 from seniorlife_os.demo.demo_cases import document_success_state
 from seniorlife_os.graphs.document_graph import build_document_graph
+from seniorlife_os.tools.demo_tools import normalize_field
 from seniorlife_os.agents.llm_agents import DocumentTypeChoice, SchemeChoice, choose_document_type, choose_scheme
 from seniorlife_os.utils.privacy import (
     is_valid_aadhaar,
     is_valid_ifsc,
     is_valid_pan,
+    keyed_hash,
+    load_hash_key,
+    mask_identifier,
     redact,
     verhoeff_check_digit,
 )
+
+
+FAKE_HASH_KEY = "fake-test-hash-key-0123456789abcdef"
 
 
 def fake_aadhaar(seed: int, separator: str = " ") -> str:
@@ -59,6 +68,130 @@ class ValidatorTests(unittest.TestCase):
         self.assertTrue(is_valid_ifsc("HDFC0ABC123"))
         self.assertFalse(is_valid_ifsc("SBIN1001234"))  # fifth character must be 0
         self.assertFalse(is_valid_ifsc("SBIN000123"))
+
+
+class StorageProtectionTests(unittest.TestCase):
+    def test_masking_keeps_only_last_four(self):
+        aadhaar = fake_aadhaar(5, separator="")
+        self.assertEqual(mask_identifier("aadhaar_number", aadhaar), f"XXXX XXXX {aadhaar[-4:]}")
+        self.assertEqual(mask_identifier("pan_number", "ABCPE1234F"), "XXXXXX234F")
+        self.assertEqual(mask_identifier("account_number", "123456789012345"), "XXXXXXXXXXX2345")
+
+    def test_keyed_hash_is_stable_and_depends_on_key_and_field(self):
+        aadhaar = fake_aadhaar(6, separator="")
+        first = keyed_hash("aadhaar_number", aadhaar, FAKE_HASH_KEY)
+        self.assertEqual(first, keyed_hash("aadhaar_number", aadhaar, FAKE_HASH_KEY))
+        self.assertNotEqual(first, keyed_hash("aadhaar_number", aadhaar, FAKE_HASH_KEY + "x"))
+        self.assertNotEqual(first, keyed_hash("account_number", aadhaar, FAKE_HASH_KEY))
+        self.assertNotIn(aadhaar, first)
+        self.assertEqual(len(first), 64)
+
+    @patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+    def test_hash_key_must_be_set_and_long_enough(self, _):
+        env = {k: v for k, v in os.environ.items() if k != "SENIORLIFE_HASH_KEY"}
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "SENIORLIFE_HASH_KEY"):
+                load_hash_key()
+        with patch.dict(os.environ, {**env, "SENIORLIFE_HASH_KEY": "too-short"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "at least 32"):
+                load_hash_key()
+        with patch.dict(os.environ, {**env, "SENIORLIFE_HASH_KEY": FAKE_HASH_KEY}, clear=True):
+            self.assertEqual(load_hash_key(), FAKE_HASH_KEY)
+
+
+def identity_state(aadhaar: str) -> dict:
+    """An identity card upload that needs no human review when the Aadhaar is valid."""
+    state = document_success_state()
+    state["document_id"] = "doc-identity-aadhaar"
+    state["claimed_type"] = "identity"
+    state.pop("review_decision")
+    state["simulate_ocr_failures"] = 0
+    state["document"]["filename"] = "identity_card.jpg"
+    state["document"]["pages"][0]["text"] = f"Name: Meera Rao\nDate of birth: 1958-05-15\nAadhaar: {aadhaar}"
+    return state
+
+
+class IdentifierExtractionTests(unittest.TestCase):
+    def test_id_numbers_are_normalized_or_rejected(self):
+        aadhaar = fake_aadhaar(8)
+        self.assertEqual(normalize_field("aadhaar_number", aadhaar), aadhaar.replace(" ", ""))
+        self.assertIsNone(normalize_field("aadhaar_number", break_checksum(aadhaar)))
+        self.assertEqual(normalize_field("pan_number", " abcpe1234f "), "ABCPE1234F")
+        self.assertIsNone(normalize_field("pan_number", "ABCXE1234F"))
+        self.assertEqual(normalize_field("account_number", "1234 5678 9012"), "123456789012")
+        self.assertIsNone(normalize_field("account_number", "12345"))
+
+    def test_bad_aadhaar_checksum_is_sent_to_review(self):
+        result = build_document_graph().invoke(identity_state(break_checksum(fake_aadhaar(9))))
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("aadhaar_number: failed format or checksum check", result["review_flags"])
+        self.assertNotIn("vault_record", result)
+
+
+def hash_key_env(key: str | None):
+    """Environment with SENIORLIFE_HASH_KEY set to key (or removed), ignoring the real .env."""
+    env = {k: v for k, v in os.environ.items() if k != "SENIORLIFE_HASH_KEY"}
+    if key is not None:
+        env["SENIORLIFE_HASH_KEY"] = key
+    return patch.dict(os.environ, env, clear=True)
+
+
+@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+class VaultProtectionTests(unittest.TestCase):
+    def assert_nowhere(self, number: str, result: dict):
+        dumped = json.dumps(result, default=str)
+        self.assertNotIn(number, dumped)
+        self.assertNotIn(number.replace(" ", ""), dumped)
+
+    def test_vault_stores_masked_aadhaar_and_keyed_hash_only(self, _):
+        aadhaar = fake_aadhaar(30)
+        with hash_key_env(FAKE_HASH_KEY):
+            result = build_document_graph().invoke(identity_state(aadhaar))
+        self.assertEqual(result["status"], "confirmed")
+        self.assertIn("protect_identifiers:protected", result["events"])
+        stored = result["vault_record"]["confirmed_fields"]["aadhaar_number"]["value"]
+        self.assertEqual(stored, f"XXXX XXXX {aadhaar[-4:]}")
+        expected_hash = keyed_hash("aadhaar_number", aadhaar.replace(" ", ""), FAKE_HASH_KEY)
+        self.assertEqual(result["vault_record"]["identifier_hashes"], {"aadhaar_number": expected_hash})
+        self.assert_nowhere(aadhaar, result)
+
+    def test_number_corrected_in_review_is_also_hidden(self, _):
+        aadhaar = fake_aadhaar(31)
+        state = identity_state(break_checksum(aadhaar))
+        state["review_decision"] = {"action": "confirm", "reviewer_id": "senior-meera", "edits": {"aadhaar_number": aadhaar}}
+        with hash_key_env(FAKE_HASH_KEY):
+            result = build_document_graph().invoke(state)
+        self.assertEqual(result["status"], "confirmed")
+        field = result["vault_record"]["confirmed_fields"]["aadhaar_number"]
+        self.assertTrue(field["corrected_by_user"])
+        self.assertEqual(field["value"], f"XXXX XXXX {aadhaar[-4:]}")
+        self.assert_nowhere(aadhaar, result)
+
+    def test_missing_hash_key_blocks_publishing(self, _):
+        with hash_key_env(None):
+            result = build_document_graph().invoke(identity_state(fake_aadhaar(32)))
+        self.assertEqual(result["status"], "failed_tool")
+        self.assertIn("protect_identifiers:no_key", result["events"])
+        self.assertIn("SENIORLIFE_HASH_KEY", result["errors"][0])
+        self.assertNotIn("vault_record", result)
+
+    def test_same_aadhaar_uploaded_again_is_flagged(self, _):
+        aadhaar = fake_aadhaar(33)
+        with hash_key_env(FAKE_HASH_KEY):
+            first = build_document_graph().invoke(identity_state(aadhaar))["vault_record"]
+            state = identity_state(aadhaar)
+            state["document_id"] = "doc-identity-again"
+            state["vault_identifier_hashes"] = {first["identifier_hashes"]["aadhaar_number"]: first["document_id"]}
+            second = build_document_graph().invoke(state)
+        self.assertEqual(second["status"], "confirmed")
+        self.assertIn("aadhaar_number already in the vault (document doc-identity-aadhaar)", second["warnings"])
+
+    def test_documents_without_id_numbers_need_no_key(self, _):
+        state = document_success_state()
+        with hash_key_env(None):
+            result = build_document_graph().invoke(state)
+        self.assertEqual(result["status"], "confirmed")
+        self.assertIn("protect_identifiers:none", result["events"])
 
 
 class RedactTests(unittest.TestCase):

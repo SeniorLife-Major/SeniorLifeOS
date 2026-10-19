@@ -4,11 +4,20 @@ Identifiers are swapped for placeholders such as [AADHAAR_1]. The mapping from
 placeholder back to the real value stays local and is never sent anywhere.
 Only the standard library is used; free-text names are hidden only when the
 caller already knows them (for example the owner's name).
+
+For storage, ID numbers are masked (only the last 4 characters stay visible)
+and fingerprinted with a keyed hash (HMAC-SHA256 with SENIORLIFE_HASH_KEY),
+so duplicates can be found without keeping the full number.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import re
+
+from .env import find_env_file, load_env_file
 
 
 # Verhoeff checksum tables (used by Aadhaar's last digit).
@@ -38,6 +47,10 @@ _VERHOEFF_INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]
 
 # Fourth PAN character is the holder type (P = person, C = company, ...).
 PAN_HOLDER_TYPES = set("ABCFGHJLPT")
+
+# Vault fields that hold ID numbers. They are masked and hashed before storage.
+ID_FIELDS = ("aadhaar_number", "pan_number", "account_number")
+MIN_HASH_KEY_LENGTH = 32
 
 AADHAAR_PATTERN = re.compile(r"(?<!\d)[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}(?!\d)")
 PAN_PATTERN = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
@@ -119,3 +132,26 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
     safe = EMAIL_PATTERN.sub(lambda m: placeholder("EMAIL", m.group(0)), safe)
     safe = PAN_PATTERN.sub(replace_pan, safe)
     return safe, mapping
+
+
+def mask_identifier(field: str, value: str) -> str:
+    """Hide all but the last 4 characters. Aadhaar keeps its 4-4-4 grouping."""
+    visible = value[-4:]
+    if field == "aadhaar_number":
+        return f"XXXX XXXX {visible}"
+    return "X" * max(len(value) - 4, 0) + visible
+
+
+def load_hash_key() -> str:
+    """Read SENIORLIFE_HASH_KEY (from the environment or .env). Fails if missing or short."""
+    load_env_file(find_env_file())
+    key = os.getenv("SENIORLIFE_HASH_KEY", "")
+    if len(key) < MIN_HASH_KEY_LENGTH:
+        raise RuntimeError(f"Set SENIORLIFE_HASH_KEY (at least {MIN_HASH_KEY_LENGTH} characters) before storing ID numbers")
+    return key
+
+
+def keyed_hash(field: str, value: str, key: str) -> str:
+    """HMAC-SHA256 of the field name and normalized value. Same key + value -> same hash."""
+    message = f"{field}:{value}".encode("utf-8")
+    return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()

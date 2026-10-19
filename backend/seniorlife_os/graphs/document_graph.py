@@ -1,4 +1,4 @@
-"""Document intake graph: validate -> classify -> extract -> gate -> review -> publish.
+"""Document intake graph: validate -> classify -> extract -> gate -> review -> protect -> publish.
 
 The page text is a local OCR fixture, so the graph needs no API key. The
 review node supports both a prefilled decision for one-call demos and a real
@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..tools.demo_tools import extract_fields_from_pages, normalize_field
+from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier
 
 
 REQUIRED_FIELDS = {
@@ -37,12 +38,14 @@ class DocumentState(TypedDict, total=False):
     use_interrupt: bool
     use_llm: bool
     simulate_ocr_failures: int
+    vault_identifier_hashes: dict[str, str]  # keyed hash -> document_id already in the vault
 
     # Graph outputs / control
     document_type: str
     extracted_fields: dict[str, dict[str, Any]]
     normalized_fields: dict[str, Any]
     review_flags: list[str]
+    identifier_hashes: dict[str, str]
     vault_record: dict[str, Any]
     events: list[str]
     warnings: list[str]
@@ -158,6 +161,9 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
         if normalized.get(key) is None or normalized.get(key) == "":
             flags.append(f"{key}: missing or invalid")
+    for key in ID_FIELDS:
+        if key in fields and normalized.get(key) is None:
+            flags.append(f"{key}: failed format or checksum check")
     owner_name = state["document"].get("owner_name")
     if owner_name and normalized.get("name") and owner_name.casefold() != str(normalized["name"]).casefold():
         flags.append("name differs from the provided owner name")
@@ -268,6 +274,66 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
     }
 
 
+def protect_identifiers(state: DocumentState) -> dict[str, Any]:
+    # Runs after review, so the reviewer could compare the full number with the card.
+    fields = state["normalized_fields"]
+    present = [key for key in ID_FIELDS if fields.get(key)]
+    if not present:
+        return {"route": "continue", "events": add_event(state, "protect_identifiers:none")}
+    try:
+        key = load_hash_key()
+    except RuntimeError as exc:
+        # Fail closed: never publish a full ID number.
+        return {
+            "status": "failed_tool",
+            "route": "stop",
+            "errors": [str(exc)],
+            "events": add_event(state, "protect_identifiers:no_key"),
+        }
+    protected = dict(fields)
+    extracted = {name: dict(item) for name, item in state["extracted_fields"].items()}
+    decision = dict(state["review_decision"])
+    edits = dict(decision.get("edits", {}))
+    hashes = {}
+    replacements = {}  # every spelling of a full number -> its mask
+    for field in present:
+        hashes[field] = keyed_hash(field, fields[field], key)
+        protected[field] = mask_identifier(field, fields[field])
+        replacements[fields[field]] = protected[field]
+        if field in extracted:
+            replacements[str(extracted[field]["value"])] = protected[field]
+            extracted[field]["value"] = protected[field]
+        if field in edits:
+            replacements[str(edits[field])] = protected[field]
+            edits[field] = protected[field]
+    if "edits" in decision:
+        decision["edits"] = edits
+    # The OCR page text is later stored as searchable chunks, so mask it too.
+    document = dict(state["document"])
+    pages = []
+    for page in document.get("pages", []):
+        text = page.get("text", "")
+        for original in sorted(replacements, key=len, reverse=True):
+            text = text.replace(original, replacements[original])
+        pages.append({**page, "text": text})
+    document["pages"] = pages
+    known = state.get("vault_identifier_hashes", {})
+    warnings = [
+        f"{field} already in the vault (document {known[digest]})"
+        for field, digest in hashes.items() if digest in known
+    ]
+    return {
+        "document": document,
+        "normalized_fields": protected,
+        "extracted_fields": extracted,
+        "review_decision": decision,
+        "identifier_hashes": hashes,
+        "warnings": [*state.get("warnings", []), *warnings],
+        "route": "continue",
+        "events": add_event(state, "protect_identifiers:protected"),
+    }
+
+
 def publish_confirmed_version(state: DocumentState) -> dict[str, Any]:
     fields = state["normalized_fields"]
     extracted = state["extracted_fields"]
@@ -289,6 +355,7 @@ def publish_confirmed_version(state: DocumentState) -> dict[str, Any]:
         "confirmed_fields": confirmed_fields,
         "issue_date": fields.get("issue_date"),
         "expiry_date": fields.get("expiry_date"),
+        "identifier_hashes": state.get("identifier_hashes", {}),
         "demo_only": True,
     }
     return {
@@ -311,6 +378,7 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_node("validate_candidates", validate_candidates)
     graph.add_node("confidence_gate", confidence_gate)
     graph.add_node("human_field_review", human_field_review)
+    graph.add_node("protect_identifiers", protect_identifiers)
     graph.add_node("publish_confirmed_version", publish_confirmed_version)
 
     graph.add_edge(START, "validate_upload")
@@ -321,9 +389,12 @@ def build_document_graph(checkpointer: Any = None):
     })
     graph.add_edge("validate_candidates", "confidence_gate")
     graph.add_conditional_edges("confidence_gate", route_step, {
-        "auto_accept": "publish_confirmed_version", "review": "human_field_review",
+        "auto_accept": "protect_identifiers", "review": "human_field_review",
     })
     graph.add_conditional_edges("human_field_review", route_step, {
+        "continue": "protect_identifiers", "stop": END,
+    })
+    graph.add_conditional_edges("protect_identifiers", route_step, {
         "continue": "publish_confirmed_version", "stop": END,
     })
     graph.add_edge("publish_confirmed_version", END)

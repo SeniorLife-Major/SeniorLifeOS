@@ -10,6 +10,8 @@ import re
 from datetime import date
 from typing import Any
 
+from ..utils.privacy import is_valid_aadhaar, is_valid_pan
+
 
 DEMO_SCHEMES: dict[str, dict[str, Any]] = {
     "demo_senior_support": {
@@ -47,6 +49,12 @@ FIELD_LABELS = {
     "issue date": "issue_date",
     "expiry date": "expiry_date",
     "issuer": "issuer",
+    "aadhaar": "aadhaar_number",
+    "aadhaar no": "aadhaar_number",
+    "pan": "pan_number",
+    "pan no": "pan_number",
+    "account number": "account_number",
+    "a/c no": "account_number",
 }
 
 
@@ -86,6 +94,15 @@ def normalize_field(key: str, raw_value: str) -> Any:
             return None
     if key == "residence_state":
         return raw_value.upper()
+    if key == "aadhaar_number":
+        digits = re.sub(r"[ -]", "", raw_value)
+        return digits if is_valid_aadhaar(digits) else None
+    if key == "pan_number":
+        pan = raw_value.strip().upper()
+        return pan if is_valid_pan(pan) else None
+    if key == "account_number":
+        digits = re.sub(r"[ -]", "", raw_value)
+        return digits if digits.isdigit() and 9 <= len(digits) <= 18 else None
     return raw_value.strip()
 
 
