@@ -14,7 +14,7 @@ import os
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from .demo_tools import extract_fields_from_pages, normalize_field
+from ..tools.demo_tools import extract_fields_from_pages, normalize_field
 
 
 REQUIRED_FIELDS = {
@@ -83,7 +83,7 @@ def classify_document(state: DocumentState) -> dict[str, Any]:
     guessed = claimed
     if not guessed and state.get("use_llm"):
         try:
-            from .llm_agents import choose_document_type
+            from ..agents.llm_agents import choose_document_type
 
             page_text = "\n".join(page.get("text", "") for page in state["document"]["pages"])
             known = {"NAME": state["document"].get("owner_name", "")}

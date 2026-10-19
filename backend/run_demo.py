@@ -2,9 +2,9 @@
 
 from pprint import pprint
 
-from seniorlife_os.benefits_graph import build_benefits_graph as benefits_graph
-from seniorlife_os.document_graph import build_document_graph as document_graph
-from seniorlife_os.demo_cases import (
+from seniorlife_os.graphs.benefits_graph import build_benefits_graph as benefits_graph
+from seniorlife_os.graphs.document_graph import build_document_graph as document_graph
+from seniorlife_os.demo.demo_cases import (
     benefits_failure_state,
     benefits_success_state,
     document_failure_state,

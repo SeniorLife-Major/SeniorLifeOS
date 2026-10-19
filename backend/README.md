@@ -22,12 +22,16 @@ Run commands from `backend/` so `seniorlife_os` is importable. If `py` is unavai
 
 ## Direct `invoke()` examples
 
-The fixture functions in [demo_cases.py](seniorlife_os/demo_cases.py) return ordinary dictionaries you can inspect and edit:
+The fixture functions in [demo_cases.py](seniorlife_os/demo/demo_cases.py) return ordinary dictionaries you can inspect and edit:
 
 ```python
 from pprint import pprint
-from seniorlife_os import document_graph, benefits_graph
-from seniorlife_os.demo_cases import document_success_state, benefits_success_state
+from seniorlife_os.graphs.document_graph import build_document_graph
+from seniorlife_os.graphs.benefits_graph import build_benefits_graph
+from seniorlife_os.demo.demo_cases import document_success_state, benefits_success_state
+
+document_graph = build_document_graph()
+benefits_graph = build_benefits_graph()
 
 initial_state = document_success_state()
 document_result = document_graph.invoke(initial_state)
@@ -131,8 +135,8 @@ Omit a prefilled `review_decision`, set `use_interrupt=True`, and compile with a
 ```python
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
-from seniorlife_os import build_document_graph
-from seniorlife_os.demo_cases import document_success_state
+from seniorlife_os.graphs.document_graph import build_document_graph
+from seniorlife_os.demo.demo_cases import document_success_state
 
 graph = build_document_graph(checkpointer=InMemorySaver())
 state = document_success_state()
@@ -157,6 +161,13 @@ Document Intake returns `vault_record` only after the owner confirms extracted f
 
 The OCR parser reads handwritten `pages[].text`; it does **not** open a real image/PDF or perform malware scanning. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
-Optional structured LLM selection nodes are included for document classification and scheme resolution. `langchain-openai` is already in `requirements.txt`. Set `OPENAI_API_KEY` and `SENIORLIFE_LLM_MODEL`, set `use_llm=True`, and omit `claimed_type` or `scheme_id` respectively. The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
+Optional structured LLM selection nodes are included for document classification and scheme resolution. Set `use_llm=True` and omit `claimed_type` or `scheme_id` respectively. The provider is chosen by `SENIORLIFE_LLM_PROVIDER` (see `seniorlife_os/agents/models.py`):
+
+| Provider | Needs | Model |
+|---|---|---|
+| `groq` (default) | `GROQ_API_KEY` | `SENIORLIFE_LLM_MODEL`, or `llama-3.3-70b-versatile` if unset |
+| `openai` | `OPENAI_API_KEY` | `SENIORLIFE_LLM_MODEL` (required) |
+
+These variables are read from the environment, or from `backend/.env` / the repository root `.env` (shell variables win). Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`seniorlife_os/utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
 
 See the [workflow technical blueprint](../docs/SeniorLife-OS-Workflow-Technical-Blueprint.md) for the intended real integrations.

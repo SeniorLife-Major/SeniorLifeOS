@@ -16,7 +16,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from .demo_tools import DEMO_SCHEMES, evaluate_rule, get_scheme
+from ..tools.demo_tools import DEMO_SCHEMES, evaluate_rule, get_scheme
 
 
 class BenefitsState(TypedDict, total=False):
@@ -84,7 +84,7 @@ def resolve_scheme(state: BenefitsState) -> dict[str, Any]:
     scheme_id = state.get("scheme_id")
     if not scheme_id and state.get("use_llm"):
         try:
-            from .llm_agents import choose_scheme
+            from ..agents.llm_agents import choose_scheme
 
             candidates = [scheme for scheme in DEMO_SCHEMES.values() if scheme["jurisdiction"] == state["jurisdiction"]]
             scheme_id = choose_scheme(state.get("need_text", ""), candidates).scheme_id

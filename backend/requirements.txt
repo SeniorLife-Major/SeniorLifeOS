@@ -1,5 +1,6 @@
 langgraph==1.2.12
 ipython
 langchain-openai>=1,<2
+langchain-groq>=1,<2
 fastapi
 uvicorn
