@@ -1,15 +1,40 @@
 """Run successful and edge-case document/benefits graphs with invoke()."""
 
 from pprint import pprint
+import sys
+from pathlib import Path
 
-from seniorlife_os.graphs.benefits_graph import build_benefits_graph as benefits_graph
-from seniorlife_os.graphs.document_graph import build_document_graph as document_graph
-from seniorlife_os.demo.demo_cases import (
-    benefits_failure_state,
-    benefits_success_state,
-    document_failure_state,
-    document_success_state,
-)
+# Enforce UTF-8 encoding across stdout/stderr on all operating systems
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# Ensure project root is in sys.path
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+try:
+    from backend.graphs.benefits_graph import build_benefits_graph as benefits_graph
+    from backend.graphs.document_graph import build_document_graph as document_graph
+    from backend.demo.demo_cases import (
+        benefits_failure_state,
+        benefits_success_state,
+        document_failure_state,
+        document_success_state,
+    )
+except ImportError:
+    from graphs.benefits_graph import build_benefits_graph as benefits_graph
+    from graphs.document_graph import build_document_graph as document_graph
+    from demo.demo_cases import (
+        benefits_failure_state,
+        benefits_success_state,
+        document_failure_state,
+        document_success_state,
+    )
 
 
 def show(label: str, result: dict) -> None:

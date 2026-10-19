@@ -6,9 +6,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 
-from seniorlife_os.graphs.benefits_graph import build_benefits_graph
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.demo.demo_cases import (
+from backend.graphs.benefits_graph import build_benefits_graph
+from backend.graphs.document_graph import build_document_graph
+from backend.demo.demo_cases import (
     benefits_failure_state,
     benefits_success_state,
     document_failure_state,

@@ -1,0 +1,35 @@
+app:
+  name: ${APP_NAME:SeniorLife OS}
+  version: ${APP_VERSION:1.0.0}
+  environment: ${APP_ENV:development}
+  debug: ${DEBUG:true}
+  demo_mode: ${DEMO_MODE:true}
+
+server:
+  host: ${SERVER_HOST:0.0.0.0}
+  port: ${SERVER_PORT:8000}
+
+database:
+  url: ${DATABASE_URL:postgresql+asyncpg://postgres:postgres@localhost:5432/seniorlife_os}
+  echo: ${DATABASE_ECHO:true}
+  pool_size: ${DATABASE_POOL_SIZE:10}
+  max_overflow: ${DATABASE_MAX_OVERFLOW:20}
+
+security:
+  hash_key: ${SENIORLIFE_HASH_KEY:}
+  token_secret: ${JWT_SECRET:change-me-in-production-secret-key-32-chars-min}
+
+llm:
+  provider: ${SENIORLIFE_LLM_PROVIDER:groq}
+  groq:
+    model: ${SENIORLIFE_LLM_MODEL:openai/gpt-oss-20b}
+    api_key: ${GROQ_API_KEY:}
+    temperature: ${GROQ_TEMPERATURE:0.0}
+  openai:
+    model: ${SENIORLIFE_LLM_MODEL:gpt-4o}
+    api_key: ${OPENAI_API_KEY:}
+    temperature: ${OPENAI_TEMPERATURE:0.0}
+
+actuator:
+  enabled: ${ACTUATOR_ENABLED:true}
+

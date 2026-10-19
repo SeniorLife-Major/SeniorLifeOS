@@ -6,11 +6,11 @@ import random
 import unittest
 from unittest.mock import MagicMock, patch
 
-from seniorlife_os.demo.demo_cases import document_success_state
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools.demo_tools import normalize_field
-from seniorlife_os.agents.llm_agents import DocumentTypeChoice, SchemeChoice, choose_document_type, choose_scheme
-from seniorlife_os.utils.privacy import (
+from backend.demo.demo_cases import document_success_state
+from backend.graphs.document_graph import build_document_graph
+from backend.tools.demo_tools import normalize_field
+from backend.agents.llm_agents import DocumentTypeChoice, SchemeChoice, choose_document_type, choose_scheme
+from backend.utils.privacy import (
     is_valid_aadhaar,
     is_valid_ifsc,
     is_valid_pan,
@@ -86,7 +86,7 @@ class StorageProtectionTests(unittest.TestCase):
         self.assertNotIn(aadhaar, first)
         self.assertEqual(len(first), 64)
 
-    @patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+    @patch("backend.utils.privacy.find_env_file", return_value=None)
     def test_hash_key_must_be_set_and_long_enough(self, _):
         env = {k: v for k, v in os.environ.items() if k != "SENIORLIFE_HASH_KEY"}
         with patch.dict(os.environ, env, clear=True):
@@ -136,7 +136,7 @@ def hash_key_env(key: str | None):
     return patch.dict(os.environ, env, clear=True)
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class VaultProtectionTests(unittest.TestCase):
     def assert_nowhere(self, number: str, result: dict):
         dumped = json.dumps(result, default=str)
@@ -251,7 +251,7 @@ class LLMGuardrailTests(unittest.TestCase):
         state["use_llm"] = True
         state["document"]["pages"][0]["text"] = f"Name: Meera Rao\nDate of birth: 1958-05-15\nAadhaar: {aadhaar}"
         model, prompts = fake_model(DocumentTypeChoice(document_type="identity", reason="Has an ID number"))
-        with patch("seniorlife_os.agents.llm_agents.structured_model", return_value=model):
+        with patch("backend.agents.llm_agents.structured_model", return_value=model):
             result = build_document_graph().invoke(state)
         self.assertIn("classify_document:identity", result["events"])
         self.assertEqual(len(prompts), 1)
@@ -264,14 +264,14 @@ class LLMGuardrailTests(unittest.TestCase):
     def test_identifier_in_llm_reason_is_hidden(self):
         aadhaar = fake_aadhaar(22)
         model, _ = fake_model(DocumentTypeChoice(document_type="identity", reason=f"Found number {aadhaar}"))
-        with patch("seniorlife_os.agents.llm_agents.structured_model", return_value=model):
+        with patch("backend.agents.llm_agents.structured_model", return_value=model):
             choice = choose_document_type("Some document text")
         self.assertNotIn(aadhaar, choice.reason)
         self.assertIn("[AADHAAR_1]", choice.reason)
 
     def test_scheme_need_text_is_redacted(self):
         model, prompts = fake_model(SchemeChoice(scheme_id="demo_senior_support", reason="Pension request"))
-        with patch("seniorlife_os.agents.llm_agents.structured_model", return_value=model):
+        with patch("backend.agents.llm_agents.structured_model", return_value=model):
             choose_scheme("Pension help please, call me on 9876543210", [{"scheme_id": "demo_senior_support", "name": "Demo"}])
         self.assertNotIn("9876543210", prompts[0])
         self.assertIn("[PHONE_1]", prompts[0])
@@ -281,8 +281,8 @@ class LLMGuardrailTests(unittest.TestCase):
         state.pop("claimed_type")
         state["use_llm"] = True
         model_factory = MagicMock()
-        with patch("seniorlife_os.agents.llm_agents.redact", side_effect=RuntimeError("redaction broke")), \
-                patch("seniorlife_os.agents.llm_agents.structured_model", model_factory):
+        with patch("backend.agents.llm_agents.redact", side_effect=RuntimeError("redaction broke")), \
+                patch("backend.agents.llm_agents.structured_model", model_factory):
             result = build_document_graph().invoke(state)
         self.assertEqual(result["status"], "failed_tool")
         self.assertIn("classify_document:llm_error", result["events"])

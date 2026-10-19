@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import BaseModel
 
-from seniorlife_os.agents import models
-from seniorlife_os.utils.env import load_env_file
+from backend.agents import models
+from backend.utils.env import load_env_file
 
 
 LLM_KEYS = ("GROQ_API_KEY", "OPENAI_API_KEY", "SENIORLIFE_LLM_PROVIDER", "SENIORLIFE_LLM_MODEL")
@@ -57,7 +57,7 @@ class EnvFileTests(unittest.TestCase):
         self.assertEqual(load_env_file(None), [])
 
 
-@patch("seniorlife_os.agents.models._load_env")
+@patch("backend.agents.models._load_env")
 class ModelSelectionTests(unittest.TestCase):
     def test_default_provider_is_groq(self, _):
         with patch.dict(os.environ, clean_env(GROQ_API_KEY="fake-groq"), clear=True):
@@ -97,14 +97,14 @@ class ModelSelectionTests(unittest.TestCase):
 
     def test_groq_uses_function_calling_for_structured_output(self, _):
         fake = MagicMock()
-        with patch.dict(os.environ, clean_env(), clear=True), patch("seniorlife_os.agents.models.get_model", return_value=fake):
+        with patch.dict(os.environ, clean_env(), clear=True), patch("backend.agents.models.get_model", return_value=fake):
             models.structured_model(Answer)
         fake.with_structured_output.assert_called_once_with(Answer, method="function_calling")
 
     def test_openai_keeps_default_structured_output(self, _):
         fake = MagicMock()
         with patch.dict(os.environ, clean_env(SENIORLIFE_LLM_PROVIDER="openai"), clear=True), \
-                patch("seniorlife_os.agents.models.get_model", return_value=fake):
+                patch("backend.agents.models.get_model", return_value=fake):
             models.structured_model(Answer)
         fake.with_structured_output.assert_called_once_with(Answer)
 
