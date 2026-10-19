@@ -1,0 +1,160 @@
+"""Tests for identifier validation and redaction. All identifiers are fake."""
+
+import random
+import unittest
+from unittest.mock import MagicMock, patch
+
+from seniorlife_os.demo_cases import document_success_state
+from seniorlife_os.document_graph import build_document_graph
+from seniorlife_os.llm_agents import DocumentTypeChoice, SchemeChoice, choose_document_type, choose_scheme
+from seniorlife_os.privacy import (
+    is_valid_aadhaar,
+    is_valid_ifsc,
+    is_valid_pan,
+    redact,
+    verhoeff_check_digit,
+)
+
+
+def fake_aadhaar(seed: int, separator: str = " ") -> str:
+    """Generate a fake 12-digit number that passes the Aadhaar format and checksum."""
+    rng = random.Random(seed)
+    body = str(rng.randint(2, 9)) + "".join(str(rng.randint(0, 9)) for _ in range(10))
+    digits = body + verhoeff_check_digit(body)
+    return separator.join([digits[0:4], digits[4:8], digits[8:12]])
+
+
+def break_checksum(number: str) -> str:
+    """Change the last digit. Verhoeff catches every single-digit change."""
+    return number[:-1] + str((int(number[-1]) + 1) % 10)
+
+
+class ValidatorTests(unittest.TestCase):
+    def test_verhoeff_known_answers(self):
+        # Published Verhoeff examples: 236 -> 3, 12345 -> 1.
+        self.assertEqual(verhoeff_check_digit("236"), "3")
+        self.assertEqual(verhoeff_check_digit("12345"), "1")
+
+    def test_generated_fake_aadhaar_is_valid(self):
+        for seed in range(20):
+            number = fake_aadhaar(seed)
+            self.assertTrue(is_valid_aadhaar(number), number)
+            self.assertTrue(is_valid_aadhaar(number.replace(" ", "")))
+            self.assertTrue(is_valid_aadhaar(number.replace(" ", "-")))
+
+    def test_wrong_checksum_or_start_digit_is_invalid(self):
+        number = fake_aadhaar(1)
+        self.assertFalse(is_valid_aadhaar(break_checksum(number)))
+        self.assertFalse(is_valid_aadhaar("1" + number[1:]))
+        self.assertFalse(is_valid_aadhaar(number[:-1]))
+
+    def test_pan_format(self):
+        self.assertTrue(is_valid_pan("ABCPE1234F"))
+        self.assertFalse(is_valid_pan("ABCXE1234F"))  # X is not a holder type
+        self.assertFalse(is_valid_pan("ABCPE12345"))
+        self.assertFalse(is_valid_pan("abcpe1234f"))
+
+    def test_ifsc_format(self):
+        self.assertTrue(is_valid_ifsc("SBIN0001234"))
+        self.assertTrue(is_valid_ifsc("HDFC0ABC123"))
+        self.assertFalse(is_valid_ifsc("SBIN1001234"))  # fifth character must be 0
+        self.assertFalse(is_valid_ifsc("SBIN000123"))
+
+
+class RedactTests(unittest.TestCase):
+    def test_hides_each_identifier_type(self):
+        aadhaar = fake_aadhaar(7)
+        text = (
+            f"Name: Meera Rao\nAadhaar: {aadhaar}\nPAN: ABCPE1234F\n"
+            "A/c No: 123456789012345\nIFSC: SBIN0001234\n"
+            "Mobile: +91 9876543210\nEmail: meera.rao@example.com"
+        )
+        safe, mapping = redact(text, {"NAME": "Meera Rao"})
+        for secret in (aadhaar, "ABCPE1234F", "123456789012345", "9876543210", "meera.rao@example.com", "Meera Rao"):
+            self.assertNotIn(secret, safe)
+        for token in ("[NAME_1]", "[AADHAAR_1]", "[PAN_1]", "[ACCOUNT_1]", "[PHONE_1]", "[EMAIL_1]"):
+            self.assertIn(token, safe)
+        self.assertIn("A/c No: [ACCOUNT_1]", safe)
+        self.assertIn("SBIN0001234", safe)  # IFSC is a public branch code
+        self.assertEqual(mapping["[AADHAAR_1]"], aadhaar)
+        self.assertEqual(mapping["[NAME_1]"], "Meera Rao")
+
+    def test_twelve_digits_with_bad_checksum_are_kept(self):
+        not_aadhaar = break_checksum(fake_aadhaar(3))
+        safe, mapping = redact(f"Receipt number: {not_aadhaar}")
+        self.assertIn(not_aadhaar, safe)
+        self.assertEqual(mapping, {})
+
+    def test_same_value_gets_same_placeholder(self):
+        first, second = fake_aadhaar(11), fake_aadhaar(12)
+        safe, mapping = redact(f"{first} then {second} then {first}")
+        self.assertEqual(safe, "[AADHAAR_1] then [AADHAAR_2] then [AADHAAR_1]")
+        self.assertEqual(len(mapping), 2)
+
+    def test_known_name_is_matched_case_insensitively(self):
+        safe, _ = redact("MEERA RAO signed for meera rao", {"NAME": "Meera Rao"})
+        self.assertEqual(safe, "[NAME_1] signed for [NAME_1]")
+
+    def test_text_without_identifiers_is_unchanged(self):
+        text = "Annual income: ₹1,20,000\nIssue date: 2026-06-01\nIssuer: Demo District Office"
+        safe, mapping = redact(text, {"NAME": ""})
+        self.assertEqual(safe, text)
+        self.assertEqual(mapping, {})
+
+
+def fake_model(answer):
+    """A stand-in for the chat model that records every prompt it receives."""
+    prompts = []
+    model = MagicMock()
+    model.with_structured_output.return_value.invoke.side_effect = lambda prompt: prompts.append(prompt) or answer
+    return model, prompts
+
+
+class LLMGuardrailTests(unittest.TestCase):
+    def test_graph_sends_no_identifiers_to_the_llm(self):
+        aadhaar = fake_aadhaar(21)
+        state = document_success_state()
+        state.pop("claimed_type")
+        state["use_llm"] = True
+        state["document"]["pages"][0]["text"] = f"Name: Meera Rao\nDate of birth: 1958-05-15\nAadhaar: {aadhaar}"
+        model, prompts = fake_model(DocumentTypeChoice(document_type="identity", reason="Has an ID number"))
+        with patch("seniorlife_os.llm_agents._model", return_value=model):
+            result = build_document_graph().invoke(state)
+        self.assertIn("classify_document:identity", result["events"])
+        self.assertEqual(len(prompts), 1)
+        self.assertNotIn(aadhaar, prompts[0])
+        self.assertNotIn(aadhaar.replace(" ", ""), prompts[0])
+        self.assertNotIn("Meera Rao", prompts[0])
+        self.assertIn("Aadhaar: [AADHAAR_1]", prompts[0])
+        self.assertIn("Name: [NAME_1]", prompts[0])
+
+    def test_identifier_in_llm_reason_is_hidden(self):
+        aadhaar = fake_aadhaar(22)
+        model, _ = fake_model(DocumentTypeChoice(document_type="identity", reason=f"Found number {aadhaar}"))
+        with patch("seniorlife_os.llm_agents._model", return_value=model):
+            choice = choose_document_type("Some document text")
+        self.assertNotIn(aadhaar, choice.reason)
+        self.assertIn("[AADHAAR_1]", choice.reason)
+
+    def test_scheme_need_text_is_redacted(self):
+        model, prompts = fake_model(SchemeChoice(scheme_id="demo_senior_support", reason="Pension request"))
+        with patch("seniorlife_os.llm_agents._model", return_value=model):
+            choose_scheme("Pension help please, call me on 9876543210", [{"scheme_id": "demo_senior_support", "name": "Demo"}])
+        self.assertNotIn("9876543210", prompts[0])
+        self.assertIn("[PHONE_1]", prompts[0])
+
+    def test_llm_is_not_called_when_redaction_fails(self):
+        state = document_success_state()
+        state.pop("claimed_type")
+        state["use_llm"] = True
+        model_factory = MagicMock()
+        with patch("seniorlife_os.llm_agents.redact", side_effect=RuntimeError("redaction broke")), \
+                patch("seniorlife_os.llm_agents._model", model_factory):
+            result = build_document_graph().invoke(state)
+        self.assertEqual(result["status"], "failed_tool")
+        self.assertIn("classify_document:llm_error", result["events"])
+        model_factory.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -9,17 +9,16 @@ The design uses `TypedDict` states, small node functions, conditional edges, sub
 
 ## Setup
 
-With Python 3.12 on Windows PowerShell, starting from the repository root:
+With Python 3.11 on Windows PowerShell, from the `backend/` folder:
 
 ```powershell
-py -m venv .venv
-cd backend
-..\.venv\Scripts\python.exe -m pip install -r requirements.txt
-..\.venv\Scripts\python.exe run_demo.py
-..\.venv\Scripts\python.exe -m unittest discover -s tests -v
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe run_demo.py
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Run commands from `backend/` so `seniorlife_os` is importable. If `py` is unavailable, create the venv with another installed Python 3.12 executable. The project `.venv` lives at the repository root and is Git-ignored.
+Run commands from `backend/` so `seniorlife_os` is importable. If `py` is unavailable, create the venv with another installed Python 3.11 executable. `backend/.venv` is Git-ignored.
 
 ## Direct `invoke()` examples
 
@@ -158,6 +157,6 @@ Document Intake returns `vault_record` only after the owner confirms extracted f
 
 The OCR parser reads handwritten `pages[].text`; it does **not** open a real image/PDF or perform malware scanning. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
-Optional structured LLM selection nodes are included for document classification and scheme resolution. Install `requirements-llm.txt`, set `OPENAI_API_KEY` and `SENIORLIFE_LLM_MODEL`, set `use_llm=True`, and omit `claimed_type` or `scheme_id` respectively. The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
+Optional structured LLM selection nodes are included for document classification and scheme resolution. `langchain-openai` is already in `requirements.txt`. Set `OPENAI_API_KEY` and `SENIORLIFE_LLM_MODEL`, set `use_llm=True`, and omit `claimed_type` or `scheme_id` respectively. The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
 
-See the [workflow technical blueprint](SeniorLife-OS-Workflow-Technical-Blueprint.md) for the intended real integrations.
+See the [workflow technical blueprint](../docs/SeniorLife-OS-Workflow-Technical-Blueprint.md) for the intended real integrations.

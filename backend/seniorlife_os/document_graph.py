@@ -1,4 +1,4 @@
-"""Document intake graph: validate -> classify -> extract -> review -> publish.
+"""Document intake graph: validate -> classify -> extract -> gate -> review -> publish.
 
 The page text is a local OCR fixture, so the graph needs no API key. The
 review node supports both a prefilled decision for one-call demos and a real
@@ -23,6 +23,8 @@ REQUIRED_FIELDS = {
     "residence_proof": {"name", "residence_state", "issue_date"},
 }
 ALLOWED_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
+CONFIDENCE_THRESHOLD = 0.9
+AUTO_REVIEWER_ID = "system:confidence_gate"
 
 
 class DocumentState(TypedDict, total=False):
@@ -84,7 +86,8 @@ def classify_document(state: DocumentState) -> dict[str, Any]:
             from .llm_agents import choose_document_type
 
             page_text = "\n".join(page.get("text", "") for page in state["document"]["pages"])
-            guessed = choose_document_type(page_text).document_type
+            known = {"NAME": state["document"].get("owner_name", "")}
+            guessed = choose_document_type(page_text, known).document_type
         except Exception as exc:
             return {
                 "status": "failed_tool",
@@ -167,6 +170,28 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
         "normalized_fields": normalized,
         "review_flags": flags,
         "events": add_event(state, "validate_candidates"),
+    }
+
+
+def confidence_gate(state: DocumentState) -> dict[str, Any]:
+    # An explicit owner decision always wins over automatic acceptance.
+    if state.get("review_decision"):
+        return {"route": "review", "events": add_event(state, "confidence_gate:owner_decision")}
+    flags = list(state["review_flags"])
+    for key, item in sorted(state["extracted_fields"].items()):
+        if item.get("confidence", 0.0) < CONFIDENCE_THRESHOLD:
+            flags.append(f"{key}: low confidence ({item.get('confidence', 0.0):.2f})")
+    if flags:
+        return {
+            "review_flags": flags,
+            "route": "review",
+            "events": add_event(state, "confidence_gate:needs_review"),
+        }
+    return {
+        "review_decision": {"action": "auto_accept", "reviewer_id": AUTO_REVIEWER_ID},
+        "status": "reviewed",
+        "route": "auto_accept",
+        "events": add_event(state, "confidence_gate:auto_accept"),
     }
 
 
@@ -284,6 +309,7 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_node("classify_document", classify_document)
     graph.add_node("extract_content", extract_content)
     graph.add_node("validate_candidates", validate_candidates)
+    graph.add_node("confidence_gate", confidence_gate)
     graph.add_node("human_field_review", human_field_review)
     graph.add_node("publish_confirmed_version", publish_confirmed_version)
 
@@ -293,7 +319,10 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_conditional_edges("extract_content", route_step, {
         "continue": "validate_candidates", "retry": "extract_content", "stop": END,
     })
-    graph.add_edge("validate_candidates", "human_field_review")
+    graph.add_edge("validate_candidates", "confidence_gate")
+    graph.add_conditional_edges("confidence_gate", route_step, {
+        "auto_accept": "publish_confirmed_version", "review": "human_field_review",
+    })
     graph.add_conditional_edges("human_field_review", route_step, {
         "continue": "publish_confirmed_version", "stop": END,
     })

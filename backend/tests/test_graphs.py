@@ -50,6 +50,38 @@ class DocumentGraphTests(unittest.TestCase):
         }), config)
         self.assertEqual(finished["status"], "confirmed")
 
+    def test_clean_high_confidence_document_is_auto_accepted(self):
+        state = document_success_state()
+        state.pop("review_decision")
+        state["document"]["pages"][0]["text"] = state["document"]["pages"][0]["text"].replace("2026/06/01", "2026-06-01")
+        result = build_document_graph().invoke(state)
+        self.assertEqual(result["status"], "confirmed")
+        self.assertIn("confidence_gate:auto_accept", result["events"])
+        self.assertFalse(any(event.startswith("human_field_review") for event in result["events"]))
+        income = result["vault_record"]["confirmed_fields"]["annual_income"]
+        self.assertEqual(income["reviewed_by"], "system:confidence_gate")
+        self.assertFalse(income["corrected_by_user"])
+
+    def test_low_confidence_field_is_sent_to_review(self):
+        state = document_success_state()
+        state.pop("review_decision")
+        state["document"]["pages"][0]["text"] = state["document"]["pages"][0]["text"].replace("2026/06/01", "2026-06-01")
+        state["document"]["pages"][0]["quality"] = 0.7
+        result = build_document_graph().invoke(state)
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("confidence_gate:needs_review", result["events"])
+        self.assertIn("annual_income: low confidence (0.70)", result["review_flags"])
+        self.assertNotIn("vault_record", result)
+
+    def test_owner_reject_wins_over_auto_accept(self):
+        state = document_success_state()
+        state["document"]["pages"][0]["text"] = state["document"]["pages"][0]["text"].replace("2026/06/01", "2026-06-01")
+        state["review_decision"] = {"action": "reject", "reviewer_id": "senior-meera"}
+        result = build_document_graph().invoke(state)
+        self.assertEqual(result["status"], "rejected")
+        self.assertIn("confidence_gate:owner_decision", result["events"])
+        self.assertNotIn("vault_record", result)
+
 
 class BenefitsGraphTests(unittest.TestCase):
     def test_confirmed_document_flows_into_approved_package(self):
