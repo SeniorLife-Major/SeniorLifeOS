@@ -165,7 +165,7 @@ Optional structured LLM selection nodes are included for document classification
 
 | Provider | Needs | Model |
 |---|---|---|
-| `groq` (default) | `GROQ_API_KEY` | `SENIORLIFE_LLM_MODEL`, or `llama-3.3-70b-versatile` if unset |
+| `groq` (default) | `GROQ_API_KEY` | `SENIORLIFE_LLM_MODEL`, or `openai/gpt-oss-20b` if unset |
 | `openai` | `OPENAI_API_KEY` | `SENIORLIFE_LLM_MODEL` (required) |
 
 These variables are read from the environment, or from `backend/.env` / the repository root `.env` (shell variables win). Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`seniorlife_os/utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.

@@ -64,6 +64,8 @@ class ModelSelectionTests(unittest.TestCase):
             model = models.get_model()
         self.assertEqual(type(model).__name__, "ChatGroq")
         self.assertEqual(model.model_name, models.DEFAULT_GROQ_MODEL)
+        # Pinned: confirmed available on Groq by the 2026-10-19 smoke test.
+        self.assertEqual(models.DEFAULT_GROQ_MODEL, "openai/gpt-oss-20b")
         self.assertEqual(model.groq_api_key.get_secret_value(), "fake-groq")
 
     def test_groq_model_name_can_be_overridden(self, _):

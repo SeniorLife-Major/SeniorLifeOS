@@ -12,7 +12,7 @@ import os
 from ..utils.env import find_env_file, load_env_file
 
 
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 PROVIDERS = {"groq", "openai"}
 
 
