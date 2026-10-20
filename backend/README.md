@@ -174,4 +174,20 @@ These variables are read from the environment, or from `backend/.env` / the repo
 
 Aadhaar, PAN, account, and insurance policy numbers are stored masked (`XXXX XXXX 9012`) plus a keyed hash (HMAC-SHA256) for duplicate detection; the full number is never stored. This needs `SENIORLIFE_HASH_KEY` (at least 32 characters) in the environment or `.env`. Without it, a document that contains an ID number stops with `failed_tool` instead of being published. Documents without ID numbers don't need the key. Never change the key after data is stored, or old hashes stop matching. Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`seniorlife_os/utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
 
+### Local OCR (`seniorlife_os/tools/ocr.py`)
+
+`read_document(path, mime_type)` reads a PNG, JPEG, or PDF on this machine with PaddleOCR (English, PP-OCRv6 medium) and returns pages in the same shape as the `pages[]` fixtures above, plus per-line `confidence` and `box`. PDFs that store text are read without OCR. Scanned pages are rendered at 300 DPI. Blurry pages are capped at quality 0.85 so they go to review. It is **not yet wired into the document graph**. The first run downloads the models to `~/.paddlex`. Expect roughly 15–50 s per page on a laptop CPU.
+
+```python
+from seniorlife_os.tools.ocr import read_document
+pages = read_document("tests/datasets/ocr_benchmark/pages/identity__clean.png", "image/png")
+print(pages[0]["text"])
+```
+
+Test data (images, PDFs, JSON) lives in `tests/datasets/`, which is **not in Git**. `tests/test_ocr.py` recreates its own small fixtures there. The real-PaddleOCR tests need the benchmark set in `tests/datasets/ocr_benchmark/` and run only on request (about 5 minutes):
+
+```powershell
+$env:SENIORLIFE_RUN_OCR_TESTS = "1"; .\.venv\Scripts\python.exe -m unittest tests.test_ocr -v
+```
+
 See the [workflow technical blueprint](../docs/SeniorLife-OS-Workflow-Technical-Blueprint.md) for the intended real integrations.

@@ -4,3 +4,6 @@ langchain-openai>=1,<2
 langchain-groq>=1,<2
 fastapi
 uvicorn
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+pypdfium2==5.14.0
