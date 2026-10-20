@@ -159,7 +159,7 @@ The Benefits graph supports the same pattern with `build_benefits_graph(checkpoi
 
 Document Intake returns `vault_record` only after the owner confirms extracted fields. Put this record in the Benefits state's `documents` list. Benefits checks owner, confirmation, required fields, expiry, and provenance. A later confirmed upload can be passed to a *new* Benefits run for reassessment; the two graphs do not share one checkpoint.
 
-The OCR parser reads handwritten `pages[].text`; it does **not** open a real image/PDF or perform malware scanning. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
+The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), but files are **not** scanned for malware. The field parser still only understands `Label: value` lines. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
 Optional structured LLM selection nodes are included for document classification and scheme resolution. Set `use_llm=True` and omit `claimed_type` or `scheme_id` respectively. The provider is chosen by `SENIORLIFE_LLM_PROVIDER` (see `seniorlife_os/agents/models.py`):
 
@@ -176,7 +176,18 @@ Aadhaar, PAN, account, and insurance policy numbers are stored masked (`XXXX XXX
 
 ### Local OCR (`seniorlife_os/tools/ocr.py`)
 
-`read_document(path, mime_type)` reads a PNG, JPEG, or PDF on this machine with PaddleOCR (English, PP-OCRv6 medium) and returns pages in the same shape as the `pages[]` fixtures above, plus per-line `confidence` and `box`. PDFs that store text are read without OCR. Scanned pages are rendered at 300 DPI. Blurry pages are capped at quality 0.85 so they go to review. It is **not yet wired into the document graph**. The first run downloads the models to `~/.paddlex`. Expect roughly 15–50 s per page on a laptop CPU.
+`read_document(path, mime_type)` reads a PNG, JPEG, or PDF on this machine with PaddleOCR (English, PP-OCRv6 medium) and returns pages in the same shape as the `pages[]` fixtures above, plus per-line `confidence` and `box`. PDFs that store text are read without OCR. Scanned pages are rendered at 300 DPI. Blurry pages are capped at quality 0.85 so they go to review.
+
+The document graph uses it when the upload names a real file instead of page fixtures. Set `document.file_path` and leave out `pages`. The size is checked on disk, and the `read_file` node runs OCR before classification. A broken or blank file gives `needs_reupload`. An OCR engine crash is retried up to 3 times and then gives `failed_tool`. Each field takes its own line's confidence and keeps that line's `box`.
+
+```python
+state = {
+    "actor_id": "senior-meera", "document_id": "doc-upload-001", "claimed_type": "health_insurance",
+    "document": {"owner_id": "senior-meera", "owner_name": "Meera Rao", "filename": "card.pdf",
+                 "mime_type": "application/pdf", "file_path": "path/to/card.pdf", "as_of": "2026-09-22"},
+}
+result = build_document_graph().invoke(state)
+``` The first run downloads the models to `~/.paddlex`. Expect roughly 15–50 s per page on a laptop CPU.
 
 ```python
 from seniorlife_os.tools.ocr import read_document

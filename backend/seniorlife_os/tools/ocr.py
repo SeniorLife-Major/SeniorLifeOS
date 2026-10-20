@@ -39,6 +39,10 @@ class OcrError(RuntimeError):
     """The file could not be read. Callers should stop rather than guess."""
 
 
+class OcrEngineError(OcrError):
+    """The OCR engine itself failed (not the file). Worth retrying."""
+
+
 class PaddleEngine:
     """PaddleOCR 3.x, English, default models (PP-OCRv6 medium det + rec).
 
@@ -153,11 +157,11 @@ def text_page(text: str, page_number: int) -> dict[str, Any]:
 
 
 def read_image_page(image: np.ndarray, page_number: int, engine: OcrEngine | None) -> dict[str, Any]:
-    engine = engine or get_paddle_engine()
     try:
+        engine = engine or get_paddle_engine()
         items = engine(image)
-    except Exception as exc:  # the engine failed on this page; the graph decides whether to retry
-        raise OcrError("The OCR engine failed on this page") from exc
+    except Exception as exc:  # the engine failed to load or to read this page; the graph may retry
+        raise OcrEngineError("The OCR engine failed on this page") from exc
     lines = group_lines(items)
     sharpness = measure_sharpness(image)
     blurry = sharpness < BLUR_THRESHOLD

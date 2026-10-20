@@ -1,6 +1,7 @@
-"""Document intake graph: validate -> classify -> extract -> gate -> review -> protect -> publish.
+"""Document intake graph: validate -> read file -> classify -> extract -> gate -> review -> protect -> publish.
 
-The page text is a local OCR fixture, so the graph needs no API key. The
+Pages come from a real file (document.file_path, read by local OCR in tools/ocr.py)
+or from handwritten page fixtures (document.pages). Neither needs an API key. The
 review node supports both a prefilled decision for one-call demos and a real
 LangGraph interrupt when built with a checkpointer.
 """
@@ -15,6 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..tools.demo_tools import extract_fields_from_pages, normalize_field
+from ..tools.ocr import OcrEngineError, OcrError, read_document
 from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier
 
 
@@ -29,6 +31,8 @@ REQUIRED_FIELDS = {
 ALLOWED_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 CONFIDENCE_THRESHOLD = 0.9
 AUTO_REVIEWER_ID = "system:confidence_gate"
+MAX_UPLOAD_BYTES = 5_000_000
+OCR_MAX_ATTEMPTS = 3
 
 
 class DocumentState(TypedDict, total=False):
@@ -54,6 +58,7 @@ class DocumentState(TypedDict, total=False):
     warnings: list[str]
     errors: list[str]
     retry_count: int
+    ocr_attempts: int
     status: str
     route: str
 
@@ -71,15 +76,72 @@ def validate_upload(state: DocumentState) -> dict[str, Any]:
         errors.append("Document owner does not match the acting senior")
     if document.get("mime_type") not in ALLOWED_MIME_TYPES:
         errors.append("Unsupported file type")
-    if not isinstance(document.get("size_bytes"), int) or not 0 < document["size_bytes"] <= 5_000_000:
-        errors.append("File must be between 1 byte and 5 MB")
-    if not document.get("pages"):
+    file_path = document.get("file_path")
+    size = document.get("size_bytes")
+    if file_path:
+        # A real upload: trust the file on disk, not the size the client claimed.
+        if document.get("pages"):
+            errors.append("Give either file_path or page fixtures, not both")
+        size = os.path.getsize(file_path) if os.path.isfile(file_path) else None
+        if size is None:
+            errors.append("Uploaded file not found")
+    elif not document.get("pages"):
         errors.append("No readable page fixture was supplied")
+    missing_file = file_path and size is None  # already reported above
+    if not missing_file and (not isinstance(size, int) or not 0 < size <= MAX_UPLOAD_BYTES):
+        errors.append("File must be between 1 byte and 5 MB")
     return {
         "errors": errors,
         "status": "rejected" if errors else "processing",
         "route": "stop" if errors else "continue",
         "events": add_event(state, "validate_upload"),
+    }
+
+
+def read_file(state: DocumentState) -> dict[str, Any]:
+    """Turn an uploaded file into page text with local OCR. Page fixtures skip this."""
+    document = state["document"]
+    if not document.get("file_path"):
+        return {"route": "continue", "events": add_event(state, "read_file:fixture")}
+    attempts = state.get("ocr_attempts", 0) + 1
+    try:
+        pages = read_document(document["file_path"], document["mime_type"])
+    except OcrEngineError:
+        if attempts < OCR_MAX_ATTEMPTS:
+            return {
+                "ocr_attempts": attempts,
+                "route": "retry",
+                "events": add_event(state, f"read_file:retry_{attempts}"),
+            }
+        return {
+            "ocr_attempts": attempts,
+            "status": "failed_tool",
+            "route": "stop",
+            "errors": [f"The OCR engine failed {attempts} times"],
+            "events": add_event(state, "read_file:engine_failed"),
+        }
+    except OcrError as exc:
+        # The file itself is the problem (broken, wrong type, too many pages): retrying won't help.
+        return {
+            "ocr_attempts": attempts,
+            "status": "needs_reupload",
+            "route": "stop",
+            "warnings": [str(exc)],
+            "events": add_event(state, "read_file:unreadable"),
+        }
+    if not any(page["text"].strip() for page in pages):
+        return {
+            "ocr_attempts": attempts,
+            "status": "needs_reupload",
+            "route": "stop",
+            "warnings": ["No text could be read from the file"],
+            "events": add_event(state, "read_file:no_text"),
+        }
+    return {
+        "document": {**document, "pages": pages},
+        "ocr_attempts": attempts,
+        "route": "continue",
+        "events": add_event(state, "read_file:" + "+".join(dict.fromkeys(page["engine"] for page in pages))),
     }
 
 
@@ -317,14 +379,20 @@ def protect_identifiers(state: DocumentState) -> dict[str, Any]:
             edits[field] = protected[field]
     if "edits" in decision:
         decision["edits"] = edits
-    # The OCR page text is later stored as searchable chunks, so mask it too.
+    # The OCR page text is later stored as searchable chunks, so mask it too,
+    # including each OCR line (pages read from a real file carry a "lines" list).
+    def mask_text(text: str) -> str:
+        for original in sorted(replacements, key=len, reverse=True):
+            text = text.replace(original, replacements[original])
+        return text
+
     document = dict(state["document"])
     pages = []
     for page in document.get("pages", []):
-        text = page.get("text", "")
-        for original in sorted(replacements, key=len, reverse=True):
-            text = text.replace(original, replacements[original])
-        pages.append({**page, "text": text})
+        masked = {**page, "text": mask_text(page.get("text", ""))}
+        if "lines" in page:
+            masked["lines"] = [{**line, "text": mask_text(line["text"])} for line in page["lines"]]
+        pages.append(masked)
     document["pages"] = pages
     known = state.get("vault_identifier_hashes", {})
     warnings = [
@@ -382,6 +450,7 @@ def route_step(state: DocumentState) -> str:
 def build_document_graph(checkpointer: Any = None):
     graph = StateGraph(DocumentState)
     graph.add_node("validate_upload", validate_upload)
+    graph.add_node("read_file", read_file)
     graph.add_node("classify_document", classify_document)
     graph.add_node("extract_content", extract_content)
     graph.add_node("validate_candidates", validate_candidates)
@@ -391,7 +460,10 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_node("publish_confirmed_version", publish_confirmed_version)
 
     graph.add_edge(START, "validate_upload")
-    graph.add_conditional_edges("validate_upload", route_step, {"continue": "classify_document", "stop": END})
+    graph.add_conditional_edges("validate_upload", route_step, {"continue": "read_file", "stop": END})
+    graph.add_conditional_edges("read_file", route_step, {
+        "continue": "classify_document", "retry": "read_file", "stop": END,
+    })
     graph.add_conditional_edges("classify_document", route_step, {"continue": "extract_content", "stop": END})
     graph.add_conditional_edges("extract_content", route_step, {
         "continue": "validate_candidates", "retry": "extract_content", "stop": END,

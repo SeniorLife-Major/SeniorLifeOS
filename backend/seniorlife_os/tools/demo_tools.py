@@ -71,26 +71,42 @@ FIELD_LABELS = {
 
 
 def extract_fields_from_pages(pages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Simulated OCR + field extraction from handwritten demo page text.
+    """Field extraction from "Label: value" lines of page text.
 
-    Each field carries a page and line reference. No real PDF/image OCR occurs.
+    The pages are either handwritten demo fixtures or the output of real OCR
+    (tools/ocr.py). Each field carries a page and line reference.
     """
     found: dict[str, dict[str, Any]] = {}
     for page in pages:
-        for line_number, line in enumerate(page.get("text", "").splitlines(), start=1):
+        text_lines = page.get("text", "").splitlines()
+        # Pages from real OCR (tools/ocr.py) carry one entry per text line with its own
+        # confidence and box. Only trust them if they line up with the text.
+        ocr_lines = page.get("lines")
+        if not ocr_lines or len(ocr_lines) != len(text_lines):
+            ocr_lines = None
+        for line_number, line in enumerate(text_lines, start=1):
             if ":" not in line:
                 continue
             raw_label, raw_value = line.split(":", 1)
             key = FIELD_LABELS.get(raw_label.strip().lower())
             value = raw_value.strip()
             if key and value:
-                found[key] = {
+                confidence = page.get("quality", 1.0)
+                item = {
                     "value": value,
                     "page": page["page"],
                     "line": line_number,
                     "source_ref": f"page:{page['page']}:line:{line_number}",
-                    "confidence": page.get("quality", 1.0),
                 }
+                if ocr_lines:
+                    ocr_line = ocr_lines[line_number - 1]
+                    # The line's own confidence; a blurry page keeps its lower cap.
+                    confidence = ocr_line["confidence"]
+                    if page.get("blurry"):
+                        confidence = min(confidence, page.get("quality", 1.0))
+                    item["box"] = ocr_line.get("box")
+                item["confidence"] = confidence
+                found[key] = item
     return found
 
 
