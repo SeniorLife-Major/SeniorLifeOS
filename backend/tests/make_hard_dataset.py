@@ -685,19 +685,28 @@ def read_pattern(shown: str) -> str:
 
 
 def score_page(entry: dict[str, Any], page: dict[str, Any]) -> dict[str, Any]:
-    """read  = the printed value appears in the OCR text (case and spacing ignored)
-       parsed = today's parser + normalizer produce the right vault value"""
+    """read   = the printed value appears in the OCR text (case and spacing ignored)
+       parsed = the graph's steps (cleanup, parser + layout rules, normalizer, repair) give
+                the right vault value
+       review = fields that were right but the graph would send to review because they came
+                from a layout guess or a repair (look-alike fix, trimmed text)"""
     from seniorlife_os.tools.demo_tools import extract_fields_from_pages, normalize_field
-    from seniorlife_os.tools.ocr_postprocess import clean_page
+    from seniorlife_os.tools.ocr_postprocess import clean_page, repair_value
 
     text = page["text"]  # "read" is judged on the raw OCR text
     lines = [squash(line) for line in text.splitlines()]
-    extracted = extract_fields_from_pages([clean_page(page)])  # same steps as the graph
-    result = {"read": {}, "parsed": {}, "rows_ok": 0, "rows_total": len(entry["rows"])}
+    extracted = extract_fields_from_pages([clean_page(page)], entry.get("type"))  # same steps as the graph
+    result = {"read": {}, "parsed": {}, "review": [], "rows_ok": 0, "rows_total": len(entry["rows"])}
     for key, truth in entry["fields"].items():
         result["read"][key] = any(re.search(read_pattern(truth["shown"]), line) for line in lines)
-        got = normalize_field(key, extracted[key]["value"]) if key in extracted else None
-        result["parsed"][key] = got == truth["value"]
+        found = extracted.get(key)
+        got = normalize_field(key, found["value"]) if found else None
+        repaired = repair_value(key, found["value"]) if found and got is None else None
+        if repaired:
+            got = repaired[1]
+        result["parsed"][key] = got is not None and got == truth["value"]  # nothing found is never right
+        if result["parsed"][key] and (repaired or found.get("layout")):
+            result["review"].append(key)
     for row in entry["rows"]:
         if any(all(re.search(read_pattern(cell), line) for cell in row) for line in lines):
             result["rows_ok"] += 1
@@ -716,7 +725,7 @@ def score(out_dir: Path = OUT_DIR) -> dict[str, Any]:
         result = score_page(entry, page)
         pages.append({"path": entry["path"], "type": entry["type"], "condition": entry["condition"],
                       "seconds": seconds, "quality": page["quality"], "blurry": page["blurry"],
-                      "sharpness": page["sharpness"], "text": page["text"], **result})
+                      "sharpness": page["sharpness"], "text": page["text"], "lines": page["lines"], **result})
         print(f"{entry['path']:45s} {seconds:5.1f}s q={page['quality']:.2f} "
               f"read {sum(result['read'].values())}/{len(result['read'])} "
               f"parsed {sum(result['parsed'].values())}/{len(result['parsed'])}", flush=True)
@@ -727,8 +736,12 @@ def rescore(out_dir: Path = OUT_DIR) -> dict[str, Any]:
     """Score again from the OCR text saved by score(): no OCR, takes a second."""
     manifest = {e["path"]: e for e in json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))}
     saved = json.loads((out_dir / "results_paddle.json").read_text(encoding="utf-8"))["pages"]
-    pages = [{**page, **score_page(manifest[page["path"]], {"page": 1, "quality": page["quality"], "text": page["text"]})}
-             for page in saved]
+    pages = []
+    for page in saved:
+        ocr_page = {"page": 1, "quality": page["quality"], "blurry": page.get("blurry", False), "text": page["text"]}
+        if "lines" in page:  # saved by newer runs: lets the column rules use each piece's position
+            ocr_page["lines"] = page["lines"]
+        pages.append({**page, **score_page(manifest[page["path"]], ocr_page)})
     return save_results(out_dir, pages)
 
 
@@ -750,6 +763,7 @@ def save_results(out_dir: Path, pages: list[dict[str, Any]]) -> dict[str, Any]:
                         "parsed": rate([p for p in pages if p["type"] == t], "parsed")}
                     for t in dict.fromkeys(p["type"] for p in pages)},
         "missed_reads": [f"{p['path']}: {k}" for p in pages for k, ok in p["read"].items() if not ok],
+        "right_but_sent_to_review": sum(len(p.get("review", [])) for p in pages),
     }
     (out_dir / "results_paddle.json").write_text(
         json.dumps({"summary": summary, "pages": pages}, indent=1, ensure_ascii=False), encoding="utf-8")

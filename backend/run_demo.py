@@ -4,6 +4,7 @@ from pprint import pprint
 
 from seniorlife_os.graphs.benefits_graph import build_benefits_graph as benefits_graph
 from seniorlife_os.graphs.document_graph import build_document_graph as document_graph
+from seniorlife_os.utils.tracing import setup_tracing
 from seniorlife_os.demo.demo_cases import (
     benefits_failure_state,
     benefits_success_state,
@@ -25,6 +26,9 @@ def show(label: str, result: dict) -> None:
 
 
 if __name__ == "__main__":
+    tracing = setup_tracing()
+    print("LangSmith tracing:", "on (private values hidden)" if tracing else "off")
+
     document_ok = document_graph().invoke(document_success_state())
     show("Document Intake - success with corrected OCR date", document_ok)
 

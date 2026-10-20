@@ -214,6 +214,10 @@ def group_lines(items: list[tuple[list[tuple[float, float]], str, float]]) -> li
                 round(min(box["x0"] for box in row)), round(min(box["y0"] for box in row)),
                 round(max(box["x1"] for box in row)), round(max(box["y1"] for box in row)),
             ],
+            # The separate pieces, so a two-column card can pair labels and values by position.
+            "parts": [{"text": box["text"], "confidence": round(box["score"], 4),
+                       "box": [round(box["x0"]), round(box["y0"]), round(box["x1"]), round(box["y1"])]}
+                      for box in row],
         })
     return lines
 

@@ -26,6 +26,11 @@ def file_hash(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def load_rgb(path):
+    with Image.open(path) as image:
+        return np.asarray(image.convert("RGB"))
+
+
 class DrawnText:
     """Records every string drawn while a page is made."""
 
@@ -129,10 +134,10 @@ class GenerateTests(unittest.TestCase):
             self.assertTrue((UNIT / "a" / entry["path"]).is_file())
 
     def test_every_condition_changes_the_picture_differently(self):
-        base = np.asarray(Image.open(UNIT / "a" / "pages" / "identity__base.png").convert("RGB"))
+        base = load_rgb(UNIT / "a" / "pages" / "identity__base.png")
         pictures = {}
         for entry in self.manifest:
-            arr = np.asarray(Image.open(UNIT / "a" / entry["path"]).convert("RGB"))
+            arr = load_rgb(UNIT / "a" / entry["path"])
             pictures[entry["condition"]] = arr
             if arr.shape == base.shape:
                 self.assertGreater(np.abs(arr.astype(int) - base).mean(), 2, entry["condition"])
@@ -140,10 +145,10 @@ class GenerateTests(unittest.TestCase):
         self.assertEqual(len(set(hashes.values())), len(hard.CONDITIONS))
 
     def test_phone_conditions_put_the_paper_on_a_table(self):
-        base = Image.open(UNIT / "a" / "pages" / "identity__base.png")
-        photo = Image.open(UNIT / "a" / "pages" / "identity__phone_photo.png")
-        self.assertGreater(photo.width, base.width)
-        corner = np.asarray(photo.convert("RGB"))[:20, :20].mean()
+        base = load_rgb(UNIT / "a" / "pages" / "identity__base.png")
+        photo = load_rgb(UNIT / "a" / "pages" / "identity__phone_photo.png")
+        self.assertGreater(photo.shape[1], base.shape[1])
+        corner = photo[:20, :20].mean()
         self.assertLess(corner, 200)  # table colour, not white paper
 
     def test_unknown_condition_is_rejected(self):
@@ -166,9 +171,9 @@ class ScorePageTests(unittest.TestCase):
                                                   "Haemoglobin 11.2 g/dL 12.0 - 15.5"}
         result = hard.score_page(self.entry, page)
         self.assertEqual(result["read"], {"name": True, "issue_date": True, "annual_income": True})
-        # Today's parser: name is read but keeps OCR's capitals; the date has no ISO form and
-        # "Date" is not a known label; "Rs. ... /-" is not a plain number.
-        self.assertEqual(result["parsed"], {"name": False, "issue_date": False, "annual_income": False})
+        # Name is read but keeps OCR's capitals (not the stored value); "Date" alone is not a
+        # known label. "Rs. 2,66,000/-" is understood since step 7c-3.
+        self.assertEqual(result["parsed"], {"name": False, "issue_date": False, "annual_income": True})
         self.assertEqual(result["rows_ok"], 1)
 
     def test_parser_friendly_text_counts_as_parsed(self):

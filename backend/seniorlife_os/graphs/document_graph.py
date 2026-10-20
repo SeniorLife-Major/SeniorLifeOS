@@ -17,8 +17,9 @@ from langgraph.types import interrupt
 
 from ..tools.demo_tools import extract_fields_from_pages, normalize_field
 from ..tools.ocr import OcrEngineError, OcrError, read_document
-from ..tools.ocr_postprocess import clean_page
+from ..tools.ocr_postprocess import clean_page, lookalike_key, repair_value
 from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier
+from ..utils.tracing import install_safe_client
 
 
 REQUIRED_FIELDS = {
@@ -211,7 +212,7 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
             "warnings": ["At least one page is too blurry for a reliable extraction"],
             "events": add_event(state, "extract_content:unreadable"),
         }
-    fields = extract_fields_from_pages(pages)
+    fields = extract_fields_from_pages(pages, state["document_type"])
     if not fields:
         return {
             "route": "stop",
@@ -228,9 +229,24 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
 
 
 def validate_candidates(state: DocumentState) -> dict[str, Any]:
-    fields = state["extracted_fields"]
-    normalized = {key: normalize_field(key, item["value"]) for key, item in fields.items()}
+    fields = {key: dict(item) for key, item in state["extracted_fields"].items()}
+    normalized = {}
     flags = []
+    for key, item in fields.items():
+        if item.get("layout"):
+            # Found by a layout guess (no colon, or label above the value): the owner checks it.
+            flags.append(f"{key}: found by layout ({item['layout'].replace('_', ' ')}), please check")
+        normalized[key] = normalize_field(key, item["value"])
+        if normalized[key] is not None:
+            continue
+        # The value fails its check as read: try look-alike swaps where the field's shape
+        # demands a digit or a letter, and cutting extra text after a strictly shaped value.
+        # Keep a repair only if it then passes, and always send it to review.
+        repaired = repair_value(key, item["value"])
+        if repaired:
+            item["ocr_value"] = item["value"]  # kept so the masking step can hide this spelling too
+            item["value"], normalized[key], item["corrections"] = repaired
+            flags.extend(f"{key}: {note}, please check" for note in repaired[2])
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
         if normalized.get(key) is None or normalized.get(key) == "":
             flags.append(f"{key}: missing or invalid")
@@ -239,13 +255,18 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
             flags.append(f"{key}: failed format or checksum check")
     owner_name = state["document"].get("owner_name")
     if owner_name and normalized.get("name") and owner_name.casefold() != str(normalized["name"]).casefold():
-        flags.append("name differs from the provided owner name")
+        # Names are never auto-corrected ("lyer" may really be a name); only explain the likely cause.
+        if lookalike_key(owner_name) == lookalike_key(str(normalized["name"])):
+            flags.append("name differs from the provided owner name only by look-alike letters (I/l/1, O/0)")
+        else:
+            flags.append("name differs from the provided owner name")
     today = date.fromisoformat(state["document"].get("as_of", date.today().isoformat()))
     if normalized.get("issue_date") and date.fromisoformat(normalized["issue_date"]) > today:
         flags.append("issue_date is in the future")
     if normalized.get("expiry_date") and date.fromisoformat(normalized["expiry_date"]) < today:
         flags.append("document is expired")
     return {
+        "extracted_fields": fields,
         "normalized_fields": normalized,
         "review_flags": flags,
         "events": add_event(state, "validate_candidates"),
@@ -376,6 +397,9 @@ def protect_identifiers(state: DocumentState) -> dict[str, Any]:
         if field in extracted:
             replacements[str(extracted[field]["value"])] = protected[field]
             extracted[field]["value"] = protected[field]
+            if "ocr_value" in extracted[field]:  # the spelling OCR read before a look-alike fix
+                replacements[str(extracted[field]["ocr_value"])] = protected[field]
+                extracted[field]["ocr_value"] = protected[field]
         if field in edits:
             replacements[str(edits[field])] = protected[field]
             edits[field] = protected[field]
@@ -393,7 +417,10 @@ def protect_identifiers(state: DocumentState) -> dict[str, Any]:
     for page in document.get("pages", []):
         masked = {**page, "text": mask_text(page.get("text", ""))}
         if "lines" in page:
-            masked["lines"] = [{**line, "text": mask_text(line["text"])} for line in page["lines"]]
+            # "parts" (pieces of a line, used only to find fields) are dropped: a number split
+            # across two pieces could not be masked reliably piece by piece.
+            masked["lines"] = [{**{k: v for k, v in line.items() if k != "parts"}, "text": mask_text(line["text"])}
+                               for line in page["lines"]]
         pages.append(masked)
     document["pages"] = pages
     known = state.get("vault_identifier_hashes", {})
@@ -450,6 +477,7 @@ def route_step(state: DocumentState) -> str:
 
 
 def build_document_graph(checkpointer: Any = None):
+    install_safe_client()  # if LangSmith tracing is on, only masked data is sent
     graph = StateGraph(DocumentState)
     graph.add_node("validate_upload", validate_upload)
     graph.add_node("read_file", read_file)

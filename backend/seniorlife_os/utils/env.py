@@ -39,4 +39,10 @@ def load_env_file(path: Path | None) -> list[str]:
         if key and key not in os.environ:
             os.environ[key] = value
             loaded.append(key)
+    if any(key.startswith(("LANGSMITH_", "LANGCHAIN_")) for key in loaded):
+        # The file may have just switched LangSmith tracing on: make sure only
+        # masked data can be sent (see utils/tracing.py).
+        from .tracing import install_safe_client
+
+        install_safe_client()
     return loaded
