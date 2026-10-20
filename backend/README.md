@@ -159,7 +159,7 @@ The Benefits graph supports the same pattern with `build_benefits_graph(checkpoi
 
 Document Intake returns `vault_record` only after the owner confirms extracted fields. Put this record in the Benefits state's `documents` list. Benefits checks owner, confirmation, required fields, expiry, and provenance. A later confirmed upload can be passed to a *new* Benefits run for reassessment; the two graphs do not share one checkpoint.
 
-The OCR parser reads handwritten `pages[].text`; it does **not** open a real image/PDF or perform malware scanning. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
+The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), but files are **not** scanned for malware. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
 Optional structured LLM selection nodes are included for document classification and scheme resolution. Set `use_llm=True` and omit `claimed_type` or `scheme_id` respectively. The provider is chosen by `SENIORLIFE_LLM_PROVIDER` (see `seniorlife_os/agents/models.py`):
 
@@ -168,10 +168,90 @@ Optional structured LLM selection nodes are included for document classification
 | `groq` (default) | `GROQ_API_KEY` | `SENIORLIFE_LLM_MODEL`, or `openai/gpt-oss-20b` if unset |
 | `openai` | `OPENAI_API_KEY` | `SENIORLIFE_LLM_MODEL` (required) |
 
-These variables are read from the environment, or from `backend/.env` / the repository root `.env` (shell variables win).
+These variables are read from the environment, or from `backend/.env` / the repository root `.env` (shell variables win). LangSmith tracing settings are read the same way; see "LangSmith tracing" below.
 
 ### ID numbers in the vault
 
-Aadhaar, PAN, and account numbers are stored masked (`XXXX XXXX 9012`) plus a keyed hash (HMAC-SHA256) for duplicate detection; the full number is never stored. This needs `SENIORLIFE_HASH_KEY` (at least 32 characters) in the environment or `.env`. Without it, a document that contains an ID number stops with `failed_tool` instead of being published. Documents without ID numbers don't need the key. Never change the key after data is stored, or old hashes stop matching. Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`seniorlife_os/utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
+Aadhaar, PAN, account, and insurance policy numbers are stored masked (`XXXX XXXX 9012`) plus a keyed hash (HMAC-SHA256) for duplicate detection; the full number is never stored. This needs `SENIORLIFE_HASH_KEY` (at least 32 characters) in the environment or `.env`. Without it, a document that contains an ID number stops with `failed_tool` instead of being published. Documents without ID numbers don't need the key. Never change the key after data is stored, or old hashes stop matching. Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`seniorlife_os/utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
+
+### Local OCR (`seniorlife_os/tools/ocr.py`)
+
+`read_document(path, mime_type)` reads a PNG, JPEG, or PDF on this machine with PaddleOCR (English, PP-OCRv6 medium) and returns pages in the same shape as the `pages[]` fixtures above, plus per-line `confidence` and `box`. PDFs that store text are read without OCR. Scanned pages are rendered at 300 DPI. Blurry pages are capped at quality 0.85 so they go to review.
+
+The document graph uses it when the upload names a real file instead of page fixtures. Set `document.file_path` and leave out `pages`. The size is checked on disk, and the `read_file` node runs OCR before classification. A broken or blank file gives `needs_reupload`. An OCR engine crash is retried up to 3 times and then gives `failed_tool`. Each field takes its own line's confidence and keeps that line's `box`. Before fields are read, OCR text is tidied by `tools/ocr_postprocess.py`: odd dashes and quotes, full-width characters, and `Rs.`/`INR` before an amount become `₹`. Labels match even with dropped spaces or dotted leaders (`PolicyNo:`, `IFSC Code ......:`).
+
+**Reading values (`tools/demo_tools.py`, `tools/layout.py`):**
+- **Formats understood:**
+  - dates such as `23/12/2026`, `23.12.2026` and `28-Aug-2029` (always day first; `2026/06/01` and two-digit years are refused);
+  - amounts such as `Rs. 2,56,000/-` (`2.56.000` is refused);
+  - state names such as `Kerala` → `KL`;
+  - names with titles removed (`Smt. Anita Rao` → `Anita Rao`).
+- **Layouts found:**
+  - several `Label: value` pairs on one line;
+  - a label with no colon (`Name Meera Rao`);
+  - labels above their values on a two-column card (paired by position).
+- **Repairs:** if a value fails its check, look-alike characters are swapped where the field's shape requires it (`DEM00206791` → `DEMO0206791`), and text after a date, amount or ID is cut off. Names are never changed.
+- **Review:** anything found by a layout rule or repaired is **always sent to the owner for review**.
+- **Model fallback:** with `use_llm=True`, required fields the rules missed (values inside sentences, values with no label) are requested from the model through the `llm_extract` node.
+  - The text is redacted first.
+  - An answer is kept only if it appears word for word in the document.
+  - Every answer is sent to review.
+  - If the model fails, the fields stay missing for the owner; nothing is guessed.
+- **ID numbers on the page:** after review, ID numbers are masked everywhere in the stored page text, including numbers printed with no label (any checksum-valid Aadhaar number or valid PAN).
+
+### Medical documents (`seniorlife_os/tools/medical.py`)
+
+| Type | What is read |
+|---|---|
+| `lab_report` | patient name, lab name, report date, `tests` rows (name, value, unit, reference range, high/low flag) |
+| `prescription` | patient name, doctor, date, `medicines` rows (name, form, strength, frequency, duration) |
+| `medical_bill` | patient name, provider, bill date, total, `items` rows (description, amount) |
+
+- **Tilted photos:** lab tables are read column by column, with the tilt corrected, so a value stays on its own test.
+- **Review:** every row of a list is always sent to the owner for review. Bill items must add up to the total.
+- **Flags:** high and low come only from the range printed on that row.
+- **Consent:** medical pages are never sent to the cloud model, not even to work out their type, unless the state sets `medical_cloud_consent: True`. Without it, they are classified on this machine.
+- **Samples:** `lab_report_state()`, `prescription_state()` and `medical_bill_state()` in `demo/demo_cases.py`.
+
+### Google Vision backup (`seniorlife_os/tools/cloud_ocr.py`)
+
+If local OCR leaves a required field missing or unsure, or a page blurry, the file can be read once more by Google Cloud Vision.
+- **Conditions:** the state sets `cloud_ocr_consent: True` (medical documents also need `medical_cloud_consent: True`), and `GOOGLE_VISION_API_KEY` is set in the environment or `.env`.
+- **Before sending:** image regions that show ID numbers are painted black. The key goes in a request header, never in the URL.
+- **Results:**
+  - Cloud values only replace weak local ones, never ID numbers, and are always sent to review.
+  - The cloud text is stored separately (`document.cloud_pages`) and masked the same way.
+  - If anything fails, the local result is kept.
+
+### LangSmith tracing
+
+`LANGSMITH_TRACING=true` plus `LANGSMITH_API_KEY` (in the shell or `.env`) turns on tracing. `run_demo.py` prints whether it is on. Everything is filtered before it leaves the machine (`seniorlife_os/utils/tracing.py`):
+- **What is sent:** node path, status, routes, review flags, confidence, line numbers and timings.
+- **What is hidden:** every other value, including names, ID numbers, dates of birth, OCR text and LLM prompts, which show as `[hidden]`.
+
+The filter is installed when the document graph is built and whenever `.env` loads a tracing key, so it also covers tracing switched on by environment variables alone.
+
+```python
+state = {
+    "actor_id": "senior-meera", "document_id": "doc-upload-001", "claimed_type": "health_insurance",
+    "document": {"owner_id": "senior-meera", "owner_name": "Meera Rao", "filename": "card.pdf",
+                 "mime_type": "application/pdf", "file_path": "path/to/card.pdf", "as_of": "2026-09-22"},
+}
+result = build_document_graph().invoke(state)
+``` The first run downloads the models to `~/.paddlex`. Expect roughly 15–50 s per page on a laptop CPU.
+
+```python
+from seniorlife_os.tools.ocr import read_document
+pages = read_document("tests/datasets/ocr_benchmark/pages/identity__clean.png", "image/png")
+print(pages[0]["text"])
+```
+
+Test data (images, PDFs, JSON) lives in `tests/datasets/`, which is **not in Git**. `tests/test_ocr.py` recreates its own small fixtures there. The real-PaddleOCR tests need the benchmark set in `tests/datasets/ocr_benchmark/` and run only on request (about 5 minutes):
+
+```powershell
+$env:SENIORLIFE_RUN_OCR_TESTS = "1"; .\.venv\Scripts\python.exe -m unittest tests.test_ocr -v
+```
+
+`tests/make_hard_dataset.py` makes a harder set of fake documents in `tests/datasets/ocr_hard/`. They have realistic layouts, Hindi and English text, stamps and signatures, and photo, photocopy and worn-paper damage. Add `--score` to run PaddleOCR on them (about 25 minutes), or `--rescore` to re-score from the saved OCR text.
 
 See the [workflow technical blueprint](../docs/SeniorLife-OS-Workflow-Technical-Blueprint.md) for the intended real integrations.

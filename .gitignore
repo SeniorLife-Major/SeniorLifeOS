@@ -5,3 +5,4 @@ __pycache__/
 ideas/
 .vscode
 .conda
+backend/tests/datasets/

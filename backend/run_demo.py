@@ -20,6 +20,7 @@ if str(project_root) not in sys.path:
 try:
     from backend.graphs.benefits_graph import build_benefits_graph as benefits_graph
     from backend.graphs.document_graph import build_document_graph as document_graph
+    from backend.utils.tracing import setup_tracing
     from backend.demo.demo_cases import (
         benefits_failure_state,
         benefits_success_state,
@@ -29,6 +30,7 @@ try:
 except ImportError:
     from graphs.benefits_graph import build_benefits_graph as benefits_graph
     from graphs.document_graph import build_document_graph as document_graph
+    from utils.tracing import setup_tracing
     from demo.demo_cases import (
         benefits_failure_state,
         benefits_success_state,
@@ -50,6 +52,9 @@ def show(label: str, result: dict) -> None:
 
 
 if __name__ == "__main__":
+    tracing = setup_tracing()
+    print("LangSmith tracing:", "on (private values hidden)" if tracing else "off")
+
     document_ok = document_graph().invoke(document_success_state())
     show("Document Intake - success with corrected OCR date", document_ok)
 

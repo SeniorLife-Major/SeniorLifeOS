@@ -49,7 +49,7 @@ _VERHOEFF_INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]
 PAN_HOLDER_TYPES = set("ABCFGHJLPT")
 
 # Vault fields that hold ID numbers. They are masked and hashed before storage.
-ID_FIELDS = ("aadhaar_number", "pan_number", "account_number")
+ID_FIELDS = ("aadhaar_number", "pan_number", "account_number", "policy_number")
 MIN_HASH_KEY_LENGTH = 32
 
 AADHAAR_PATTERN = re.compile(r"(?<!\d)[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}(?!\d)")
@@ -58,6 +58,8 @@ IFSC_PATTERN = re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")
 ACCOUNT_PATTERN = re.compile(r"(?i)\b(?:a/?c|account)\s*(?:no\.?|number|#)?\s*[:.\-]?\s*(\d{9,18})(?!\d)")
 PHONE_PATTERN = re.compile(r"(?<![\d+])(?:\+91[ -]?)?[6-9]\d{9}(?!\d)")
 EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+# Policy numbers have no fixed format, so only hide them after a "Policy No" label.
+POLICY_PATTERN = re.compile(r"(?i)\bpolicy\s*(?:no\.?|number|#)?\s*[:.\-]?\s*((?=[A-Z0-9/-]*\d)[A-Z0-9][A-Z0-9/-]{5,29})\b")
 
 
 def verhoeff_check_digit(digits: str) -> str:
@@ -120,6 +122,12 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
         whole = match.group(0)
         return whole[:start] + placeholder("ACCOUNT", match.group(1)) + whole[end:]
 
+    def replace_policy(match: re.Match) -> str:
+        # Keep the "Policy No:" label, hide only the number.
+        start, end = match.start(1) - match.start(0), match.end(1) - match.start(0)
+        whole = match.group(0)
+        return whole[:start] + placeholder("POLICY", match.group(1)) + whole[end:]
+
     safe = text
     for label, value in (known_values or {}).items():
         value = (value or "").strip()
@@ -128,6 +136,7 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
             safe = re.sub(re.escape(value), lambda _, label=label, value=value: placeholder(label, value), safe, flags=re.IGNORECASE)
     safe = AADHAAR_PATTERN.sub(replace_aadhaar, safe)
     safe = ACCOUNT_PATTERN.sub(replace_account, safe)
+    safe = POLICY_PATTERN.sub(replace_policy, safe)
     safe = PHONE_PATTERN.sub(lambda m: placeholder("PHONE", m.group(0)), safe)
     safe = EMAIL_PATTERN.sub(lambda m: placeholder("EMAIL", m.group(0)), safe)
     safe = PAN_PATTERN.sub(replace_pan, safe)
@@ -140,6 +149,31 @@ def mask_identifier(field: str, value: str) -> str:
     if field == "aadhaar_number":
         return f"XXXX XXXX {visible}"
     return "X" * max(len(value) - 4, 0) + visible
+
+
+def mask_ids_in_text(text: str) -> str:
+    """Mask ID numbers wherever they appear, even when no field was extracted for them.
+
+    Catches a checksum-valid Aadhaar number, a valid PAN, and an account or policy
+    number written after its label. Unlabelled account numbers are left alone: they
+    can't be told apart from other long numbers.
+    """
+    def aadhaar(match: re.Match) -> str:
+        digits = re.sub(r"\D", "", match.group(0))
+        return mask_identifier("aadhaar_number", digits) if is_valid_aadhaar(digits) else match.group(0)
+
+    def after_label(field: str):
+        def replace(match: re.Match) -> str:
+            start, end = match.start(1) - match.start(0), match.end(1) - match.start(0)
+            whole = match.group(0)
+            return whole[:start] + mask_identifier(field, match.group(1)) + whole[end:]
+        return replace
+
+    text = AADHAAR_PATTERN.sub(aadhaar, text)
+    text = ACCOUNT_PATTERN.sub(after_label("account_number"), text)
+    text = POLICY_PATTERN.sub(after_label("policy_number"), text)
+    return PAN_PATTERN.sub(lambda m: mask_identifier("pan_number", m.group(0)) if is_valid_pan(m.group(0))
+                           else m.group(0), text)
 
 
 def load_hash_key() -> str:

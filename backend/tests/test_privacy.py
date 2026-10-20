@@ -212,6 +212,16 @@ class RedactTests(unittest.TestCase):
         self.assertEqual(mapping["[AADHAAR_1]"], aadhaar)
         self.assertEqual(mapping["[NAME_1]"], "Meera Rao")
 
+    def test_policy_number_after_label_is_hidden(self):
+        safe, mapping = redact("Insurer: Demo Health\nPolicy No: HLT-2026/004512\nPlan: GOLDPLAN")
+        self.assertIn("Policy No: [POLICY_1]", safe)
+        self.assertEqual(mapping["[POLICY_1]"], "HLT-2026/004512")
+        self.assertIn("Plan: GOLDPLAN", safe)
+
+    def test_policy_word_without_a_number_is_kept(self):
+        text = "Policy: GOLDPLAN\nThis policy covers 5 members"
+        self.assertEqual(redact(text), (text, {}))
+
     def test_twelve_digits_with_bad_checksum_are_kept(self):
         not_aadhaar = break_checksum(fake_aadhaar(3))
         safe, mapping = redact(f"Receipt number: {not_aadhaar}")
