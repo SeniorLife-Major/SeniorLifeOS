@@ -43,6 +43,43 @@ def document_failure_state() -> dict[str, Any]:
     return state
 
 
+def _upload_state(document_id: str, filename: str, text: str) -> dict[str, Any]:
+    """A clean upload with no prefilled decision, so the confidence gate can auto-accept it."""
+    return {
+        "actor_id": "senior-meera",
+        "document_id": document_id,
+        "document": {
+            "owner_id": "senior-meera",
+            "owner_name": "Meera Rao",
+            "filename": filename,
+            "mime_type": "image/jpeg",
+            "size_bytes": 120_000,
+            "as_of": "2026-09-22",
+            "pages": [{"page": 1, "quality": 0.95, "text": text}],
+        },
+    }
+
+
+def insurance_state() -> dict[str, Any]:
+    return _upload_state("doc-insurance-001", "health_insurance_card.jpg", (
+        "Name: Meera Rao\nInsurer: Demo Health Insurance (fictional)\nPolicy No: HLT-2026/004512\n"
+        "Sum insured: ₹5,00,000\nValid till: 2027-03-31"
+    ))
+
+
+def passbook_state() -> dict[str, Any]:
+    return _upload_state("doc-passbook-001", "bank_passbook_page1.jpg", (
+        "Name: Meera Rao\nBank name: Demo Bank (fictional)\nAccount number: 123456789012345\nIFSC: DEMO0001234"
+    ))
+
+
+def disability_state() -> dict[str, Any]:
+    return _upload_state("doc-disability-001", "disability_certificate.jpg", (
+        "Name: Meera Rao\nIssuing authority: Demo District Medical Board\nIssue date: 2025-11-10\n"
+        "Disability percentage: 40%"
+    ))
+
+
 def _existing_document(document_id: str, document_type: str, fields: dict[str, Any]) -> dict[str, Any]:
     return {
         "document_id": document_id,

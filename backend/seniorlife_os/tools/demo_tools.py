@@ -10,7 +10,7 @@ import re
 from datetime import date
 from typing import Any
 
-from ..utils.privacy import is_valid_aadhaar, is_valid_pan
+from ..utils.privacy import is_valid_aadhaar, is_valid_ifsc, is_valid_pan
 
 
 DEMO_SCHEMES: dict[str, dict[str, Any]] = {
@@ -55,6 +55,18 @@ FIELD_LABELS = {
     "pan no": "pan_number",
     "account number": "account_number",
     "a/c no": "account_number",
+    "insurer": "insurer",
+    "policy no": "policy_number",
+    "policy number": "policy_number",
+    "valid till": "expiry_date",
+    "sum insured": "sum_insured",
+    "bank": "bank_name",
+    "bank name": "bank_name",
+    "ifsc": "ifsc",
+    "ifsc code": "ifsc",
+    "issuing authority": "issuing_authority",
+    "disability": "disability_percent",
+    "disability percentage": "disability_percent",
 }
 
 
@@ -84,7 +96,7 @@ def extract_fields_from_pages(pages: list[dict[str, Any]]) -> dict[str, dict[str
 
 def normalize_field(key: str, raw_value: str) -> Any:
     """Normalize known fields without guessing unclear values."""
-    if key == "annual_income":
+    if key in {"annual_income", "sum_insured"}:
         cleaned = re.sub(r"[₹,\s]", "", raw_value)
         return int(cleaned) if cleaned.isdigit() else None
     if key in {"issue_date", "expiry_date", "date_of_birth"}:
@@ -103,6 +115,15 @@ def normalize_field(key: str, raw_value: str) -> Any:
     if key == "account_number":
         digits = re.sub(r"[ -]", "", raw_value)
         return digits if digits.isdigit() and 9 <= len(digits) <= 18 else None
+    if key == "policy_number":
+        policy = re.sub(r"\s", "", raw_value).upper()
+        return policy if re.fullmatch(r"[A-Z0-9/-]{6,30}", policy) and re.search(r"\d", policy) else None
+    if key == "ifsc":
+        ifsc = raw_value.strip().upper()
+        return ifsc if is_valid_ifsc(ifsc) else None
+    if key == "disability_percent":
+        cleaned = raw_value.strip().rstrip("%").strip()
+        return int(cleaned) if cleaned.isdigit() and 0 <= int(cleaned) <= 100 else None
     return raw_value.strip()
 
 

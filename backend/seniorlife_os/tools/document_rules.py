@@ -18,6 +18,9 @@ REQUIRED_FIELDS = {
     "identity": {"name", "date_of_birth"},
     "income_certificate": {"name", "annual_income", "issue_date"},
     "residence_proof": {"name", "residence_state", "issue_date"},
+    "health_insurance": {"name", "insurer", "policy_number", "expiry_date", "sum_insured"},
+    "bank_passbook": {"name", "bank_name", "account_number", "ifsc"},
+    "disability_certificate": {"name", "issuing_authority", "issue_date", "disability_percent"},
 }
 DOCUMENT_TYPES = tuple(REQUIRED_FIELDS)
 MATCH_RANK = {"usable": 0, "unconfirmed": 1, "expired": 2}

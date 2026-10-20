@@ -22,6 +22,9 @@ REQUIRED_FIELDS = {
     "identity": {"name", "date_of_birth"},
     "income_certificate": {"name", "annual_income", "issue_date"},
     "residence_proof": {"name", "residence_state", "issue_date"},
+    "health_insurance": {"name", "insurer", "policy_number", "expiry_date", "sum_insured"},
+    "bank_passbook": {"name", "bank_name", "account_number", "ifsc"},
+    "disability_certificate": {"name", "issuing_authority", "issue_date", "disability_percent"},
 }
 ALLOWED_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 CONFIDENCE_THRESHOLD = 0.9
@@ -105,11 +108,17 @@ def classify_document(state: DocumentState) -> dict[str, Any]:
             guessed = "identity"
         elif "residence" in filename:
             guessed = "residence_proof"
+        elif "insurance" in filename:
+            guessed = "health_insurance"
+        elif "passbook" in filename:
+            guessed = "bank_passbook"
+        elif "disability" in filename:
+            guessed = "disability_certificate"
     if guessed not in REQUIRED_FIELDS:
         return {
             "status": "needs_classification",
             "route": "stop",
-            "warnings": ["Choose identity, income_certificate, or residence_proof"],
+            "warnings": [f"Choose one of: {', '.join(REQUIRED_FIELDS)}"],
             "events": add_event(state, "classify_document:unknown"),
         }
     return {
