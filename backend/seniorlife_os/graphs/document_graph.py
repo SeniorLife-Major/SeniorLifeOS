@@ -17,6 +17,7 @@ from langgraph.types import interrupt
 
 from ..tools.demo_tools import extract_fields_from_pages, normalize_field
 from ..tools.ocr import OcrEngineError, OcrError, read_document
+from ..tools.ocr_postprocess import clean_page
 from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier
 
 
@@ -129,6 +130,7 @@ def read_file(state: DocumentState) -> dict[str, Any]:
             "warnings": [str(exc)],
             "events": add_event(state, "read_file:unreadable"),
         }
+    pages = [clean_page(page) for page in pages]
     if not any(page["text"].strip() for page in pages):
         return {
             "ocr_attempts": attempts,

@@ -178,7 +178,7 @@ Aadhaar, PAN, account, and insurance policy numbers are stored masked (`XXXX XXX
 
 `read_document(path, mime_type)` reads a PNG, JPEG, or PDF on this machine with PaddleOCR (English, PP-OCRv6 medium) and returns pages in the same shape as the `pages[]` fixtures above, plus per-line `confidence` and `box`. PDFs that store text are read without OCR. Scanned pages are rendered at 300 DPI. Blurry pages are capped at quality 0.85 so they go to review.
 
-The document graph uses it when the upload names a real file instead of page fixtures. Set `document.file_path` and leave out `pages`. The size is checked on disk, and the `read_file` node runs OCR before classification. A broken or blank file gives `needs_reupload`. An OCR engine crash is retried up to 3 times and then gives `failed_tool`. Each field takes its own line's confidence and keeps that line's `box`.
+The document graph uses it when the upload names a real file instead of page fixtures. Set `document.file_path` and leave out `pages`. The size is checked on disk, and the `read_file` node runs OCR before classification. A broken or blank file gives `needs_reupload`. An OCR engine crash is retried up to 3 times and then gives `failed_tool`. Each field takes its own line's confidence and keeps that line's `box`. Before fields are read, OCR text is tidied by `tools/ocr_postprocess.py`: odd dashes and quotes, full-width characters, and `Rs.`/`INR` before an amount become `₹`. Labels match even with dropped spaces or dotted leaders (`PolicyNo:`, `IFSC Code ......:`).
 
 ```python
 state = {

@@ -70,6 +70,20 @@ FIELD_LABELS = {
 }
 
 
+def compact_label(label: str) -> str:
+    """'Policy No.', 'PolicyNo', 'IFSC Code .........' -> 'policyno', 'policyno', 'ifsccode'."""
+    return re.sub(r"[\s.]", "", label.lower())
+
+
+# OCR often drops the space inside a label or prints dotted leaders after it.
+COMPACT_FIELD_LABELS = {compact_label(label): key for label, key in FIELD_LABELS.items()}
+
+
+def field_for_label(raw_label: str) -> str | None:
+    """The field a printed label stands for, ignoring case, spaces and dots."""
+    return FIELD_LABELS.get(raw_label.strip().lower()) or COMPACT_FIELD_LABELS.get(compact_label(raw_label))
+
+
 def extract_fields_from_pages(pages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Field extraction from "Label: value" lines of page text.
 
@@ -88,7 +102,7 @@ def extract_fields_from_pages(pages: list[dict[str, Any]]) -> dict[str, dict[str
             if ":" not in line:
                 continue
             raw_label, raw_value = line.split(":", 1)
-            key = FIELD_LABELS.get(raw_label.strip().lower())
+            key = field_for_label(raw_label)
             value = raw_value.strip()
             if key and value:
                 confidence = page.get("quality", 1.0)

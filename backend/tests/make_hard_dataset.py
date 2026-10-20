@@ -688,10 +688,11 @@ def score_page(entry: dict[str, Any], page: dict[str, Any]) -> dict[str, Any]:
     """read  = the printed value appears in the OCR text (case and spacing ignored)
        parsed = today's parser + normalizer produce the right vault value"""
     from seniorlife_os.tools.demo_tools import extract_fields_from_pages, normalize_field
+    from seniorlife_os.tools.ocr_postprocess import clean_page
 
-    text = page["text"]
+    text = page["text"]  # "read" is judged on the raw OCR text
     lines = [squash(line) for line in text.splitlines()]
-    extracted = extract_fields_from_pages([page])
+    extracted = extract_fields_from_pages([clean_page(page)])  # same steps as the graph
     result = {"read": {}, "parsed": {}, "rows_ok": 0, "rows_total": len(entry["rows"])}
     for key, truth in entry["fields"].items():
         result["read"][key] = any(re.search(read_pattern(truth["shown"]), line) for line in lines)
