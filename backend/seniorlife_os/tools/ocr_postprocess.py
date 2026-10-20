@@ -80,14 +80,14 @@ def fix_lookalikes(key: str, raw_value: str) -> tuple[str, list[str]] | None:
         fixed, changes = _swap(value, "LLLLLddddL")
     elif key == "ifsc" and len(value) == 11:  # AAAA0XXXXXX: last six may be letters or digits
         fixed, changes = _swap(value, "LLLLd......")
-    elif key in {"annual_income", "sum_insured"}:
+    elif key in {"annual_income", "sum_insured", "total_amount"}:
         prefix = CURRENCY_PREFIX.match(value)
         head = prefix.group(0) if prefix else ""
         body = value[len(head):]
         tail = "/-" if body.endswith("/-") else ""
         number, changes = _digits_everywhere(body[: len(body) - len(tail)])
         fixed = head + number + tail
-    elif key in {"issue_date", "expiry_date", "date_of_birth"}:
+    elif key in {"issue_date", "expiry_date", "date_of_birth", "report_date", "prescription_date", "bill_date"}:
         # Leave a month name ("Aug") alone; everything else must be digits or separators.
         parts, changes = [], []
         for token in re.split(r"([/.\- ,]+)", value):
@@ -104,8 +104,9 @@ def fix_lookalikes(key: str, raw_value: str) -> tuple[str, list[str]] | None:
 
 
 # Fields with a strict shape: text after the value (a stamp, the next column) can be cut off.
-TRIMMABLE = {"issue_date", "expiry_date", "date_of_birth", "annual_income", "sum_insured", "aadhaar_number",
-             "pan_number", "account_number", "ifsc", "disability_percent"}
+TRIMMABLE = {"issue_date", "expiry_date", "date_of_birth", "report_date", "prescription_date", "bill_date",
+             "annual_income", "sum_insured", "total_amount", "aadhaar_number", "pan_number", "account_number",
+             "ifsc", "disability_percent"}
 
 
 def repair_value(key: str, raw_value: str) -> tuple[str, Any, list[str]] | None:

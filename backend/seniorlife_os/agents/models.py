@@ -53,9 +53,15 @@ def get_model():
     return groq_model() if current_provider() == "groq" else openai_model()
 
 
-def structured_model(schema):
-    """Return a model that answers with an instance of the given Pydantic schema."""
+def structured_model(schema, method: str | None = None):
+    """Return a model that answers with an instance of the given Pydantic schema.
+
+    `method` overrides how the answer is requested (e.g. "json_schema"); by default
+    Groq uses tool calling and OpenAI uses the library default.
+    """
     model = get_model()
+    if method:
+        return model.with_structured_output(schema, method=method)
     if current_provider() == "groq":
         # Tool calling works on more Groq models than json_schema. Explicit so a library default change can't alter it.
         return model.with_structured_output(schema, method="function_calling")

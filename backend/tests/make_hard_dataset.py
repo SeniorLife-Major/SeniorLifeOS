@@ -15,6 +15,7 @@ Run from backend/:
     .venv/Scripts/python.exe tests/make_hard_dataset.py            # generate
     .venv/Scripts/python.exe tests/make_hard_dataset.py --score    # + run PaddleOCR and score
     .venv/Scripts/python.exe tests/make_hard_dataset.py --rescore  # score again from saved OCR text
+    .venv/Scripts/python.exe tests/make_hard_dataset.py --rescore --llm  # ... plus the model (Groq)
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ FONT_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
 NBSP = "\u00a0"
 
 TYPES = ["identity", "income_certificate", "residence_proof", "health_insurance",
-         "bank_passbook", "disability_certificate", "lab_report"]
+         "bank_passbook", "disability_certificate", "lab_report", "prescription", "medical_bill"]
 CONDITIONS = ["scan", "photocopy", "phone_photo", "phone_shadow_dim", "phone_glare_shake", "worn"]
 
 PEOPLE = [
@@ -450,7 +451,8 @@ def make_lab_report(rng, person):
     collected = fake_date(rng, 2026, 2026)
     info = [("Patient Name", f"{person['title']} {person['name']}"), ("Age / Sex", f"{rng.randint(62, 88)} Y / {person['gender'][0]}"),
             ("Ref. By", "Dr. Demo Physician"), ("Sample ID", f"LAB{rng.randint(100000, 999999)}"),
-            ("Collected On", f"{collected[2]:02d}-{MONTHS[collected[1] - 1]}-{collected[0]} 08:15 AM"), ("Reported On", "Same day")]
+            ("Collected On", f"{collected[2]:02d}-{MONTHS[collected[1] - 1]}-{collected[0]} 08:15 AM"),
+            ("Reported On", f"{collected[2]:02d}-{MONTHS[collected[1] - 1]}-{collected[0]} 06:40 PM")]
     lab, val = font("arial.ttf", 24), font("arialbd.ttf", 24)
     for i, (label, value) in enumerate(info):
         x, y = 60 + (i % 2) * 600, 170 + (i // 2) * 46
@@ -474,14 +476,105 @@ def make_lab_report(rng, person):
     signature(img, rng, 880, y + 420, "Pathologist")
     draw.text((860, y + 500), "Consultant Pathologist", font=font("arial.ttf", 24), fill=INK)
     draw.text((60, y + 600), "*** End of Report ***", font=font("arial.ttf", 22), fill=(90, 90, 90))
-    fields = {"name": field(person["name"], person["name"])}
+    reported = f"{collected[2]:02d}-{MONTHS[collected[1] - 1]}-{collected[0]}"
+    tests = [{"name": n, "value": float(v), "unit": u, "ref_range": r} for n, v, u, r in truth_rows]
+    fields = {"name": field(person["name"], person["name"]),
+              "lab_name": field("DEMO DIAGNOSTICS & PATHOLOGY LAB", "DEMO DIAGNOSTICS & PATHOLOGY LAB"),
+              "report_date": field(reported, iso(collected)),
+              "tests": field(truth_rows[0][0], tests)}
     return img, fields, truth_rows
+
+
+MEDICINES = [("Tab", "Metformin", "500 mg"), ("Tab", "Amlodipine", "5 mg"), ("Tab", "Atorvastatin", "10 mg"),
+             ("Cap", "Omeprazole", "20 mg"), ("Tab", "Telmisartan", "40 mg"), ("Syp", "Lactulose", "15 ml"),
+             ("Tab", "Levothyroxine", "50 mcg")]
+FREQUENCIES = ["1-0-1", "1-0-0", "0-0-1", "OD", "BD", "1-1-1"]
+DOCTORS = ["Asha Menon", "Vikram Joshi", "Farah Khan", "Prakash Rao"]
+
+
+def make_prescription(rng, person):
+    """Printed clinic prescription: doctor header, patient line with several pairs, Rx list."""
+    img, draw = new_page(1240, 1500, (255, 255, 252))
+    doctor = rng.choice(DOCTORS)
+    draw.text((60, 40), f"Dr. {doctor}", font=font("georgiab.ttf", 46), fill=NAVY)
+    draw.text((60, 100), "MBBS, MD (General Medicine)  |  Reg. No. DEMO-12345 (fictional)",
+              font=font("georgia.ttf", 24), fill=NAVY)
+    draw.text((60, 135), "Demo Family Clinic, Demo Nagar  |  SAMPLE", font=font("georgia.ttf", 24), fill=NAVY)
+    draw.line((50, 180, 1190, 180), fill=NAVY, width=3)
+    when = fake_date(rng, 2026, 2026)
+    when_shown = f"{when[2]:02d}/{when[1]:02d}/{when[0]}"
+    draw.text((60, 210), f"Patient: {person['title']} {person['name']}     Age/Sex: {rng.randint(62, 88)}/"
+                         f"{person['gender'][0]}     Date: {when_shown}", font=font("arial.ttf", 28), fill=INK)
+    draw.text((60, 290), "Rx", font=font("timesbd.ttf", 56), fill=INK)
+    rows = []
+    for index, (form, name, strength) in enumerate(rng.sample(MEDICINES, rng.randint(2, 4)), start=1):
+        frequency, days = rng.choice(FREQUENCIES), rng.choice([5, 10, 15, 30, 60])
+        text = f"{index}. {form}. {name} {strength} {frequency} x {days} days"
+        draw.text((90, 380 + (index - 1) * 70), text, font=font("arial.ttf", 30), fill=INK)
+        rows.append({"name": name, "form": form, "strength": strength, "frequency": frequency,
+                     "duration": f"x {days} days"})
+    y = 380 + len(rows) * 70 + 40
+    draw.text((60, y), "Advice: Walk 30 minutes daily. Review after one month.", font=font("arial.ttf", 26), fill=INK)
+    signature(img, rng, 860, y + 120, doctor)
+    stamp(img, rng, (rng.randint(700, 1000), y + 160), 90, ["DEMO CLINIC", "SAMPLE"])
+    fields = {"name": field(person["name"], person["name"]),
+              "doctor_name": field(f"Dr. {doctor}", f"Dr. {doctor}"),
+              "prescription_date": field(when_shown, iso(when)),
+              "medicines": field(rows[0]["name"], rows)}
+    return img, fields, []
+
+
+BILL_ITEMS = [("Metformin 500mg (10 tabs)", 60.0), ("Amlodipine 5mg (10 tabs)", 45.5), ("Consultation fee", 500.0),
+              ("Blood test - HbA1c", 450.0), ("Atorvastatin 10mg (10 tabs)", 98.25), ("Dressing charges", 150.0)]
+
+
+def make_medical_bill(rng, person):
+    """Hospital pharmacy bill: heading as provider, item table with qty/rate/amount, totals."""
+    img, draw = new_page(1240, 1400, (255, 255, 255))
+    provider = "DEMO CITY HOSPITAL PHARMACY"
+    draw.text((60, 40), provider, font=font("arialbd.ttf", 42), fill=NAVY)
+    draw.text((60, 95), "Demo Road, Demo City  |  GSTIN: DEMO0000 (fictional)  |  SAMPLE",
+              font=font("arial.ttf", 22), fill=NAVY)
+    when = fake_date(rng, 2026, 2026)
+    when_shown = f"{when[2]:02d}/{when[1]:02d}/{when[0]}"
+    draw.text((60, 160), f"Bill No: PH/2026/{rng.randint(1000, 9999)}", font=font("arial.ttf", 26), fill=INK)
+    draw.text((700, 160), f"Bill Date: {when_shown}", font=font("arial.ttf", 26), fill=INK)
+    draw.text((60, 210), f"Patient Name: {person['title']} {person['name']}", font=font("arial.ttf", 26), fill=INK)
+    y = 290
+    columns = (60, 140, 760, 880, 1040)
+    draw.rectangle((50, y, 1190, y + 46), fill=(232, 236, 242))
+    for x, head in zip(columns, ("S.No", "Description", "Qty", "Rate", "Amount")):
+        draw.text((x, y + 10), head, font=font("arialbd.ttf", 24), fill=INK)
+    rows, total = [], 0.0
+    for index, (description, rate) in enumerate(rng.sample(BILL_ITEMS, rng.randint(2, 4)), start=1):
+        qty = rng.randint(1, 3)
+        amount = round(qty * rate, 2)
+        total += amount
+        ry = y + 60 + (index - 1) * 50
+        for x, cell in zip(columns, (str(index), description, str(qty), f"{rate:.2f}", f"{amount:.2f}")):
+            draw.text((x, ry), cell, font=font("arial.ttf", 24), fill=INK)
+        rows.append({"description": description, "amount": amount})
+    y = y + 60 + len(rows) * 50 + 20
+    draw.line((50, y, 1190, y), fill=INK, width=1)
+    total_shown = f"{inr(int(total))}.{round(total * 100) % 100:02d}"
+    draw.text((760, y + 15), f"Sub Total  {total:.2f}", font=font("arial.ttf", 24), fill=INK)
+    draw.text((700, y + 60), f"Grand Total: ₹ {total_shown}", font=font("arialbd.ttf", 30), fill=INK)
+    draw.text((60, y + 130), f"Amount in words: Rupees {rupees_in_words(int(total))} only",
+              font=font("arial.ttf", 22), fill=INK)
+    signature(img, rng, 880, y + 200, "Cashier")
+    stamp(img, rng, (rng.randint(300, 700), y + 230), 80, ["DEMO", "PHARMACY", "PAID"])
+    fields = {"name": field(person["name"], person["name"]),
+              "provider": field(provider, provider),
+              "bill_date": field(when_shown, iso(when)),
+              "total_amount": field(total_shown, round(total, 2)),
+              "items": field(rows[0]["description"], rows)}
+    return img, fields, []
 
 
 MAKERS = {"identity": make_identity, "income_certificate": make_income_certificate,
           "residence_proof": make_residence_proof, "health_insurance": make_health_insurance,
           "bank_passbook": make_bank_passbook, "disability_certificate": make_disability_certificate,
-          "lab_report": make_lab_report}
+          "lab_report": make_lab_report, "prescription": make_prescription, "medical_bill": make_medical_bill}
 
 
 # ---------- capture damage (all on RGB uint8 arrays) ----------
@@ -684,28 +777,59 @@ def read_pattern(shown: str) -> str:
     return r"(?<!\d)" + " ?".join(chars) + r"(?!\d)"
 
 
-def score_page(entry: dict[str, Any], page: dict[str, Any]) -> dict[str, Any]:
+# List answers are compared row by row on the parts that matter (flags and positions are extra).
+LIST_COMPARE = {"tests": ("name", "value", "unit", "ref_range"),
+                "medicines": ("name", "strength", "frequency", "duration"),
+                "items": ("description", "amount")}
+
+
+def same_value(key: str, got: Any, want: Any) -> bool:
+    if key in LIST_COMPARE:
+        columns = LIST_COMPARE[key]
+        return (isinstance(got, list) and len(got) == len(want)
+                and all(tuple(g.get(c) for c in columns) == tuple(w.get(c) for c in columns)
+                        for g, w in zip(got, want)))
+    return got is not None and got == want
+
+
+def score_page(entry: dict[str, Any], page: dict[str, Any], use_llm: bool = False) -> dict[str, Any]:
     """read   = the printed value appears in the OCR text (case and spacing ignored)
        parsed = the graph's steps (cleanup, parser + layout rules, normalizer, repair) give
                 the right vault value
        review = fields that were right but the graph would send to review because they came
-                from a layout guess or a repair (look-alike fix, trimmed text)"""
+                from a layout guess, a repair (look-alike fix, trimmed text) or the model
+       use_llm: also ask the model (Groq) for required fields the rules missed, as the graph
+                does with use_llm=True. The holder's name is the known value that gets redacted.
+                The pages are fictional, so this counts as consent for medical documents too."""
     from seniorlife_os.tools.demo_tools import extract_fields_from_pages, normalize_field
+    from seniorlife_os.tools.medical import extract_lists, heading_fields
     from seniorlife_os.tools.ocr_postprocess import clean_page, repair_value
 
     text = page["text"]  # "read" is judged on the raw OCR text
     lines = [squash(line) for line in text.splitlines()]
-    extracted = extract_fields_from_pages([clean_page(page)], entry.get("type"))  # same steps as the graph
+    cleaned = clean_page(page)
+    extracted = extract_fields_from_pages([cleaned], entry.get("type"))  # same steps as the graph
+    extracted.update(extract_lists([cleaned], entry.get("type")))
+    extracted.update(heading_fields([cleaned], entry.get("type"), extracted))
+    if use_llm:
+        from seniorlife_os.agents.llm_agents import extract_missing_fields
+        from seniorlife_os.tools.document_rules import REQUIRED_FIELDS
+
+        missing = [k for k in sorted(REQUIRED_FIELDS.get(entry.get("type"), ())) if k not in extracted]
+        if missing:
+            known = {"NAME": entry["fields"]["name"]["shown"]} if "name" in entry["fields"] else None
+            for key, value in extract_missing_fields(cleaned["text"], entry["type"], missing, known).items():
+                extracted[key] = {"value": value, "layout": "llm"}
     result = {"read": {}, "parsed": {}, "review": [], "rows_ok": 0, "rows_total": len(entry["rows"])}
     for key, truth in entry["fields"].items():
         result["read"][key] = any(re.search(read_pattern(truth["shown"]), line) for line in lines)
         found = extracted.get(key)
         got = normalize_field(key, found["value"]) if found else None
-        repaired = repair_value(key, found["value"]) if found and got is None else None
+        repaired = repair_value(key, found["value"]) if found and got is None and isinstance(found["value"], str) else None
         if repaired:
             got = repaired[1]
-        result["parsed"][key] = got is not None and got == truth["value"]  # nothing found is never right
-        if result["parsed"][key] and (repaired or found.get("layout")):
+        result["parsed"][key] = same_value(key, got, truth["value"])  # nothing found is never right
+        if result["parsed"][key] and (repaired or found.get("layout") or key in LIST_COMPARE):
             result["review"].append(key)
     for row in entry["rows"]:
         if any(all(re.search(read_pattern(cell), line) for cell in row) for line in lines):
@@ -732,7 +856,7 @@ def score(out_dir: Path = OUT_DIR) -> dict[str, Any]:
     return save_results(out_dir, pages)
 
 
-def rescore(out_dir: Path = OUT_DIR) -> dict[str, Any]:
+def rescore(out_dir: Path = OUT_DIR, use_llm: bool = False) -> dict[str, Any]:
     """Score again from the OCR text saved by score(): no OCR, takes a second."""
     manifest = {e["path"]: e for e in json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))}
     saved = json.loads((out_dir / "results_paddle.json").read_text(encoding="utf-8"))["pages"]
@@ -741,11 +865,11 @@ def rescore(out_dir: Path = OUT_DIR) -> dict[str, Any]:
         ocr_page = {"page": 1, "quality": page["quality"], "blurry": page.get("blurry", False), "text": page["text"]}
         if "lines" in page:  # saved by newer runs: lets the column rules use each piece's position
             ocr_page["lines"] = page["lines"]
-        pages.append({**page, **score_page(manifest[page["path"]], ocr_page)})
-    return save_results(out_dir, pages)
+        pages.append({**page, **score_page(manifest[page["path"]], ocr_page, use_llm)})
+    return save_results(out_dir, pages, "results_paddle_llm.json" if use_llm else "results_paddle.json")
 
 
-def save_results(out_dir: Path, pages: list[dict[str, Any]]) -> dict[str, Any]:
+def save_results(out_dir: Path, pages: list[dict[str, Any]], name: str = "results_paddle.json") -> dict[str, Any]:
     def rate(rows, kind):
         total = sum(len(r[kind]) for r in rows)
         return round(100 * sum(sum(r[kind].values()) for r in rows) / total) if total else None
@@ -765,14 +889,14 @@ def save_results(out_dir: Path, pages: list[dict[str, Any]]) -> dict[str, Any]:
         "missed_reads": [f"{p['path']}: {k}" for p in pages for k, ok in p["read"].items() if not ok],
         "right_but_sent_to_review": sum(len(p.get("review", [])) for p in pages),
     }
-    (out_dir / "results_paddle.json").write_text(
+    (out_dir / name).write_text(
         json.dumps({"summary": summary, "pages": pages}, indent=1, ensure_ascii=False), encoding="utf-8")
     return summary
 
 
 if __name__ == "__main__":
     if "--rescore" in sys.argv:
-        print(json.dumps(rescore(), indent=1, ensure_ascii=False))
+        print(json.dumps(rescore(use_llm="--llm" in sys.argv), indent=1, ensure_ascii=False))
     else:
         made = generate()
         print(f"generated {len(made)} pages in {OUT_DIR}")

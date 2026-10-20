@@ -16,9 +16,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..tools.demo_tools import extract_fields_from_pages, normalize_field
+from ..tools.medical import (
+    LIST_FIELDS, MEDICAL_TYPES, extract_lists, heading_fields, looks_medical, medical_type_from_text,
+)
 from ..tools.ocr import OcrEngineError, OcrError, read_document
+from ..tools.cloud_ocr import KEY_NAME as VISION_KEY_NAME, CloudOcrError, read_document_in_cloud, vision_api_key
 from ..tools.ocr_postprocess import clean_page, lookalike_key, repair_value
-from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier
+from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier, mask_ids_in_text
 from ..utils.tracing import install_safe_client
 
 
@@ -29,6 +33,9 @@ REQUIRED_FIELDS = {
     "health_insurance": {"name", "insurer", "policy_number", "expiry_date", "sum_insured"},
     "bank_passbook": {"name", "bank_name", "account_number", "ifsc"},
     "disability_certificate": {"name", "issuing_authority", "issue_date", "disability_percent"},
+    "lab_report": {"name", "lab_name", "report_date", "tests"},
+    "prescription": {"name", "doctor_name", "prescription_date", "medicines"},
+    "medical_bill": {"name", "provider", "bill_date", "total_amount"},
 }
 ALLOWED_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 CONFIDENCE_THRESHOLD = 0.9
@@ -48,6 +55,9 @@ class DocumentState(TypedDict, total=False):
     use_llm: bool
     simulate_ocr_failures: int
     vault_identifier_hashes: dict[str, str]  # keyed hash -> document_id already in the vault
+    medical_cloud_consent: bool  # the senior allows the cloud model to read medical documents
+    cloud_ocr_consent: bool  # the senior allows Google Vision to read unclear pages again
+    cloud_ocr_used: bool
 
     # Graph outputs / control
     document_type: str
@@ -148,16 +158,36 @@ def read_file(state: DocumentState) -> dict[str, Any]:
     }
 
 
+FILENAME_HINTS = (
+    ("income", "income_certificate"), ("identity", "identity"), ("residence", "residence_proof"),
+    ("insurance", "health_insurance"), ("passbook", "bank_passbook"), ("disability", "disability_certificate"),
+    ("lab", "lab_report"), ("prescription", "prescription"), ("bill", "medical_bill"), ("invoice", "medical_bill"),
+)
+
+
+def guess_type_locally(filename: str, page_text: str) -> str | None:
+    """Type from the file name, then (for medical documents) from words on the page. No network."""
+    for hint, document_type in FILENAME_HINTS:
+        if hint in filename:
+            return document_type
+    return medical_type_from_text(page_text)
+
+
 def classify_document(state: DocumentState) -> dict[str, Any]:
     claimed = state.get("claimed_type") or state["document"].get("claimed_type")
     filename = state["document"].get("filename", "").lower()
     guessed = claimed
-    if not guessed and state.get("use_llm"):
+    page_text = "\n".join(page.get("text", "") for page in state["document"]["pages"])
+    # A page that looks medical goes to the cloud model only with consent (Decision #29),
+    # even just to learn its type; without consent it is classified on this machine.
+    cloud_allowed = not looks_medical(page_text) or state.get("medical_cloud_consent")
+    if not guessed and state.get("use_llm") and not cloud_allowed:
+        guessed = guess_type_locally(filename, page_text)
+    elif not guessed and state.get("use_llm"):
         try:
             from ..agents.llm_agents import choose_document_type
 
-            page_text = "\n".join(page.get("text", "") for page in state["document"]["pages"])
-            known = {"NAME": state["document"].get("owner_name", "")}
+            known ={"NAME": state["document"].get("owner_name", "")}
             guessed = choose_document_type(page_text, known).document_type
         except Exception as exc:
             return {
@@ -167,18 +197,7 @@ def classify_document(state: DocumentState) -> dict[str, Any]:
                 "events": add_event(state, "classify_document:llm_error"),
             }
     if not guessed and not state.get("use_llm"):
-        if "income" in filename:
-            guessed = "income_certificate"
-        elif "identity" in filename:
-            guessed = "identity"
-        elif "residence" in filename:
-            guessed = "residence_proof"
-        elif "insurance" in filename:
-            guessed = "health_insurance"
-        elif "passbook" in filename:
-            guessed = "bank_passbook"
-        elif "disability" in filename:
-            guessed = "disability_certificate"
+        guessed = guess_type_locally(filename, page_text)
     if guessed not in REQUIRED_FIELDS:
         return {
             "status": "needs_classification",
@@ -213,6 +232,19 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
             "events": add_event(state, "extract_content:unreadable"),
         }
     fields = extract_fields_from_pages(pages, state["document_type"])
+    fields.update(extract_lists(pages, state["document_type"]))  # lab tests, medicines, bill items
+    fields.update(heading_fields(pages, state["document_type"], fields))
+    missing = [key for key in sorted(REQUIRED_FIELDS[state["document_type"]]) if key not in fields]
+    # Medical documents go to the cloud model only with the senior's consent (Decision #29).
+    cloud_allowed = state["document_type"] not in MEDICAL_TYPES or state.get("medical_cloud_consent")
+    if missing and state.get("use_llm") and cloud_allowed:
+        # Values inside sentences or with no label: let the model look for just these fields.
+        return {
+            "extracted_fields": fields,
+            "retry_count": retries,
+            "route": "llm",
+            "events": add_event(state, "extract_content:missing_fields"),
+        }
     if not fields:
         return {
             "route": "stop",
@@ -228,28 +260,122 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
     }
 
 
+def find_line(pages: list[dict[str, Any]], value: str) -> tuple[dict[str, Any], int]:
+    """The page and line number where a value appears (first word as a fallback)."""
+    wanted = [" ".join(value.split()).casefold(), value.split()[0].casefold()]
+    for target in wanted:
+        for page in pages:
+            for number, line in enumerate(page.get("text", "").splitlines(), start=1):
+                if target in " ".join(line.split()).casefold():
+                    return page, number
+    return pages[0], 1
+
+
+def llm_extract(state: DocumentState) -> dict[str, Any]:
+    """Ask the model for required fields the rules missed. Everything it finds is reviewed."""
+    fields = dict(state.get("extracted_fields", {}))
+    document_type = state["document_type"]
+    missing = [key for key in sorted(REQUIRED_FIELDS[document_type]) if key not in fields]
+    pages = state["document"]["pages"]
+    owner_name = state["document"].get("owner_name")
+    warnings = list(state.get("warnings", []))
+    try:
+        from ..agents.llm_agents import extract_missing_fields
+
+        found = extract_missing_fields("\n".join(page.get("text", "") for page in pages), document_type, missing,
+                                       {"NAME": owner_name} if owner_name else None)
+    except Exception as exc:  # no model, no key, network, or redaction failure: never guess
+        found = {}
+        warnings.append(f"AI extraction unavailable ({type(exc).__name__}); missing fields need the owner")
+    def place(text: str) -> dict[str, Any]:
+        """Where a value sits: page, line, that line's box and confidence."""
+        page, number = find_line(pages, text)
+        lines = page.get("lines")
+        line = lines[number - 1] if lines and len(lines) == len(page.get("text", "").splitlines()) else {}
+        confidence = line.get("confidence", page.get("quality", 1.0))
+        if page.get("blurry"):
+            confidence = min(confidence, page.get("quality", 1.0))
+        return {"page": page["page"], "line": number, "source_ref": f"page:{page['page']}:line:{number}",
+                "box": line.get("box"), "confidence": confidence}
+
+    for key, value in found.items():
+        if isinstance(value, list):  # rows of a medical list: each row placed on its own line
+            rows = []
+            for row in value:
+                where = place(next(text for text in row.values() if text))
+                rows.append({**row, "source_ref": where["source_ref"], "confidence": where["confidence"],
+                             "box": where["box"]})
+            first = place(next(text for text in value[0].values() if text))
+            fields[key] = {**first, "value": rows, "confidence": min(row["confidence"] for row in rows),
+                           "layout": "llm"}
+        else:
+            fields[key] = {**place(value), "value": value, "layout": "llm"}
+    if not fields:
+        return {
+            "route": "stop",
+            "status": "needs_reupload",
+            "warnings": [*warnings, "No fields could be found in the document"],
+            "events": add_event(state, "llm_extract:no_fields"),
+        }
+    return {
+        "extracted_fields": fields,
+        "warnings": warnings,
+        "route": "continue",
+        "events": add_event(state, f"llm_extract:found_{len(found)}_of_{len(missing)}"),
+    }
+
+
+LAYOUT_NOTES = {
+    "no_colon": "found by layout (no colon)",
+    "label_above": "found by layout (label above)",
+    "llm": "found by AI reading the text",
+    "heading": "taken from the page heading",
+    "doctor_line": "taken from a line starting with Dr.",
+}
+FUTURE_DATE_LABELS = {"issue_date": "Issue date", "report_date": "Report date",
+                      "prescription_date": "Prescription date", "bill_date": "Bill date"}
+
+
+def is_blank(value: Any) -> bool:
+    return value is None or value == "" or value == []
+
+
 def validate_candidates(state: DocumentState) -> dict[str, Any]:
     fields = {key: dict(item) for key, item in state["extracted_fields"].items()}
     normalized = {}
     flags = []
     for key, item in fields.items():
         if item.get("layout"):
-            # Found by a layout guess (no colon, or label above the value): the owner checks it.
-            flags.append(f"{key}: found by layout ({item['layout'].replace('_', ' ')}), please check")
+            # Found by a layout guess or by the model reading the text: the owner checks it.
+            flags.append(f"{key}: {LAYOUT_NOTES[item['layout']]}, please check")
+        if item.get("source") == "cloud_ocr":
+            flags.append(f"{key}: read again by cloud OCR (Google Vision), please check")
         normalized[key] = normalize_field(key, item["value"])
-        if normalized[key] is not None:
-            continue
-        # The value fails its check as read: try look-alike swaps where the field's shape
-        # demands a digit or a letter, and cutting extra text after a strictly shaped value.
-        # Keep a repair only if it then passes, and always send it to review.
-        repaired = repair_value(key, item["value"])
-        if repaired:
-            item["ocr_value"] = item["value"]  # kept so the masking step can hide this spelling too
-            item["value"], normalized[key], item["corrections"] = repaired
-            flags.extend(f"{key}: {note}, please check" for note in repaired[2])
+        if normalized[key] is None and isinstance(item["value"], str):
+            # The value fails its check as read: try look-alike swaps where the field's shape
+            # demands a digit or a letter, and cutting extra text after a strictly shaped value.
+            # Keep a repair only if it then passes, and always send it to review.
+            repaired = repair_value(key, item["value"])
+            if repaired:
+                item["ocr_value"] = item["value"]  # kept so the masking step can hide this spelling too
+                item["value"], normalized[key], item["corrections"] = repaired
+        # Flagged on every pass (validation runs again after a cloud read).
+        flags.extend(f"{key}: {note}, please check" for note in item.get("corrections", []))
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
-        if normalized.get(key) is None or normalized.get(key) == "":
+        if is_blank(normalized.get(key)):
             flags.append(f"{key}: missing or invalid")
+    for key in sorted(LIST_FIELDS & set(normalized)):
+        # Every row of a medical list is checked by the owner (Decision #29).
+        rows = normalized[key] or []
+        if rows:
+            flags.append(f"{key}: please check every row ({len(rows)})")
+        for number, row in enumerate(rows, start=1):
+            flags.extend(f"{key} row {number}: {problem}" for problem in row.get("problems", []))
+    items, total = normalized.get("items"), normalized.get("total_amount")
+    if items and total is not None and all(row.get("amount") is not None for row in items):
+        added = round(sum(row["amount"] for row in items), 2)
+        if abs(added - total) > 0.5:
+            flags.append(f"items add up to {added:.2f} but the total says {total:.2f}")
     for key in ID_FIELDS:
         if key in fields and normalized.get(key) is None:
             flags.append(f"{key}: failed format or checksum check")
@@ -261,15 +387,73 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
         else:
             flags.append("name differs from the provided owner name")
     today = date.fromisoformat(state["document"].get("as_of", date.today().isoformat()))
-    if normalized.get("issue_date") and date.fromisoformat(normalized["issue_date"]) > today:
-        flags.append("issue_date is in the future")
+    for key in FUTURE_DATE_LABELS:
+        if normalized.get(key) and date.fromisoformat(normalized[key]) > today:
+            flags.append(f"{key} is in the future")
     if normalized.get("expiry_date") and date.fromisoformat(normalized["expiry_date"]) < today:
         flags.append("document is expired")
     return {
         "extracted_fields": fields,
         "normalized_fields": normalized,
         "review_flags": flags,
+        "route": "cloud_ocr" if wants_cloud_ocr(state, fields, normalized) else "continue",
         "events": add_event(state, "validate_candidates"),
+    }
+
+
+def wants_cloud_ocr(state: DocumentState, fields: dict[str, Any], normalized: dict[str, Any]) -> bool:
+    """Read the file again in the cloud? Only with consent, once, and only if the local reading
+    left a required field missing or invalid, or a field unsure, or a page blurry."""
+    document = state["document"]
+    if not state.get("cloud_ocr_consent") or state.get("cloud_ocr_used") or not document.get("file_path"):
+        return False
+    if state["document_type"] in MEDICAL_TYPES and not state.get("medical_cloud_consent"):
+        return False
+    weak = any(is_blank(normalized.get(key)) for key in REQUIRED_FIELDS[state["document_type"]])
+    weak = weak or any(item.get("confidence", 1.0) < CONFIDENCE_THRESHOLD for item in fields.values())
+    return weak or any(page.get("blurry") for page in document.get("pages", []))
+
+
+def cloud_ocr(state: DocumentState) -> dict[str, Any]:
+    """Read the file again with Google Vision (ID regions blacked out) and use its values
+    for fields the local reading got wrong or was unsure of. ID fields always stay local."""
+    done = {"cloud_ocr_used": True, "route": "continue"}
+    warnings = list(state.get("warnings", []))
+    key = vision_api_key()
+    if not key:
+        return {**done, "warnings": [*warnings, f"Cloud OCR skipped: {VISION_KEY_NAME} is not set"],
+                "events": add_event(state, "cloud_ocr:no_key")}
+    document = state["document"]
+    local = state["extracted_fields"]
+    boxes: dict[int, list[list[int]]] = {}
+    for field in ID_FIELDS:
+        if field in local and local[field].get("box"):
+            boxes.setdefault(local[field]["page"], []).append(local[field]["box"])
+    try:
+        pages = read_document_in_cloud(document["file_path"], document["mime_type"], document["pages"], boxes, key)
+    except (CloudOcrError, OcrError) as exc:
+        return {**done, "warnings": [*warnings, f"Cloud OCR unavailable ({exc})"],
+                "events": add_event(state, "cloud_ocr:failed")}
+    pages = [clean_page(page) for page in pages]
+    found = extract_fields_from_pages(pages, state["document_type"])
+    found.update(extract_lists(pages, state["document_type"]))
+    found.update(heading_fields(pages, state["document_type"], found))
+    fields = {name: dict(item) for name, item in local.items()}
+    replaced = 0
+    for name, item in found.items():
+        if name in ID_FIELDS:
+            continue  # blacked out before sending; the local reading is kept
+        mine = fields.get(name)
+        mine_ok = bool(mine and not mine.get("layout") and mine.get("confidence", 0) >= CONFIDENCE_THRESHOLD
+                       and not is_blank(normalize_field(name, mine["value"])))
+        if not mine_ok and not is_blank(normalize_field(name, item["value"])):
+            fields[name] = {**item, "source_ref": f"cloud:{item['source_ref']}", "source": "cloud_ocr"}
+            replaced += 1
+    return {
+        **done,
+        "document": {**document, "cloud_pages": pages},
+        "extracted_fields": fields,
+        "events": add_event(state, f"cloud_ocr:replaced_{replaced}"),
     }
 
 
@@ -342,8 +526,9 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
         }
     confirmed = dict(state["normalized_fields"])
     for key, raw_value in edits.items():
-        confirmed[key] = normalize_field(key, str(raw_value))
-    missing = [key for key in REQUIRED_FIELDS[state["document_type"]] if confirmed.get(key) is None or confirmed.get(key) == ""]
+        # A list (tests, medicines, items) is corrected as a whole list of rows.
+        confirmed[key] = normalize_field(key, raw_value if isinstance(raw_value, list) else str(raw_value))
+    missing = [key for key in REQUIRED_FIELDS[state["document_type"]] if is_blank(confirmed.get(key))]
     if missing:
         return {
             "status": "needs_review",
@@ -352,13 +537,15 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
             "events": add_event(state, "human_field_review:missing_fields"),
         }
     today = date.fromisoformat(state["document"].get("as_of", date.today().isoformat()))
-    if confirmed.get("issue_date") and date.fromisoformat(confirmed["issue_date"]) > today:
-        return {
-            "status": "needs_review",
-            "route": "stop",
-            "errors": ["Issue date cannot be in the future"],
-            "events": add_event(state, "human_field_review:future_issue_date"),
-        }
+    for key, label in FUTURE_DATE_LABELS.items():
+        if confirmed.get(key) and date.fromisoformat(confirmed[key]) > today:
+            return {
+                "status": "needs_review",
+                "route": "stop",
+                "errors": [f"{label} cannot be in the future"],
+                "events": add_event(state, "human_field_review:future_issue_date" if key == "issue_date"
+                                    else "human_field_review:future_date"),
+            }
     return {
         "normalized_fields": confirmed,
         "review_decision": decision,
@@ -368,12 +555,43 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
     }
 
 
+def mask_pages(document: dict[str, Any], replacements: dict[str, str]) -> dict[str, Any]:
+    """A copy of the document whose page text has no full ID numbers left.
+
+    First every known spelling of an extracted ID (replacements), then any other ID
+    number in the text, such as an Aadhaar number printed with no label. OCR line
+    "parts" (pieces used only to find fields) are dropped: a number split across two
+    pieces could not be masked reliably piece by piece.
+    """
+    def mask_text(text: str) -> str:
+        for original in sorted(replacements, key=len, reverse=True):
+            text = text.replace(original, replacements[original])
+        return mask_ids_in_text(text)
+
+    def mask_page(page: dict[str, Any]) -> dict[str, Any]:
+        masked = {**page, "text": mask_text(page.get("text", ""))}
+        if "lines" in page:
+            masked["lines"] = [{**{k: v for k, v in line.items() if k != "parts"}, "text": mask_text(line["text"])}
+                               for line in page["lines"]]
+        return masked
+
+    masked_document = {**document, "pages": [mask_page(page) for page in document.get("pages", [])]}
+    if "cloud_pages" in document:  # the second reading by Google Vision, if one was made
+        masked_document["cloud_pages"] = [mask_page(page) for page in document["cloud_pages"]]
+    return masked_document
+
+
 def protect_identifiers(state: DocumentState) -> dict[str, Any]:
     # Runs after review, so the reviewer could compare the full number with the card.
     fields = state["normalized_fields"]
     present = [key for key in ID_FIELDS if fields.get(key)]
     if not present:
-        return {"route": "continue", "events": add_event(state, "protect_identifiers:none")}
+        # No ID field was extracted, but the page may still show one (e.g. an unlabelled number).
+        return {
+            "document": mask_pages(state["document"], {}),
+            "route": "continue",
+            "events": add_event(state, "protect_identifiers:none"),
+        }
     try:
         key = load_hash_key()
     except RuntimeError as exc:
@@ -405,24 +623,8 @@ def protect_identifiers(state: DocumentState) -> dict[str, Any]:
             edits[field] = protected[field]
     if "edits" in decision:
         decision["edits"] = edits
-    # The OCR page text is later stored as searchable chunks, so mask it too,
-    # including each OCR line (pages read from a real file carry a "lines" list).
-    def mask_text(text: str) -> str:
-        for original in sorted(replacements, key=len, reverse=True):
-            text = text.replace(original, replacements[original])
-        return text
-
-    document = dict(state["document"])
-    pages = []
-    for page in document.get("pages", []):
-        masked = {**page, "text": mask_text(page.get("text", ""))}
-        if "lines" in page:
-            # "parts" (pieces of a line, used only to find fields) are dropped: a number split
-            # across two pieces could not be masked reliably piece by piece.
-            masked["lines"] = [{**{k: v for k, v in line.items() if k != "parts"}, "text": mask_text(line["text"])}
-                               for line in page["lines"]]
-        pages.append(masked)
-    document["pages"] = pages
+    # The OCR page text is later stored as searchable chunks, so mask it too.
+    document = mask_pages(state["document"], replacements)
     known = state.get("vault_identifier_hashes", {})
     warnings = [
         f"{field} already in the vault (document {known[digest]})"
@@ -483,6 +685,7 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_node("read_file", read_file)
     graph.add_node("classify_document", classify_document)
     graph.add_node("extract_content", extract_content)
+    graph.add_node("llm_extract", llm_extract)
     graph.add_node("validate_candidates", validate_candidates)
     graph.add_node("confidence_gate", confidence_gate)
     graph.add_node("human_field_review", human_field_review)
@@ -496,9 +699,14 @@ def build_document_graph(checkpointer: Any = None):
     })
     graph.add_conditional_edges("classify_document", route_step, {"continue": "extract_content", "stop": END})
     graph.add_conditional_edges("extract_content", route_step, {
-        "continue": "validate_candidates", "retry": "extract_content", "stop": END,
+        "continue": "validate_candidates", "retry": "extract_content", "llm": "llm_extract", "stop": END,
     })
-    graph.add_edge("validate_candidates", "confidence_gate")
+    graph.add_conditional_edges("llm_extract", route_step, {"continue": "validate_candidates", "stop": END})
+    graph.add_node("cloud_ocr", cloud_ocr)
+    graph.add_conditional_edges("validate_candidates", route_step, {
+        "continue": "confidence_gate", "cloud_ocr": "cloud_ocr",
+    })
+    graph.add_edge("cloud_ocr", "validate_candidates")
     graph.add_conditional_edges("confidence_gate", route_step, {
         "auto_accept": "protect_identifiers", "review": "human_field_review",
     })

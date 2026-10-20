@@ -12,6 +12,9 @@ from typing import Any
 
 from ..utils.privacy import is_valid_aadhaar, is_valid_ifsc, is_valid_pan
 from .layout import STOP, label_above, no_colon_pair, pairs_in_line
+from .medical import LIST_FIELDS, normalize_rows, parse_money
+
+DATE_FIELDS = {"issue_date", "expiry_date", "date_of_birth", "report_date", "prescription_date", "bill_date"}
 
 
 DEMO_SCHEMES: dict[str, dict[str, Any]] = {
@@ -76,9 +79,22 @@ FIELD_LABELS = {
     "disability": "disability_percent",
     "disability percentage": "disability_percent",
 }
-# On certificates a bare "Date:" is the date of issue; elsewhere it is something else.
+# Labels whose meaning depends on the document: a bare "Date:" is the date of issue on a
+# certificate but the bill date on a bill; "Total" is only a field on a bill.
 CERTIFICATE_TYPES = {"income_certificate", "residence_proof", "disability_certificate"}
 CERTIFICATE_LABELS = {"date": "issue_date", "dated": "issue_date"}
+TYPE_LABELS = {
+    **{doc_type: CERTIFICATE_LABELS for doc_type in CERTIFICATE_TYPES},
+    "lab_report": {"reported on": "report_date", "report date": "report_date", "lab name": "lab_name",
+                   "laboratory": "lab_name"},
+    "prescription": {"date": "prescription_date", "doctor": "doctor_name", "doctor name": "doctor_name",
+                     "consultant": "doctor_name", "patient": "name"},
+    "medical_bill": {"date": "bill_date", "bill date": "bill_date", "invoice date": "bill_date",
+                     "total": "total_amount", "grand total": "total_amount", "net amount": "total_amount",
+                     "amount payable": "total_amount", "net payable": "total_amount",
+                     "total amount": "total_amount", "bill amount": "total_amount",
+                     "hospital name": "provider", "pharmacy name": "provider", "patient": "name"},
+}
 # Labels that are not fields here but end the value before them ("... Age / Sex: 69").
 STOP_LABELS = {
     "age", "sex", "gender", "age/sex", "place", "date", "ref by", "sample id", "collected on", "reported on",
@@ -94,7 +110,8 @@ def compact_label(label: str) -> str:
 
 # OCR often drops the space inside a label or prints dotted leaders after it.
 COMPACT_FIELD_LABELS = {compact_label(label): key for label, key in FIELD_LABELS.items()}
-COMPACT_CERTIFICATE_LABELS = {compact_label(label): key for label, key in CERTIFICATE_LABELS.items()}
+COMPACT_TYPE_LABELS = {doc_type: {compact_label(label): key for label, key in labels.items()}
+                       for doc_type, labels in TYPE_LABELS.items()}
 COMPACT_STOP_LABELS = {compact_label(label) for label in STOP_LABELS}
 
 
@@ -104,8 +121,7 @@ def field_for_label(raw_label: str, document_type: str | None = None) -> str | N
     A bilingual label keeps its English part: 'जन्म तिथि / DOB' (often OCR'd as 'H/DOB') -> DOB.
     """
     labels = dict(COMPACT_FIELD_LABELS)
-    if document_type in CERTIFICATE_TYPES:
-        labels.update(COMPACT_CERTIFICATE_LABELS)
+    labels.update(COMPACT_TYPE_LABELS.get(document_type or "", {}))
     key = FIELD_LABELS.get(raw_label.strip().lower()) or labels.get(compact_label(raw_label))
     if key is None and "/" in raw_label:
         key = labels.get(compact_label(raw_label.rsplit("/", 1)[1]))
@@ -256,11 +272,15 @@ def parse_state(raw_value: str) -> str | None:
     return INDIAN_STATES.get(name)
 
 
-def normalize_field(key: str, raw_value: str) -> Any:
+def normalize_field(key: str, raw_value: Any) -> Any:
     """Normalize known fields without guessing unclear values."""
+    if key in LIST_FIELDS:
+        return normalize_rows(key, raw_value)  # lab tests, medicines, bill items
     if key in {"annual_income", "sum_insured"}:
         return parse_amount(raw_value)
-    if key in {"issue_date", "expiry_date", "date_of_birth"}:
+    if key == "total_amount":
+        return parse_money(raw_value)  # bills can have paise
+    if key in DATE_FIELDS:
         return parse_date(raw_value)
     if key == "residence_state":
         return parse_state(raw_value)

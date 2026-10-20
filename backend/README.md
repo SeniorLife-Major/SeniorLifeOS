@@ -192,6 +192,36 @@ The document graph uses it when the upload names a real file instead of page fix
   - labels above their values on a two-column card (paired by position).
 - **Repairs:** if a value fails its check, look-alike characters are swapped where the field's shape requires it (`DEM00206791` → `DEMO0206791`), and text after a date, amount or ID is cut off. Names are never changed.
 - **Review:** anything found by a layout rule or repaired is **always sent to the owner for review**.
+- **Model fallback:** with `use_llm=True`, required fields the rules missed (values inside sentences, values with no label) are requested from the model through the `llm_extract` node.
+  - The text is redacted first.
+  - An answer is kept only if it appears word for word in the document.
+  - Every answer is sent to review.
+  - If the model fails, the fields stay missing for the owner; nothing is guessed.
+- **ID numbers on the page:** after review, ID numbers are masked everywhere in the stored page text, including numbers printed with no label (any checksum-valid Aadhaar number or valid PAN).
+
+### Medical documents (`seniorlife_os/tools/medical.py`)
+
+| Type | What is read |
+|---|---|
+| `lab_report` | patient name, lab name, report date, `tests` rows (name, value, unit, reference range, high/low flag) |
+| `prescription` | patient name, doctor, date, `medicines` rows (name, form, strength, frequency, duration) |
+| `medical_bill` | patient name, provider, bill date, total, `items` rows (description, amount) |
+
+- **Tilted photos:** lab tables are read column by column, with the tilt corrected, so a value stays on its own test.
+- **Review:** every row of a list is always sent to the owner for review. Bill items must add up to the total.
+- **Flags:** high and low come only from the range printed on that row.
+- **Consent:** medical pages are never sent to the cloud model, not even to work out their type, unless the state sets `medical_cloud_consent: True`. Without it, they are classified on this machine.
+- **Samples:** `lab_report_state()`, `prescription_state()` and `medical_bill_state()` in `demo/demo_cases.py`.
+
+### Google Vision backup (`seniorlife_os/tools/cloud_ocr.py`)
+
+If local OCR leaves a required field missing or unsure, or a page blurry, the file can be read once more by Google Cloud Vision.
+- **Conditions:** the state sets `cloud_ocr_consent: True` (medical documents also need `medical_cloud_consent: True`), and `GOOGLE_VISION_API_KEY` is set in the environment or `.env`.
+- **Before sending:** image regions that show ID numbers are painted black. The key goes in a request header, never in the URL.
+- **Results:**
+  - Cloud values only replace weak local ones, never ID numbers, and are always sent to review.
+  - The cloud text is stored separately (`document.cloud_pages`) and masked the same way.
+  - If anything fails, the local result is kept.
 
 ### LangSmith tracing
 

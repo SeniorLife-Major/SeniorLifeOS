@@ -97,6 +97,25 @@ def read_document(path: str | Path, mime_type: str, engine: OcrEngine | None = N
     return [read_image_page(load_image(path), 1, engine)]
 
 
+def page_images(path: str | Path, mime_type: str) -> list[np.ndarray]:
+    """The page images exactly as OCR saw them (upright photo, or PDF pages at 300 DPI),
+    so boxes from read_document line up with them."""
+    path = Path(path)
+    if mime_type != "application/pdf":
+        return [load_image(path)]
+    import pypdfium2 as pdfium
+
+    try:
+        pdf = pdfium.PdfDocument(str(path))
+    except Exception as exc:  # pdfium raises PdfiumError for broken or locked files
+        raise OcrError("Could not open the PDF file") from exc
+    try:
+        return [np.asarray(pdf[index].render(scale=PDF_RENDER_DPI / 72).to_pil().convert("RGB"))
+                for index in range(min(len(pdf), MAX_PDF_PAGES))]
+    finally:
+        pdf.close()
+
+
 def load_image(path: Path) -> np.ndarray:
     """Open a PNG/JPEG as an RGB array, turned upright using the phone's EXIF rotation."""
     try:

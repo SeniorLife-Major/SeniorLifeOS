@@ -80,6 +80,40 @@ def disability_state() -> dict[str, Any]:
     ))
 
 
+def lab_report_state() -> dict[str, Any]:
+    """Fictional lab: heading as lab name, a results table, every row needs the owner's check."""
+    return _upload_state("doc-lab-001", "lab_report.jpg", (
+        "DEMO DIAGNOSTICS LAB (FICTIONAL)\n"
+        "Patient Name: Meera Rao\nReported On: 2026-09-10\n"
+        "Test Result Unit Reference Range\n"
+        "Haemoglobin 11.2 g/dL 12.0 - 15.5\n"
+        "Fasting Blood Sugar 98 mg/dL 70 - 100\n"
+        "Total Cholesterol 232 mg/dL < 200\n"
+        "*** End of Report ***"
+    ))
+
+
+def prescription_state() -> dict[str, Any]:
+    return _upload_state("doc-rx-001", "prescription.jpg", (
+        "Dr. Demo Physician, MBBS (fictional)\n"
+        "Patient: Meera Rao\nDate: 15/09/2026\n"
+        "Rx\n"
+        "1. Tab. Metformin 500 mg 1-0-1 x 30 days\n"
+        "2. Tab. Amlodipine 5 mg OD x 30 days"
+    ))
+
+
+def medical_bill_state() -> dict[str, Any]:
+    return _upload_state("doc-bill-001", "pharmacy_bill.jpg", (
+        "DEMO PHARMACY (FICTIONAL)\n"
+        "Patient Name: Meera Rao\nBill Date: 16/09/2026\n"
+        "Description Qty Amount\n"
+        "Metformin 500 mg strip 2 120.00\n"
+        "Amlodipine 5 mg strip 1 45.50\n"
+        "Grand Total: ₹165.50"
+    ))
+
+
 def _existing_document(document_id: str, document_type: str, fields: dict[str, Any]) -> dict[str, Any]:
     return {
         "document_id": document_id,

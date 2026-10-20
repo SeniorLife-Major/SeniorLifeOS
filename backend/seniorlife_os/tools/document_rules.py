@@ -21,6 +21,9 @@ REQUIRED_FIELDS = {
     "health_insurance": {"name", "insurer", "policy_number", "expiry_date", "sum_insured"},
     "bank_passbook": {"name", "bank_name", "account_number", "ifsc"},
     "disability_certificate": {"name", "issuing_authority", "issue_date", "disability_percent"},
+    "lab_report": {"name", "lab_name", "report_date", "tests"},
+    "prescription": {"name", "doctor_name", "prescription_date", "medicines"},
+    "medical_bill": {"name", "provider", "bill_date", "total_amount"},
 }
 DOCUMENT_TYPES = tuple(REQUIRED_FIELDS)
 MATCH_RANK = {"usable": 0, "unconfirmed": 1, "expired": 2}

@@ -210,6 +210,15 @@ class ScorePageTests(unittest.TestCase):
                 "text": "Haemoglobin 15.2 g/dL 12.0-15.5\nTSH Total Cholesterol 252.4 mg/dL\nX 5.5 uIU/mL 0.4 - 4.0"}
         self.assertEqual(hard.score_page(entry, page)["rows_ok"], 1)
 
+    def test_list_answers_are_compared_row_by_row(self):
+        want = [{"name": "TSH", "value": 5.5, "unit": "uIU/mL", "ref_range": "0.4 - 4.0"}]
+        got = [{**want[0], "flag": "high", "source_ref": "page:1:line:9", "confidence": 0.9}]
+        self.assertTrue(hard.same_value("tests", got, want))
+        self.assertFalse(hard.same_value("tests", [{**got[0], "value": 4.5}], want))
+        self.assertFalse(hard.same_value("tests", got + got, want))
+        self.assertFalse(hard.same_value("tests", None, want))
+        self.assertFalse(hard.same_value("name", None, None))
+
     def test_value_split_across_lines_is_not_counted(self):
         page = {"page": 1, "quality": 1.0, "text": "Name: Meera\nRao"}
         self.assertFalse(hard.score_page(self.entry, page)["read"]["name"])

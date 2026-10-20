@@ -151,6 +151,31 @@ def mask_identifier(field: str, value: str) -> str:
     return "X" * max(len(value) - 4, 0) + visible
 
 
+def mask_ids_in_text(text: str) -> str:
+    """Mask ID numbers wherever they appear, even when no field was extracted for them.
+
+    Catches a checksum-valid Aadhaar number, a valid PAN, and an account or policy
+    number written after its label. Unlabelled account numbers are left alone: they
+    can't be told apart from other long numbers.
+    """
+    def aadhaar(match: re.Match) -> str:
+        digits = re.sub(r"\D", "", match.group(0))
+        return mask_identifier("aadhaar_number", digits) if is_valid_aadhaar(digits) else match.group(0)
+
+    def after_label(field: str):
+        def replace(match: re.Match) -> str:
+            start, end = match.start(1) - match.start(0), match.end(1) - match.start(0)
+            whole = match.group(0)
+            return whole[:start] + mask_identifier(field, match.group(1)) + whole[end:]
+        return replace
+
+    text = AADHAAR_PATTERN.sub(aadhaar, text)
+    text = ACCOUNT_PATTERN.sub(after_label("account_number"), text)
+    text = POLICY_PATTERN.sub(after_label("policy_number"), text)
+    return PAN_PATTERN.sub(lambda m: mask_identifier("pan_number", m.group(0)) if is_valid_pan(m.group(0))
+                           else m.group(0), text)
+
+
 def load_hash_key() -> str:
     """Read SENIORLIFE_HASH_KEY (from the environment or .env). Fails if missing or short."""
     load_env_file(find_env_file())
