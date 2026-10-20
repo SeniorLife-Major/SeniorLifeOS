@@ -190,4 +190,6 @@ Test data (images, PDFs, JSON) lives in `tests/datasets/`, which is **not in Git
 $env:SENIORLIFE_RUN_OCR_TESTS = "1"; .\.venv\Scripts\python.exe -m unittest tests.test_ocr -v
 ```
 
+`tests/make_hard_dataset.py` makes a harder set of fake documents in `tests/datasets/ocr_hard/`. They have realistic layouts, Hindi and English text, stamps and signatures, and photo, photocopy and worn-paper damage. Add `--score` to run PaddleOCR on them (about 25 minutes), or `--rescore` to re-score from the saved OCR text.
+
 See the [workflow technical blueprint](../docs/SeniorLife-OS-Workflow-Technical-Blueprint.md) for the intended real integrations.
