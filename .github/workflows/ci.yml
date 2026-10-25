@@ -57,6 +57,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Configure Git Bot
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
       - name: Calculate & Increment Version Tag
         id: calc_tag
         run: python ci/tag.py

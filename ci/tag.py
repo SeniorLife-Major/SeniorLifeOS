@@ -90,7 +90,15 @@ def load_version() -> str:
     return ""
 
 
+def ensure_git_config() -> None:
+    res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True)
+    if not res.stdout.strip():
+        subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=False)
+        subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=False)
+
+
 def create_git_tag(tag: str) -> None:
+    ensure_git_config()
     check = subprocess.run(["git", "tag", "-l", tag], capture_output=True, text=True)
     if tag in check.stdout.split():
         print(f"Tag {tag} already exists locally.")
@@ -185,9 +193,8 @@ def main() -> None:
     print(f"Latest tag:     {latest}")
     print(f"Next increment: {new_tag}")
 
-    create_git_tag(new_tag)
     save_version(new_tag)
-    print(f"[CI STAGE 2: SUCCESS] Tagged {new_tag} locally and recorded to {VERSION_FILE.name}\n")
+    print(f"[CI STAGE 2: SUCCESS] Next version determined: {new_tag} (saved to GITHUB_OUTPUT)\n")
 
 
 if __name__ == "__main__":
