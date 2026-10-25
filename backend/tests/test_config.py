@@ -10,6 +10,27 @@ from backend.core.config import load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def setUp(self):
+        # load_config() loads the project's .env into os.environ. Tests must never see the
+        # real .env: its keys would replace the fallbacks and could show up in failure messages.
+        patcher = patch("backend.utils.env.find_env_file", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_env_file_is_loaded_from_the_path_find_env_file_gives(self):
+        # Shows the patch above hits the right place: a stand-in .env given through it is used.
+        config_yaml = "llm:\n  groq:\n    api_key: ${GROQ_API_KEY:fallback}\n"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "test_application.yml"
+            path.write_text(config_yaml, encoding="utf-8")
+            env_file = Path(tmp_dir) / ".env"
+            env_file.write_text("GROQ_API_KEY=from-stand-in-env-file\n", encoding="utf-8")
+            with patch("backend.utils.env.find_env_file", return_value=env_file), \
+                    patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(load_config(path).llm.groq.api_key, "from-stand-in-env-file")
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(load_config(path).llm.groq.api_key, "fallback")
+
     def test_loads_yaml_with_fallback_defaults(self):
         config_yaml = """
 app:

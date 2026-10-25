@@ -34,7 +34,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-BACKEND = Path(__file__).resolve().parents[1]
+BACKEND = Path(__file__).resolve().parents[2]  # repo root, so "backend." imports work
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 from backend.utils.privacy import verhoeff_check_digit  # noqa: E402
