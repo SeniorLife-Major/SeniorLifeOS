@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 import make_hard_dataset as hard
-from seniorlife_os.tools.demo_tools import normalize_field
+from backend.tools.demo_tools import normalize_field
 
 UNIT = hard.OUT_DIR.parent / "ocr_hard_unit"
 
@@ -77,7 +77,7 @@ class LayoutTests(unittest.TestCase):
                 self.assertIn("SAMPLE", self.make(doc_type)[3])
 
     def test_fields_needed_by_each_type_are_present(self):
-        from seniorlife_os.tools.document_rules import REQUIRED_FIELDS
+        from backend.tools.document_rules import REQUIRED_FIELDS
 
         for doc_type in REQUIRED_FIELDS:
             with self.subTest(document=doc_type):

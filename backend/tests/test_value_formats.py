@@ -3,9 +3,9 @@
 import unittest
 from unittest.mock import patch
 
-from seniorlife_os.demo.demo_cases import document_success_state
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools.demo_tools import INDIAN_STATES, normalize_field, parse_amount, parse_date, parse_state
+from backend.demo.demo_cases import document_success_state
+from backend.graphs.document_graph import build_document_graph
+from backend.tools.demo_tools import INDIAN_STATES, normalize_field, parse_amount, parse_date, parse_state
 from test_graph_ocr import ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -76,7 +76,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(normalize_field("sum_insured", "₹ 5,00,000"), 500000)
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphFormatTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -84,7 +84,7 @@ class GraphFormatTests(unittest.TestCase):
 
     def run_upload(self, lines, doc_type, **extra):
         page = ocr_page([(text, 0.99) for text in lines])
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[page]), hash_key_env(FAKE_HASH_KEY):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]), hash_key_env(FAKE_HASH_KEY):
             return build_document_graph().invoke(upload_state(UNIT / "sharp.png", "image/png", doc_type, **extra))
 
     def test_certificate_with_indian_formats_is_confirmed(self, _):

@@ -4,8 +4,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools.ocr_postprocess import fix_lookalikes, lookalike_key
+from backend.graphs.document_graph import build_document_graph
+from backend.tools.ocr_postprocess import fix_lookalikes, lookalike_key
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -49,7 +49,7 @@ class FixLookalikesTests(unittest.TestCase):
         self.assertNotEqual(lookalike_key("Meera Rao"), lookalike_key("Meena Rao"))
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphLookalikeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -59,7 +59,7 @@ class GraphLookalikeTests(unittest.TestCase):
         page = ocr_page([(text, 0.99) for text in lines])
         state = upload_state(UNIT / "sharp.png", "image/png", doc_type, **extra)
         state["document"]["owner_name"] = owner_name
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[page]), hash_key_env(FAKE_HASH_KEY):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]), hash_key_env(FAKE_HASH_KEY):
             return build_document_graph().invoke(state)
 
     PASSBOOK = ["Name: Meera Rao", "Bank: Demo Bank", "A/c No: 44719041229", "IFSC Code: DEM00206791"]

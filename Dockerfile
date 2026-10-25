@@ -1,9 +1,11 @@
 FROM python:3.12-slim
 
 # 1. Environment variables for Python in Docker
+ARG APP_VERSION=1.0.0
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    APP_VERSION=${APP_VERSION}
 
 WORKDIR /app
 

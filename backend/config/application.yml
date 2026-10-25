@@ -1,6 +1,6 @@
 app:
   name: ${APP_NAME:SeniorLife OS}
-  version: ${APP_VERSION:1.0.0}
+  version: ${APP_VERSION:auto}
   environment: ${APP_ENV:development}
   debug: ${DEBUG:true}
   demo_mode: ${DEMO_MODE:true}

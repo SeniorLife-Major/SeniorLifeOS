@@ -10,10 +10,10 @@ import unittest
 from statistics import fmean
 from unittest.mock import patch
 
-from seniorlife_os.demo.demo_cases import document_success_state
-from seniorlife_os.graphs.document_graph import OCR_MAX_ATTEMPTS, build_document_graph
-from seniorlife_os.tools.demo_tools import extract_fields_from_pages
-from seniorlife_os.tools.ocr import OcrEngineError
+from backend.demo.demo_cases import document_success_state
+from backend.graphs.document_graph import OCR_MAX_ATTEMPTS, build_document_graph
+from backend.tools.demo_tools import extract_fields_from_pages
+from backend.tools.ocr import OcrEngineError
 from test_ocr import BENCHMARK, RUN_SLOW, UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
 
@@ -53,7 +53,7 @@ INCOME_LINES = [("Name: Meera Rao", 0.70), ("Annual income: 1,20,000", 0.99), ("
 IDENTITY_LINES = [("Name: Meera Rao", 0.99), ("Date of birth: 1950-09-17", 0.99), (f"Aadhaar: {AADHAAR}", 0.99)]
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class UploadedFileTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -108,7 +108,7 @@ class UploadedFileTests(unittest.TestCase):
 
     def test_engine_failure_is_retried_then_succeeds(self, _):
         page = ocr_page([(text, 0.99) for text, _ in INCOME_LINES])
-        with patch("seniorlife_os.graphs.document_graph.read_document",
+        with patch("backend.graphs.document_graph.read_document",
                    side_effect=[OcrEngineError("crash"), OcrEngineError("crash"), [page]]) as reader:
             result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
         self.assertEqual(reader.call_count, 3)
@@ -118,7 +118,7 @@ class UploadedFileTests(unittest.TestCase):
         self.assertEqual(result["status"], "confirmed")
 
     def test_engine_that_keeps_failing_stops_the_run(self, _):
-        with patch("seniorlife_os.graphs.document_graph.read_document", side_effect=OcrEngineError("crash")) as reader:
+        with patch("backend.graphs.document_graph.read_document", side_effect=OcrEngineError("crash")) as reader:
             result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
         self.assertEqual(reader.call_count, OCR_MAX_ATTEMPTS)
         self.assertEqual(result["status"], "failed_tool")
@@ -127,13 +127,13 @@ class UploadedFileTests(unittest.TestCase):
 
     def test_file_with_no_text_asks_for_reupload(self, _):
         blank = {"page": 1, "quality": 0.0, "text": "", "lines": [], "engine": "fake", "sharpness": 0.0, "blurry": False}
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[blank]):
+        with patch("backend.graphs.document_graph.read_document", return_value=[blank]):
             result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "identity"))
         self.assertEqual(result["status"], "needs_reupload")
         self.assertIn("read_file:no_text", result["events"])
 
     def test_each_field_uses_its_own_line_confidence(self, _):
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[ocr_page(INCOME_LINES)]):
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(INCOME_LINES)]):
             result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
         self.assertEqual(result["status"], "needs_review")
         self.assertEqual(result["review_flags"], ["name: low confidence (0.70)"])
@@ -141,7 +141,7 @@ class UploadedFileTests(unittest.TestCase):
 
     def test_blurry_page_sends_every_field_to_review(self, _):
         page = ocr_page([(text, 0.99) for text, _ in INCOME_LINES], blurry=True, quality=0.85)
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[page]):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]):
             result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
         self.assertEqual(result["status"], "needs_review")
         self.assertEqual(sorted(result["review_flags"]), [
@@ -149,7 +149,7 @@ class UploadedFileTests(unittest.TestCase):
         ])
 
     def test_full_id_number_is_masked_in_every_ocr_line(self, _):
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[ocr_page(IDENTITY_LINES)]):
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(IDENTITY_LINES)]):
             result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "identity"))
         self.assertEqual(result["status"], "confirmed")
         self.assertEqual(result["document"]["pages"][0]["lines"][2]["text"], "Aadhaar: XXXX XXXX 7973")
@@ -172,7 +172,7 @@ class LineConfidenceParserTests(unittest.TestCase):
 
 
 @unittest.skipUnless(RUN_SLOW, "set SENIORLIFE_RUN_OCR_TESTS=1 to run real PaddleOCR (a few minutes)")
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class RealOcrGraphTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

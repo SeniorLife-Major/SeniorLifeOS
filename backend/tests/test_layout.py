@@ -4,10 +4,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools.demo_tools import extract_fields_from_pages, label_kind, normalize_field
-from seniorlife_os.tools.layout import STOP, label_above, no_colon_pair, pairs_in_line
-from seniorlife_os.tools.ocr_postprocess import repair_value
+from backend.graphs.document_graph import build_document_graph
+from backend.tools.demo_tools import extract_fields_from_pages, label_kind, normalize_field
+from backend.tools.layout import STOP, label_above, no_colon_pair, pairs_in_line
+from backend.tools.ocr_postprocess import repair_value
 from test_graph_ocr import ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -152,14 +152,14 @@ class RepairAndNameTests(unittest.TestCase):
         self.assertEqual(normalize_field("name", "Drishti Rao"), "Drishti Rao")  # 'Dr' inside a word stays
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphLayoutTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         ensure_fixtures()
 
     def run_upload(self, page, doc_type, **extra):
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[page]), hash_key_env(FAKE_HASH_KEY):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]), hash_key_env(FAKE_HASH_KEY):
             return build_document_graph().invoke(upload_state(UNIT / "sharp.png", "image/png", doc_type, **extra))
 
     def test_layout_fields_are_sent_to_review(self, _):

@@ -1,4 +1,4 @@
-"""Tests for step 7b: local OCR (seniorlife_os/tools/ocr.py).
+"""Tests for step 7b: local OCR (backend/tools/ocr.py).
 
 Fast tests use a fake OCR engine and small fixture files written into
 tests/datasets/ocr_unit/ (git-ignored; recreated when missing).
@@ -18,8 +18,8 @@ import numpy as np
 import pypdfium2 as pdfium
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from seniorlife_os.tools import ocr
-from seniorlife_os.tools.demo_tools import FIELD_LABELS, extract_fields_from_pages, normalize_field
+from backend.tools import ocr
+from backend.tools.demo_tools import FIELD_LABELS, extract_fields_from_pages, normalize_field
 
 DATASETS = Path(__file__).resolve().parent / "datasets"
 UNIT = DATASETS / "ocr_unit"

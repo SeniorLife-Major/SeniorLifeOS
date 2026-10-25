@@ -3,10 +3,10 @@
 import typing
 import unittest
 
-from seniorlife_os.agents.llm_agents import DocumentTypeChoice
-from seniorlife_os.graphs import document_graph
-from seniorlife_os.graphs.benefits_graph import match_document_requirements
-from seniorlife_os.tools.document_rules import DOCUMENT_TYPES, REQUIRED_FIELDS, match_requirements
+from backend.agents.llm_agents import DocumentTypeChoice
+from backend.graphs import document_graph
+from backend.graphs.benefits_graph import match_document_requirements
+from backend.tools.document_rules import DOCUMENT_TYPES, REQUIRED_FIELDS, match_requirements
 
 
 OWNER = "senior-meera"

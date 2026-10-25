@@ -20,13 +20,24 @@ def get_image_tag() -> str:
     return f"{IMAGE_NAME}:latest"
 
 
-def build_image(image_tag: str | None = None) -> str:
+def build_image(image_tag: str | None = None, version: str | None = None) -> str:
     target_tag = image_tag or get_image_tag()
+    app_version = (
+        version
+        or os.environ.get("NEW_TAG")
+        or os.environ.get("APP_VERSION")
+        or ""
+    )
     print("=" * 60)
     print(f"[CI STAGE 1: BUILD] Building Docker image: {target_tag}")
+    if app_version:
+        print(f"  Target Version (Build-Arg): {app_version}")
     print("=" * 60)
 
-    cmd = ["docker", "build", "-t", target_tag, "."]
+    cmd = ["docker", "build", "-t", target_tag]
+    if app_version:
+        cmd.extend(["--build-arg", f"APP_VERSION={app_version}"])
+    cmd.append(".")
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 

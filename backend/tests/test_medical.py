@@ -4,13 +4,13 @@ import json
 import unittest
 from unittest.mock import patch
 
-from seniorlife_os.demo.demo_cases import lab_report_state, medical_bill_state, prescription_state
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools.medical import (
+from backend.demo.demo_cases import lab_report_state, medical_bill_state, prescription_state
+from backend.graphs.document_graph import build_document_graph
+from backend.tools.medical import (
     BILL_COLUMNS, _header_columns, extract_lists, item_rows, lab_flag, lab_rows, medicine_rows, normalize_rows,
     parse_money, tidy_range,
 )
-from seniorlife_os.tools.ocr import group_lines
+from backend.tools.ocr import group_lines
 from test_graph_ocr import upload_state
 from test_llm_extraction import FakeStructuredModel
 from test_ocr import UNIT, ensure_fixtures
@@ -185,14 +185,14 @@ class RealOcrOutputTests(unittest.TestCase):
                 self.assertEqual(len(rows), len(truth))
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphMedicalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         ensure_fixtures()
 
     def run_state(self, state, fake=None):
-        with patch("seniorlife_os.agents.llm_agents.structured_model", fake or FakeStructuredModel({})), \
+        with patch("backend.agents.llm_agents.structured_model", fake or FakeStructuredModel({})), \
                 hash_key_env(FAKE_HASH_KEY):
             return build_document_graph().invoke(state)
 
@@ -290,7 +290,7 @@ class GraphMedicalTests(unittest.TestCase):
         page["lines"] = [{"text": "DEMO DIAGNOSTICS LAB", "confidence": 0.99, "box": [0, 0, 400, 30]},
                          {"text": "Reported On: 2026-09-10", "confidence": 0.99, "box": [0, 0, 400, 30]},
                          *page["lines"]]
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[page]):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]):
             result = self.run_state(upload_state(UNIT / "sharp.png", "image/png", "lab_report",
                                                  review_decision=CONFIRM))
         self.assertEqual(result["status"], "confirmed")

@@ -4,8 +4,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from seniorlife_os.graphs.document_graph import build_document_graph, mask_pages
-from seniorlife_os.utils.privacy import mask_ids_in_text
+from backend.graphs.document_graph import build_document_graph, mask_pages
+from backend.utils.privacy import mask_ids_in_text
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -42,14 +42,14 @@ class MaskIdsInTextTests(unittest.TestCase):
         self.assertEqual(mask_ids_in_text(once), once)
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphUnlabelledIdTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         ensure_fixtures()
 
     def run_upload(self, page, doc_type, key=FAKE_HASH_KEY, **extra):
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[page]), hash_key_env(key):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]), hash_key_env(key):
             return build_document_graph().invoke(upload_state(UNIT / "sharp.png", "image/png", doc_type, **extra))
 
     def test_unlabelled_aadhaar_on_an_id_card_is_masked(self, _):

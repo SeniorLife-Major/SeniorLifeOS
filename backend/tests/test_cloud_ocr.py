@@ -14,14 +14,14 @@ import httpx
 import numpy as np
 from PIL import Image
 
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools import cloud_ocr
-from seniorlife_os.tools.cloud_ocr import (
+from backend.graphs.document_graph import build_document_graph
+from backend.tools import cloud_ocr
+from backend.tools.cloud_ocr import (
     CloudOcrError, VISION_URL, black_out, id_boxes, read_document_in_cloud, read_with_vision,
 )
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
-from seniorlife_os.utils.privacy import keyed_hash
+from backend.utils.privacy import keyed_hash
 from test_privacy import FAKE_HASH_KEY, fake_aadhaar, hash_key_env
 
 FAKE_KEY = "fake-vision-key-123"
@@ -135,7 +135,7 @@ class ReadDocumentInCloudTests(unittest.TestCase):
         self.assertEqual((pages, recorder.requests), ([], []))
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphCloudOcrTests(unittest.TestCase):
     LOCAL = [("Name: Meera Ra0", 0.62), ("Annual income: 1,20,000", 0.99), ("Issue date: 2026-06-01", 0.99),
              (f"Aadhaar: {AADHAAR}", 0.99)]
@@ -148,9 +148,9 @@ class GraphCloudOcrTests(unittest.TestCase):
     def run_upload(self, recorder, key=FAKE_KEY, doc_type="income_certificate", **extra):
         state = upload_state(UNIT / "sharp.png", "image/png", doc_type, **extra)
         env = {cloud_ocr.KEY_NAME: key} if key else {}
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[ocr_page(self.LOCAL)]), \
-                patch("seniorlife_os.tools.cloud_ocr.httpx.Client", lambda **_: recorder.client()), \
-                patch("seniorlife_os.tools.cloud_ocr.find_env_file", return_value=None), \
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(self.LOCAL)]), \
+                patch("backend.tools.cloud_ocr.httpx.Client", lambda **_: recorder.client()), \
+                patch("backend.tools.cloud_ocr.find_env_file", return_value=None), \
                 patch.dict(os.environ, env), hash_key_env(FAKE_HASH_KEY):
             if not key:
                 os.environ.pop(cloud_ocr.KEY_NAME, None)

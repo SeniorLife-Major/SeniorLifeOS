@@ -1,13 +1,5 @@
-"""SeniorLife OS local LangGraph mentor demo."""
+"""SeniorLife OS — Accessible, consent-based workflow assistant."""
 
-# from .benefits_graph import benefits_graph, build_benefits_graph
-# from .document_graph import document_graph, build_document_graph
-# # import benefits_graph
-# # import document_graph
+from ._version import __version__, get_version
 
-# __all__ = [
-#     # "document_graph",
-#     # "benefits_graph",
-#     "build_document_graph",
-#     "build_benefits_graph",
-# ]
+__all__ = ["__version__", "get_version"]

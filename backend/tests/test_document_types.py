@@ -4,10 +4,10 @@ import json
 import unittest
 from unittest.mock import patch
 
-from seniorlife_os.demo.demo_cases import disability_state, insurance_state, passbook_state
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools.document_rules import match_requirements
-from seniorlife_os.utils.privacy import keyed_hash
+from backend.demo.demo_cases import disability_state, insurance_state, passbook_state
+from backend.graphs.document_graph import build_document_graph
+from backend.tools.document_rules import match_requirements
+from backend.utils.privacy import keyed_hash
 from test_privacy import FAKE_HASH_KEY, hash_key_env
 
 
@@ -18,7 +18,7 @@ def replace_line(state: dict, label: str, new_value: str) -> dict:
     return state
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class NewDocumentTypeTests(unittest.TestCase):
     def run_graph(self, state: dict) -> dict:
         with hash_key_env(FAKE_HASH_KEY):

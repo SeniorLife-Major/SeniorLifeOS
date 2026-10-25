@@ -13,10 +13,10 @@ from unittest.mock import patch
 import langsmith
 import requests
 
-from seniorlife_os.demo.demo_cases import document_success_state
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.utils import tracing
-from seniorlife_os.utils.tracing import HIDDEN, safe_view
+from backend.demo.demo_cases import document_success_state
+from backend.graphs.document_graph import build_document_graph
+from backend.utils import tracing
+from backend.utils.tracing import HIDDEN, safe_view
 from test_graph_ocr import AADHAAR, IDENTITY_LINES, ocr_page, upload_state
 from test_ocr import DATASETS, UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -91,7 +91,7 @@ class SafeViewTests(unittest.TestCase):
                                            "thread_id": "t-1", "owner": HIDDEN})
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class TracedRunTests(unittest.TestCase):
     """Runs the graph with tracing on and inspects what LangSmith would upload."""
 
@@ -120,7 +120,7 @@ class TracedRunTests(unittest.TestCase):
             self.assertNotIn(private, sent)
 
     def test_ocr_upload_run_sends_no_name_or_id_number(self, _):
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[ocr_page(IDENTITY_LINES)]):
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(IDENTITY_LINES)]):
             result, sent = self.trace(upload_state(UNIT / "sharp.png", "image/png", "identity"), anonymizer=safe_view)
         self.assertEqual(result["status"], "confirmed")
         self.assertIn("read_file:fake", sent)
@@ -172,7 +172,7 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(configure.call_count, 2)
 
     def test_loading_tracing_keys_from_any_env_file_reinstalls_the_client(self):
-        from seniorlife_os.utils.env import load_env_file
+        from backend.utils.env import load_env_file
 
         env_file = DATASETS / "tracing_unit" / "key_only.env"
         env_file.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +184,7 @@ class InstallTests(unittest.TestCase):
             self.assert_masked_client_installed(client_class, configure)
 
     def test_env_file_without_tracing_keys_does_not_touch_tracing(self):
-        from seniorlife_os.utils.env import load_env_file
+        from backend.utils.env import load_env_file
 
         env_file = DATASETS / "tracing_unit" / "other.env"
         env_file.parent.mkdir(parents=True, exist_ok=True)
@@ -211,7 +211,7 @@ class InstallTests(unittest.TestCase):
         env_file.parent.mkdir(parents=True, exist_ok=True)
         env_file.write_text("LANGSMITH_TRACING=true\nLANGSMITH_API_KEY=fake-key-from-file\n", encoding="utf-8")
         with patch.dict(os.environ, {}, clear=True), fake_langsmith() as (client_class, configure), \
-                patch("seniorlife_os.utils.tracing.find_env_file", return_value=env_file):
+                patch("backend.utils.tracing.find_env_file", return_value=env_file):
             self.assertTrue(tracing.setup_tracing())
             self.assert_masked_client_installed(client_class, configure)
 

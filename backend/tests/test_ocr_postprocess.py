@@ -4,9 +4,9 @@ import json
 import unittest
 from unittest.mock import patch
 
-from seniorlife_os.graphs.document_graph import build_document_graph
-from seniorlife_os.tools.demo_tools import extract_fields_from_pages, field_for_label
-from seniorlife_os.tools.ocr_postprocess import clean_line, clean_page
+from backend.graphs.document_graph import build_document_graph
+from backend.tools.demo_tools import extract_fields_from_pages, field_for_label
+from backend.tools.ocr_postprocess import clean_line, clean_page
 from test_graph_ocr import ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -99,14 +99,14 @@ class LabelMatchingTests(unittest.TestCase):
                          {"name": "Meera Rao", "account_number": "44719041229", "ifsc": "DEMO0206791"})
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphCleanupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         ensure_fixtures()
 
     def run_upload(self, lines, doc_type):
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[ocr_page(lines)]):
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(lines)]):
             with hash_key_env(FAKE_HASH_KEY):
                 return build_document_graph().invoke(upload_state(UNIT / "sharp.png", "image/png", doc_type))
 
@@ -128,7 +128,7 @@ class GraphCleanupTests(unittest.TestCase):
         self.assertNotIn("HLT-2026/004512", json.dumps(result, default=str))
 
     def test_page_fixtures_are_not_cleaned(self, _):
-        from seniorlife_os.demo.demo_cases import document_success_state
+        from backend.demo.demo_cases import document_success_state
 
         state = document_success_state()
         before = state["document"]["pages"][0]["text"]

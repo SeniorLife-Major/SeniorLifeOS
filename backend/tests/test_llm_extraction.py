@@ -7,9 +7,9 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from seniorlife_os.agents import models
-from seniorlife_os.agents.llm_agents import extract_missing_fields, invoke_structured
-from seniorlife_os.graphs.document_graph import build_document_graph
+from backend.agents import models
+from backend.agents.llm_agents import extract_missing_fields, invoke_structured
+from backend.graphs.document_graph import build_document_graph
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -47,7 +47,7 @@ class FakeStructuredModel:
 
 
 def run_with(fake, fn, *args, **kwargs):
-    with patch("seniorlife_os.agents.llm_agents.structured_model", fake):
+    with patch("backend.agents.llm_agents.structured_model", fake):
         return fn(*args, **kwargs)
 
 
@@ -84,7 +84,7 @@ class ExtractMissingFieldsTests(unittest.TestCase):
 
     def test_model_is_not_called_when_redaction_fails(self):
         fake = FakeStructuredModel({})
-        with patch("seniorlife_os.agents.llm_agents.redact", side_effect=RuntimeError("redaction broke")):
+        with patch("backend.agents.llm_agents.redact", side_effect=RuntimeError("redaction broke")):
             with self.assertRaises(RuntimeError):
                 run_with(fake, extract_missing_fields, CERTIFICATE_TEXT, "income_certificate", ["name"])
         self.assertEqual(fake.prompts, [])
@@ -108,14 +108,14 @@ class InvokeStructuredTests(unittest.TestCase):
                 agent.invoke.return_value = Answer(name="x")
             return agent
 
-        with patch("seniorlife_os.agents.llm_agents.structured_model", factory):
+        with patch("backend.agents.llm_agents.structured_model", factory):
             self.assertEqual(invoke_structured(Answer, "prompt").name, "x")
         self.assertEqual(calls, [None, "json_schema"])
 
     def test_other_errors_are_not_retried(self):
         factory = MagicMock()
         factory.return_value.invoke.side_effect = RuntimeError("rate limited")
-        with patch("seniorlife_os.agents.llm_agents.structured_model", factory), self.assertRaises(RuntimeError):
+        with patch("backend.agents.llm_agents.structured_model", factory), self.assertRaises(RuntimeError):
             invoke_structured(object, "prompt")
         self.assertEqual(factory.call_count, 1)
 
@@ -129,7 +129,7 @@ class InvokeStructuredTests(unittest.TestCase):
                          ["function_calling", "json_schema"])
 
 
-@patch("seniorlife_os.utils.privacy.find_env_file", return_value=None)
+@patch("backend.utils.privacy.find_env_file", return_value=None)
 class GraphLlmExtractionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -137,8 +137,8 @@ class GraphLlmExtractionTests(unittest.TestCase):
 
     def run_upload(self, lines, fake, use_llm=True, **extra):
         page = ocr_page(lines)
-        with patch("seniorlife_os.graphs.document_graph.read_document", return_value=[page]), \
-                patch("seniorlife_os.agents.llm_agents.structured_model", fake), hash_key_env(FAKE_HASH_KEY):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]), \
+                patch("backend.agents.llm_agents.structured_model", fake), hash_key_env(FAKE_HASH_KEY):
             return build_document_graph().invoke(upload_state(UNIT / "sharp.png", "image/png", "income_certificate",
                                                               use_llm=use_llm, **extra))
 

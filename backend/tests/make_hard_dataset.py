@@ -37,7 +37,7 @@ from PIL import Image, ImageDraw, ImageFont
 BACKEND = Path(__file__).resolve().parents[1]
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
-from seniorlife_os.utils.privacy import verhoeff_check_digit  # noqa: E402
+from backend.utils.privacy import verhoeff_check_digit  # noqa: E402
 
 OUT_DIR = Path(__file__).resolve().parent / "datasets" / "ocr_hard"
 FONT_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
@@ -801,9 +801,9 @@ def score_page(entry: dict[str, Any], page: dict[str, Any], use_llm: bool = Fals
        use_llm: also ask the model (Groq) for required fields the rules missed, as the graph
                 does with use_llm=True. The holder's name is the known value that gets redacted.
                 The pages are fictional, so this counts as consent for medical documents too."""
-    from seniorlife_os.tools.demo_tools import extract_fields_from_pages, normalize_field
-    from seniorlife_os.tools.medical import extract_lists, heading_fields
-    from seniorlife_os.tools.ocr_postprocess import clean_page, repair_value
+    from backend.tools.demo_tools import extract_fields_from_pages, normalize_field
+    from backend.tools.medical import extract_lists, heading_fields
+    from backend.tools.ocr_postprocess import clean_page, repair_value
 
     text = page["text"]  # "read" is judged on the raw OCR text
     lines = [squash(line) for line in text.splitlines()]
@@ -812,8 +812,8 @@ def score_page(entry: dict[str, Any], page: dict[str, Any], use_llm: bool = Fals
     extracted.update(extract_lists([cleaned], entry.get("type")))
     extracted.update(heading_fields([cleaned], entry.get("type"), extracted))
     if use_llm:
-        from seniorlife_os.agents.llm_agents import extract_missing_fields
-        from seniorlife_os.tools.document_rules import REQUIRED_FIELDS
+        from backend.agents.llm_agents import extract_missing_fields
+        from backend.tools.document_rules import REQUIRED_FIELDS
 
         missing = [k for k in sorted(REQUIRED_FIELDS.get(entry.get("type"), ())) if k not in extracted]
         if missing:
@@ -838,7 +838,7 @@ def score_page(entry: dict[str, Any], page: dict[str, Any], use_llm: bool = Fals
 
 
 def score(out_dir: Path = OUT_DIR) -> dict[str, Any]:
-    from seniorlife_os.tools.ocr import read_document
+    from backend.tools.ocr import read_document
 
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     pages = []

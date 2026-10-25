@@ -1,6 +1,7 @@
-"""YAML configuration loader with environment variable fallback (${VAR:default}).
+"""Configuration loader and environment management for SeniorLife OS.
 
-Mirrors Spring Boot application.yml resolution.
+Standard Python / FastAPI configuration powered by Pydantic models with
+environment variable resolution, .env loading, and automatic Git tag versioning.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 import yaml
 from pydantic import BaseModel, Field
+
+from .._version import get_version
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z0-9_]+)(?::([^}]*))?\}")
 
@@ -25,7 +28,13 @@ def _resolve_env_placeholders(data: Any) -> Any:
         def _replacer(match: re.Match[str]) -> str:
             var_name = match.group(1)
             default_val = match.group(2) if match.group(2) is not None else ""
-            return os.getenv(var_name, default_val)
+            val = os.getenv(var_name)
+            if val is not None and val != "":
+                return val
+            # Automatic Git tag version resolution when APP_VERSION is not explicitly provided
+            if var_name == "APP_VERSION" and (not default_val or default_val in ("auto", "git")):
+                return get_version()
+            return default_val
 
         resolved = _ENV_VAR_PATTERN.sub(_replacer, data)
         # Type conversions for standard primitive literals
@@ -41,7 +50,7 @@ def _resolve_env_placeholders(data: Any) -> Any:
 
 class AppSection(BaseModel):
     name: str = "SeniorLife OS"
-    version: str = "1.0.0"
+    version: str = Field(default_factory=get_version)
     environment: str = "development"
     debug: bool = True
     demo_mode: bool = True
@@ -101,22 +110,28 @@ class AppConfig(BaseModel):
     metrics: MetricsSection = Field(default_factory=MetricsSection)
 
 
+# Standard Python / FastAPI alias for settings
+Settings = AppConfig
+
 _cached_config: AppConfig | None = None
 
 
 def load_config(config_path: Path | str | None = None) -> AppConfig:
-    """Load and parse application.yml with env var resolution."""
+    """Load and parse application configuration with env var resolution."""
     global _cached_config
     if _cached_config is not None and config_path is None:
         return _cached_config
 
-    # Automatically load .env file into os.environ if present in project
-    from dotenv import load_dotenv
-    from ..utils.env import find_env_file
+    # Automatically load .env file into os.environ if present
+    try:
+        from dotenv import load_dotenv
+        from ..utils.env import find_env_file
 
-    env_file = find_env_file()
-    if env_file:
-        load_dotenv(dotenv_path=env_file)
+        env_file = find_env_file()
+        if env_file:
+            load_dotenv(dotenv_path=env_file)
+    except Exception:
+        pass
 
     if config_path is None:
         base_dir = Path(__file__).resolve().parent.parent
@@ -138,3 +153,8 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
 def get_config() -> AppConfig:
     """Dependency / accessor for application config."""
     return load_config()
+
+
+def get_settings() -> AppConfig:
+    """Standard FastAPI dependency accessor for settings."""
+    return get_config()
