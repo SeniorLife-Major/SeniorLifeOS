@@ -1,0 +1,55 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: seniorlifeos
+  REGISTRY: ghcr.io
+  GITHUB_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+  REGISTRY_USER: ${{ github.actor }}
+  REPO_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  ci-cd:
+    name: Build, Tag, Publish & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code with Full Tag History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure Git Bot
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Stage 1 - Build Docker Image
+        run: python ci/build.py
+
+      - name: Stage 2 - Increment & Create Git Tag
+        run: python ci/tag.py
+
+      - name: Stage 3 - Publish to GitHub Container Registry (ghcr.io)
+        run: python ci/publish.py
+
+      - name: Stage 4 - Push Git Tag & Create GitHub Release
+        run: python ci/tag.py --push
+
+      - name: Stage 5 - Deploy (Placeholder)
+        run: python ci/deploy.py

@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+.env
+.DS_Store
+.vscode/
+.idea/
+.pytest_cache/
+frontend/node_modules/
+backend/tests/datasets/
+ci/.version

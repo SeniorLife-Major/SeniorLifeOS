@@ -6,3 +6,4 @@ ideas/
 .vscode
 .conda
 backend/tests/datasets/
+ci/.version
