@@ -180,6 +180,8 @@ The Benefits graph supports the same pattern with `build_benefits_graph(checkpoi
 
 Document Intake returns `vault_record` only after the owner confirms extracted fields. Put this record in the Benefits state's `documents` list. Benefits checks owner, confirmation, required fields, expiry, and provenance. A later confirmed upload can be passed to a *new* Benefits run for reassessment; the two graphs do not share one checkpoint.
 
+Shared document rules live in `tools/document_rules.py`: `match_requirements()` checks a fixed document type, and `match_proofs()` checks a need such as `proof_of_age` against every document type that can prove it (`PROOFS`). The Benefits graph does not use `match_proofs()` yet.
+
 The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), but files are **not** scanned for malware. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
 Optional structured LLM selection nodes are included for document classification and scheme resolution. Set `use_llm=True` and omit `claimed_type` or `scheme_id` respectively. The provider is chosen by `SENIORLIFE_LLM_PROVIDER` (see `agents/models.py`):
@@ -213,12 +215,14 @@ The document graph uses it when the upload names a real file instead of page fix
   - labels above their values on a two-column card (paired by position).
 - **Repairs:** if a value fails its check, look-alike characters are swapped where the field's shape requires it (`DEM00206791` → `DEMO0206791`), and text after a date, amount or ID is cut off. Names are never changed.
 - **Review:** anything found by a layout rule or repaired is **always sent to the owner for review**.
+- **Organization names** (issuing authority, insurer, bank, lab, provider) are flagged for review if they look cut off (`Medical Board, Demo D`) or contain a near-misspelling of a common word (`Distriet`), even when OCR was sure (`tools/free_text.py`).
 - **Model fallback:** with `use_llm=True`, required fields the rules missed (values inside sentences, values with no label) are requested from the model through the `llm_extract` node.
   - The text is redacted first.
   - An answer is kept only if it appears word for word in the document.
   - Every answer is sent to review.
   - If the model fails, the fields stay missing for the owner; nothing is guessed.
 - **ID numbers on the page:** after review, ID numbers are masked everywhere in the stored page text, including numbers printed with no label (any checksum-valid Aadhaar number or valid PAN).
+- **Runs that stop early:** only a review pause (`needs_review`) keeps full ID numbers, so the owner can check them against the card. Every other stop (`rejected`, `needs_reupload`, `needs_classification`, `failed_*`) masks ID fields, edits and page text in the result (`mask_on_stop`). Start a new run from the original upload, not from a masked result.
 
 ### Medical documents (`tools/medical.py`)
 
@@ -234,11 +238,19 @@ The document graph uses it when the upload names a real file instead of page fix
 - **Consent:** medical pages are never sent to the cloud model, not even to work out their type, unless the state sets `medical_cloud_consent: True`. Without it, they are classified on this machine.
 - **Samples:** `lab_report_state()`, `prescription_state()` and `medical_bill_state()` in `demo/demo_cases.py`.
 
-### Google Vision backup (`tools/cloud_ocr.py`)
+### Cloud OCR backup (`tools/cloud_ocr.py`)
 
-If local OCR leaves a required field missing or unsure, or a page blurry, the file can be read once more by Google Cloud Vision.
-- **Conditions:** the state sets `cloud_ocr_consent: True` (medical documents also need `medical_cloud_consent: True`), and `GOOGLE_VISION_API_KEY` is set in the environment or `.env`.
-- **Before sending:** image regions that show ID numbers are painted black. The key goes in a request header, never in the URL.
+If local OCR leaves a required field missing, unsure, cut off or misread, or a page blurry, the file can be read once more in the cloud.
+- **Engine:** `SENIORLIFE_CLOUD_OCR` picks one; it never switches to another service on its own.
+
+  | Value | Service | Key |
+  |---|---|---|
+  | `google` (default) | Google Cloud Vision | `GOOGLE_VISION_API_KEY` |
+  | `groq` | vision model on Groq (`SENIORLIFE_VISION_MODEL`, default `qwen/qwen3.8-27b`, a preview model) | `GROQ_API_KEY` |
+
+  The Groq model returns plain text only, with no positions or confidence, so its values count as unsure and table layouts are read from the text. It took 11–88 s per page in testing.
+- **Conditions:** the state sets `cloud_ocr_consent: True` (medical documents also need `medical_cloud_consent: True`), and the engine's key is set in the environment or `.env`.
+- **Before sending:** image regions that show ID numbers, and any QR code, are painted black. The key goes in a request header, never in the URL.
 - **Results:**
   - Cloud values only replace weak local ones, never ID numbers, and are always sent to review.
   - The cloud text is stored separately (`document.cloud_pages`) and masked the same way.

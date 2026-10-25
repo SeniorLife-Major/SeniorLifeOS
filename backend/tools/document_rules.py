@@ -67,3 +67,46 @@ def match_requirements(
             selected_id = chosen.get("document_id")
         matches.append({"required_type": required_type, "document_id": selected_id, "status": status})
     return matches
+
+
+# Which document types can prove what, and the confirmed field that does the proving
+# (plan §4.4; Decision #32). A scheme can ask for "proof_of_age" instead of one fixed type.
+# Only types and fields this phase reads are listed; e.g. an Aadhaar address is not read
+# yet, so identity is not a proof of address.
+PROOFS = {
+    "proof_of_identity": (("identity", "name"),),
+    "proof_of_age": (("identity", "date_of_birth"),),
+    "proof_of_income": (("income_certificate", "annual_income"),),
+    "proof_of_residence": (("residence_proof", "residence_state"),),
+    "proof_of_disability": (("disability_certificate", "disability_percent"),),
+    "health_cover": (("health_insurance", "policy_number"),),
+    "bank_details": (("bank_passbook", "account_number"),),
+}
+
+
+def match_proofs(
+    proofs: list[str],
+    documents: list[dict[str, Any]],
+    owner_id: str,
+    as_of: str,
+) -> list[dict[str, Any]]:
+    """For each proof, the best of the owner's documents of any accepted type.
+
+    Uses match_requirements for each accepted type, so the same rules apply (owner, confirmed,
+    required fields, expiry). Each proving field is one of its type's required fields (a test
+    checks this), so a usable document always has it confirmed with a source.
+    Status: usable, unconfirmed, expired or missing; usable wins over the others.
+    An unknown proof name raises KeyError instead of quietly reporting it missing.
+    """
+    results = []
+    for proof in proofs:
+        best = {"proof": proof, "document_type": None, "document_id": None, "status": "missing"}
+        for document_type, _field in PROOFS[proof]:
+            match = match_requirements([document_type], documents, owner_id, as_of)[0]
+            status = match["status"]
+            rank = MATCH_RANK.get(status, len(MATCH_RANK))
+            if rank < MATCH_RANK.get(best["status"], len(MATCH_RANK)):
+                best = {"proof": proof, "document_type": document_type, "document_id": match["document_id"],
+                        "status": status}
+        results.append(best)
+    return results

@@ -11,11 +11,11 @@ is exactly what the parser expects. Real documents are not like that. These page
 
 Everything is made up and every page says SAMPLE. The output folder is git-ignored.
 
-Run from backend/:
-    .venv/Scripts/python.exe tests/make_hard_dataset.py            # generate
-    .venv/Scripts/python.exe tests/make_hard_dataset.py --score    # + run PaddleOCR and score
-    .venv/Scripts/python.exe tests/make_hard_dataset.py --rescore  # score again from saved OCR text
-    .venv/Scripts/python.exe tests/make_hard_dataset.py --rescore --llm  # ... plus the model (Groq)
+Run from the repo root:
+    backend/.venv/Scripts/python.exe backend/tests/make_hard_dataset.py            # generate
+    backend/.venv/Scripts/python.exe backend/tests/make_hard_dataset.py --score    # + run PaddleOCR and score
+    backend/.venv/Scripts/python.exe backend/tests/make_hard_dataset.py --rescore  # score again from saved OCR text
+    backend/.venv/Scripts/python.exe backend/tests/make_hard_dataset.py --rescore --llm  # ... plus the model (Groq)
 """
 
 from __future__ import annotations

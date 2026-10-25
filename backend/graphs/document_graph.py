@@ -20,7 +20,8 @@ from ..tools.medical import (
     LIST_FIELDS, MEDICAL_TYPES, extract_lists, heading_fields, looks_medical, medical_type_from_text,
 )
 from ..tools.ocr import OcrEngineError, OcrError, read_document
-from ..tools.cloud_ocr import KEY_NAME as VISION_KEY_NAME, CloudOcrError, read_document_in_cloud, vision_api_key
+from ..tools.cloud_ocr import ENGINES, CloudOcrError, cloud_engine, engine_key, engine_label, read_document_in_cloud
+from ..tools.free_text import free_text_problems
 from ..tools.ocr_postprocess import clean_page, lookalike_key, repair_value
 from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier, mask_ids_in_text
 from ..utils.tracing import install_safe_client
@@ -56,7 +57,7 @@ class DocumentState(TypedDict, total=False):
     simulate_ocr_failures: int
     vault_identifier_hashes: dict[str, str]  # keyed hash -> document_id already in the vault
     medical_cloud_consent: bool  # the senior allows the cloud model to read medical documents
-    cloud_ocr_consent: bool  # the senior allows Google Vision to read unclear pages again
+    cloud_ocr_consent: bool  # the senior allows the cloud OCR engine to read unclear pages again
     cloud_ocr_used: bool
 
     # Graph outputs / control
@@ -349,7 +350,8 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
             # Found by a layout guess or by the model reading the text: the owner checks it.
             flags.append(f"{key}: {LAYOUT_NOTES[item['layout']]}, please check")
         if item.get("source") == "cloud_ocr":
-            flags.append(f"{key}: read again by cloud OCR (Google Vision), please check")
+            engine = engine_label(item.get("cloud_engine", "google_vision"))
+            flags.append(f"{key}: read again by cloud OCR ({engine}), please check")
         normalized[key] = normalize_field(key, item["value"])
         if normalized[key] is None and isinstance(item["value"], str):
             # The value fails its check as read: try look-alike swaps where the field's shape
@@ -361,6 +363,8 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
                 item["value"], normalized[key], item["corrections"] = repaired
         # Flagged on every pass (validation runs again after a cloud read).
         flags.extend(f"{key}: {note}, please check" for note in item.get("corrections", []))
+        # Organization names have no format; flag signs of a cut-off or misread word.
+        flags.extend(f"{key}: {note}, please check" for note in free_text_problems(key, item["value"]))
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
         if is_blank(normalized.get(key)):
             flags.append(f"{key}: missing or invalid")
@@ -403,7 +407,8 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
 
 def wants_cloud_ocr(state: DocumentState, fields: dict[str, Any], normalized: dict[str, Any]) -> bool:
     """Read the file again in the cloud? Only with consent, once, and only if the local reading
-    left a required field missing or invalid, or a field unsure, or a page blurry."""
+    left a required field missing or invalid, a field unsure or looking cut off or misread,
+    or a page blurry."""
     document = state["document"]
     if not state.get("cloud_ocr_consent") or state.get("cloud_ocr_used") or not document.get("file_path"):
         return False
@@ -411,17 +416,24 @@ def wants_cloud_ocr(state: DocumentState, fields: dict[str, Any], normalized: di
         return False
     weak = any(is_blank(normalized.get(key)) for key in REQUIRED_FIELDS[state["document_type"]])
     weak = weak or any(item.get("confidence", 1.0) < CONFIDENCE_THRESHOLD for item in fields.values())
+    weak = weak or any(free_text_problems(key, item.get("value")) for key, item in fields.items())
     return weak or any(page.get("blurry") for page in document.get("pages", []))
 
 
 def cloud_ocr(state: DocumentState) -> dict[str, Any]:
-    """Read the file again with Google Vision (ID regions blacked out) and use its values
-    for fields the local reading got wrong or was unsure of. ID fields always stay local."""
+    """Read the file again in the cloud (Google Vision, or a Groq vision model if
+    SENIORLIFE_CLOUD_OCR=groq), with ID regions blacked out, and use its values for fields
+    the local reading got wrong or was unsure of. ID fields always stay local."""
     done = {"cloud_ocr_used": True, "route": "continue"}
     warnings = list(state.get("warnings", []))
-    key = vision_api_key()
+    try:
+        engine = cloud_engine()
+    except CloudOcrError as exc:
+        return {**done, "warnings": [*warnings, f"Cloud OCR skipped: {exc}"],
+                "events": add_event(state, "cloud_ocr:bad_setting")}
+    key = engine_key(engine)
     if not key:
-        return {**done, "warnings": [*warnings, f"Cloud OCR skipped: {VISION_KEY_NAME} is not set"],
+        return {**done, "warnings": [*warnings, f"Cloud OCR skipped: {ENGINES[engine][2]} is not set"],
                 "events": add_event(state, "cloud_ocr:no_key")}
     document = state["document"]
     local = state["extracted_fields"]
@@ -430,7 +442,8 @@ def cloud_ocr(state: DocumentState) -> dict[str, Any]:
         if field in local and local[field].get("box"):
             boxes.setdefault(local[field]["page"], []).append(local[field]["box"])
     try:
-        pages = read_document_in_cloud(document["file_path"], document["mime_type"], document["pages"], boxes, key)
+        pages = read_document_in_cloud(document["file_path"], document["mime_type"], document["pages"], boxes, key,
+                                       engine=engine)
     except (CloudOcrError, OcrError) as exc:
         return {**done, "warnings": [*warnings, f"Cloud OCR unavailable ({exc})"],
                 "events": add_event(state, "cloud_ocr:failed")}
@@ -445,9 +458,12 @@ def cloud_ocr(state: DocumentState) -> dict[str, Any]:
             continue  # blacked out before sending; the local reading is kept
         mine = fields.get(name)
         mine_ok = bool(mine and not mine.get("layout") and mine.get("confidence", 0) >= CONFIDENCE_THRESHOLD
-                       and not is_blank(normalize_field(name, mine["value"])))
-        if not mine_ok and not is_blank(normalize_field(name, item["value"])):
-            fields[name] = {**item, "source_ref": f"cloud:{item['source_ref']}", "source": "cloud_ocr"}
+                       and not is_blank(normalize_field(name, mine["value"]))
+                       and not free_text_problems(name, mine["value"]))
+        cloud_ok = not is_blank(normalize_field(name, item["value"])) and not free_text_problems(name, item["value"])
+        if not mine_ok and cloud_ok:
+            fields[name] = {**item, "source_ref": f"cloud:{item['source_ref']}", "source": "cloud_ocr",
+                            "cloud_engine": ENGINES[engine][0]}
             replaced += 1
     return {
         **done,
@@ -576,7 +592,7 @@ def mask_pages(document: dict[str, Any], replacements: dict[str, str]) -> dict[s
         return masked
 
     masked_document = {**document, "pages": [mask_page(page) for page in document.get("pages", [])]}
-    if "cloud_pages" in document:  # the second reading by Google Vision, if one was made
+    if "cloud_pages" in document:  # the second reading in the cloud, if one was made
         masked_document["cloud_pages"] = [mask_page(page) for page in document["cloud_pages"]]
     return masked_document
 
@@ -642,6 +658,50 @@ def protect_identifiers(state: DocumentState) -> dict[str, Any]:
     }
 
 
+def mask_on_stop(state: DocumentState) -> dict[str, Any]:
+    """Every run that stops early ends here (Decision #27).
+
+    A review pause (needs_review) keeps the full numbers, so the owner can compare them with
+    the card. Every other stop (rejected, needs_reupload, needs_classification, failed_*) has
+    no reason to keep them: ID fields, the owner's edits and all page text are masked. This
+    needs no hash key, because nothing is stored.
+    """
+    if state.get("status") == "needs_review":
+        return {"events": add_event(state, "mask_on_stop:kept_for_review")}
+    extracted = {name: dict(item) for name, item in state.get("extracted_fields", {}).items()}
+    normalized = dict(state.get("normalized_fields", {}))
+    decision = dict(state.get("review_decision") or {})
+    edits = dict(decision.get("edits", {}))
+    replacements = {}  # every spelling of a full number -> its mask
+
+    def masked(field: str, value: Any) -> Any:
+        if is_blank(value) or not isinstance(value, str | int):
+            return value
+        mask = mask_identifier(field, str(value))
+        replacements[str(value)] = mask
+        return mask
+
+    for field in ID_FIELDS:
+        if field in extracted:
+            for part in ("value", "ocr_value"):
+                if part in extracted[field]:
+                    extracted[field][part] = masked(field, extracted[field][part])
+        if field in normalized:
+            normalized[field] = masked(field, normalized[field])
+        if field in edits:
+            edits[field] = masked(field, edits[field])
+    update: dict[str, Any] = {"events": add_event(state, "mask_on_stop:masked")}
+    if state.get("document"):
+        update["document"] = mask_pages(state["document"], replacements)
+    if "extracted_fields" in state:
+        update["extracted_fields"] = extracted
+    if "normalized_fields" in state:
+        update["normalized_fields"] = normalized
+    if state.get("review_decision"):
+        update["review_decision"] = {**decision, **({"edits": edits} if "edits" in decision else {})}
+    return update
+
+
 def publish_confirmed_version(state: DocumentState) -> dict[str, Any]:
     fields = state["normalized_fields"]
     extracted = state["extracted_fields"]
@@ -693,15 +753,15 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_node("publish_confirmed_version", publish_confirmed_version)
 
     graph.add_edge(START, "validate_upload")
-    graph.add_conditional_edges("validate_upload", route_step, {"continue": "read_file", "stop": END})
+    graph.add_conditional_edges("validate_upload", route_step, {"continue": "read_file", "stop": "mask_on_stop"})
     graph.add_conditional_edges("read_file", route_step, {
-        "continue": "classify_document", "retry": "read_file", "stop": END,
+        "continue": "classify_document", "retry": "read_file", "stop": "mask_on_stop",
     })
-    graph.add_conditional_edges("classify_document", route_step, {"continue": "extract_content", "stop": END})
+    graph.add_conditional_edges("classify_document", route_step, {"continue": "extract_content", "stop": "mask_on_stop"})
     graph.add_conditional_edges("extract_content", route_step, {
-        "continue": "validate_candidates", "retry": "extract_content", "llm": "llm_extract", "stop": END,
+        "continue": "validate_candidates", "retry": "extract_content", "llm": "llm_extract", "stop": "mask_on_stop",
     })
-    graph.add_conditional_edges("llm_extract", route_step, {"continue": "validate_candidates", "stop": END})
+    graph.add_conditional_edges("llm_extract", route_step, {"continue": "validate_candidates", "stop": "mask_on_stop"})
     graph.add_node("cloud_ocr", cloud_ocr)
     graph.add_conditional_edges("validate_candidates", route_step, {
         "continue": "confidence_gate", "cloud_ocr": "cloud_ocr",
@@ -711,12 +771,14 @@ def build_document_graph(checkpointer: Any = None):
         "auto_accept": "protect_identifiers", "review": "human_field_review",
     })
     graph.add_conditional_edges("human_field_review", route_step, {
-        "continue": "protect_identifiers", "stop": END,
+        "continue": "protect_identifiers", "stop": "mask_on_stop",
     })
     graph.add_conditional_edges("protect_identifiers", route_step, {
-        "continue": "publish_confirmed_version", "stop": END,
+        "continue": "publish_confirmed_version", "stop": "mask_on_stop",
     })
     graph.add_edge("publish_confirmed_version", END)
+    graph.add_node("mask_on_stop", mask_on_stop)  # every early stop ends here (Decision #27)
+    graph.add_edge("mask_on_stop", END)
 
     return graph.compile(checkpointer=checkpointer)
 

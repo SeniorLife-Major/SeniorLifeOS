@@ -8,7 +8,7 @@ from backend.graphs.document_graph import build_document_graph, mask_pages
 from backend.utils.privacy import mask_ids_in_text
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
-from test_privacy import FAKE_HASH_KEY, hash_key_env
+from test_privacy import FAKE_HASH_KEY, fake_aadhaar, hash_key_env
 
 HARD_RESULTS = UNIT.parent / "ocr_hard" / "results_paddle.json"
 HARD_MANIFEST = UNIT.parent / "ocr_hard" / "manifest.json"
@@ -101,6 +101,76 @@ class GraphUnlabelledIdTests(unittest.TestCase):
                 self.assertNotIn(aadhaar, dumped)
                 self.assertNotIn(aadhaar.replace(" ", ""), dumped)
                 self.assertIn("XXXX XXXX " + aadhaar[-4:], dumped)
+
+
+@patch("backend.utils.privacy.find_env_file", return_value=None)
+class EarlyStopMaskingTests(unittest.TestCase):
+    """Decision #27: a run that stops early keeps full ID numbers only while waiting for review."""
+
+    LINES = [("Name: Meera Rao", 0.99), ("Date of birth: 1950-09-17", 0.99), (f"Aadhaar: {AADHAAR}", 0.99),
+             (PAN, 0.99)]
+
+    @classmethod
+    def setUpClass(cls):
+        ensure_fixtures()
+
+    def run_upload(self, page, doc_type="identity", key=FAKE_HASH_KEY, filename="sharp.png", **extra):
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]), hash_key_env(key):
+            return build_document_graph().invoke(upload_state(UNIT / filename, "image/png", doc_type, **extra))
+
+    def assert_no_full_numbers(self, result, *numbers):
+        dumped = json.dumps(result, default=str)
+        for number in (AADHAAR, AADHAAR.replace(" ", ""), PAN, *numbers):
+            self.assertNotIn(number, dumped)
+        self.assertIn("mask_on_stop:masked", result["events"])
+
+    def test_review_pause_keeps_the_full_number_for_the_owner(self, _):
+        result = self.run_upload(ocr_page([("Name: Meera Rao", 0.6), *self.LINES[1:3]]))  # unsure name
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("mask_on_stop:kept_for_review", result["events"])
+        self.assertEqual(result["extracted_fields"]["aadhaar_number"]["value"], AADHAAR)
+
+    def test_rejected_by_the_owner(self, _):
+        result = self.run_upload(ocr_page(self.LINES), review_decision={"action": "reject",
+                                                                        "reviewer_id": "senior-meera"})
+        self.assertEqual(result["status"], "rejected")
+        self.assert_no_full_numbers(result)
+        self.assertEqual(result["extracted_fields"]["aadhaar_number"]["value"], "XXXX XXXX 7973")
+        self.assertEqual(result["normalized_fields"]["aadhaar_number"], "XXXX XXXX 7973")
+        self.assertIn("XXXXXX814K", result["document"]["pages"][0]["text"])
+
+    def test_someone_else_confirming_never_sees_or_keeps_the_numbers(self, _):
+        typed = fake_aadhaar(31)
+        result = self.run_upload(ocr_page(self.LINES), review_decision={
+            "action": "confirm", "reviewer_id": "stranger", "edits": {"aadhaar_number": typed}})
+        self.assertEqual(result["status"], "rejected")
+        self.assert_no_full_numbers(result, typed, typed.replace(" ", ""))
+        self.assertEqual(result["review_decision"]["edits"]["aadhaar_number"], "XXXX XXXX " + typed[-4:])
+
+    def test_no_hash_key_fails_closed_and_masks(self, _):
+        result = self.run_upload(ocr_page(self.LINES), key=None,
+                                 review_decision={"action": "confirm", "reviewer_id": "senior-meera"})
+        self.assertEqual(result["status"], "failed_tool")
+        self.assert_no_full_numbers(result)
+
+    def test_unreadable_page_asks_for_a_reupload_and_masks(self, _):
+        result = self.run_upload(ocr_page(self.LINES, quality=0.3))
+        self.assertEqual(result["status"], "needs_reupload")
+        self.assert_no_full_numbers(result)
+
+    def test_unknown_type_masks(self, _):
+        page = ocr_page([("SAMPLE CARD", 0.99), (AADHAAR, 0.99), (PAN, 0.99)])
+        result = self.run_upload(page, doc_type=None, filename="digital.pdf")
+        self.assertEqual(result["status"], "needs_classification")
+        self.assert_no_full_numbers(result)
+
+    def test_the_misread_spelling_is_masked_too(self, _):
+        misread = AADHAAR.replace("8", "B", 1)  # fixed by the look-alike repair, kept as ocr_value
+        page = ocr_page([("Name: Meera Rao", 0.99), ("Date of birth: 1950-09-17", 0.99), (f"Aadhaar: {misread}", 0.99)])
+        result = self.run_upload(page, review_decision={"action": "reject", "reviewer_id": "senior-meera"})
+        self.assertEqual(result["status"], "rejected")
+        self.assert_no_full_numbers(result, misread)
+        self.assertEqual(result["extracted_fields"]["aadhaar_number"]["ocr_value"], "XXXX XXXX 7973")
 
 
 if __name__ == "__main__":
