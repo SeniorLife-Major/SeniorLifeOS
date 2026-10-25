@@ -1,5 +1,6 @@
 """Tests for identifier validation and redaction. All identifiers are fake."""
 
+import contextlib
 import json
 import os
 import random
@@ -128,12 +129,17 @@ class IdentifierExtractionTests(unittest.TestCase):
         self.assertNotIn("vault_record", result)
 
 
+@contextlib.contextmanager
 def hash_key_env(key: str | None):
-    """Environment with SENIORLIFE_HASH_KEY set to key (or removed), ignoring the real .env."""
+    """Environment with SENIORLIFE_HASH_KEY set to key (or removed), ignoring the real .env.
+
+    The upload checks (tools/file_safety.py) read their settings from .env too, so that
+    module is kept away from the real .env here as well."""
     env = {k: v for k, v in os.environ.items() if k != "SENIORLIFE_HASH_KEY"}
     if key is not None:
         env["SENIORLIFE_HASH_KEY"] = key
-    return patch.dict(os.environ, env, clear=True)
+    with patch.dict(os.environ, env, clear=True),             patch("backend.tools.file_safety.find_env_file", return_value=None):
+        yield
 
 
 @patch("backend.utils.privacy.find_env_file", return_value=None)

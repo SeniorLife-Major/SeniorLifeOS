@@ -102,8 +102,8 @@ class UploadedFileTests(unittest.TestCase):
     def test_broken_file_asks_for_reupload_without_retrying(self, _):
         result = self.run_graph(upload_state(UNIT / "broken.pdf", "application/pdf", "identity"))
         self.assertEqual(result["status"], "needs_reupload")
-        self.assertIn("read_file:unreadable", result["events"])
-        self.assertIn("Could not open the PDF file", result["warnings"])
+        self.assertIn("check_file:reupload", result["events"])  # found before OCR since the file checks
+        self.assertIn("The PDF file is damaged", result["warnings"])
         self.assertFalse(any("retry" in event for event in result["events"]))
 
     def test_engine_failure_is_retried_then_succeeds(self, _):

@@ -151,15 +151,17 @@ print(result["status"], result["events"])
 
 ## Actual pause and resume at review
 
-Omit a prefilled `review_decision`, set `use_interrupt=True`, and compile with an in-memory checkpointer. Use the same `thread_id` to resume:
+Omit a prefilled `review_decision`, set `use_interrupt=True`, and compile with an **encrypted** checkpointer. Use the same `thread_id` to resume.
+
+The paused state holds page text, names and full ID numbers, so the document graph refuses a plain checkpointer. `make_checkpointer()` encrypts every checkpoint with AES using `SENIORLIFE_CHECKPOINT_KEY` (64 hex characters) from the environment or `.env`. Make a key with `python -c "import secrets; print(secrets.token_hex(32))"`. Without a key, no checkpointer is made. A checkpoint saved without encryption, or with another key, can't be read. `run_and_forget(graph, input, config)` deletes a run's checkpoints once it ends.
 
 ```python
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from backend.graphs.document_graph import build_document_graph
 from backend.demo.demo_cases import document_success_state
+from backend.utils.checkpoints import make_checkpointer
 
-graph = build_document_graph(checkpointer=InMemorySaver())
+graph = build_document_graph(checkpointer=make_checkpointer())
 state = document_success_state()
 state.pop("review_decision")
 state["use_interrupt"] = True
@@ -174,7 +176,7 @@ result = graph.invoke(Command(resume={
 print(result["status"])
 ```
 
-The Benefits graph supports the same pattern with `build_benefits_graph(checkpointer=InMemorySaver())`; resume with `{"action": "approve", "reviewer_id": "senior-meera"}`. Without a decision or `use_interrupt`, the graphs stop at `needs_review`/`awaiting_review` without publishing or committing.
+The Benefits graph (Part 2, not changed) supports the same pattern with `build_benefits_graph(checkpointer=InMemorySaver())` and does not require encryption yet; resume with `{"action": "approve", "reviewer_id": "senior-meera"}`. Without a decision or `use_interrupt`, the graphs stop at `needs_review`/`awaiting_review` without publishing or committing.
 
 ## Connection and local-demo boundaries
 
@@ -182,7 +184,7 @@ Document Intake returns `vault_record` only after the owner confirms extracted f
 
 Shared document rules live in `tools/document_rules.py`: `match_requirements()` checks a fixed document type, and `match_proofs()` checks a need such as `proof_of_age` against every document type that can prove it (`PROOFS`). The Benefits graph does not use `match_proofs()` yet.
 
-The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), but files are **not** scanned for malware. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
+The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), after the file checks below. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
 Optional structured LLM selection nodes are included for document classification and scheme resolution. Set `use_llm=True` and omit `claimed_type` or `scheme_id` respectively. The provider is chosen by `SENIORLIFE_LLM_PROVIDER` (see `agents/models.py`):
 
@@ -196,6 +198,16 @@ These variables are read from the environment, or from `backend/.env` / the repo
 ### ID numbers in the vault
 
 Aadhaar, PAN, account, and insurance policy numbers are stored masked (`XXXX XXXX 9012`) plus a keyed hash (HMAC-SHA256) for duplicate detection; the full number is never stored. This needs `SENIORLIFE_HASH_KEY` (at least 32 characters) in the environment or `.env`. Without it, a document that contains an ID number stops with `failed_tool` instead of being published. Documents without ID numbers don't need the key. Never change the key after data is stored, or old hashes stop matching. Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
+
+### File checks (`tools/file_safety.py`)
+
+Before anything reads an uploaded file, the `check_file` node checks it:
+- **Real type:** the first bytes must match the claimed type.
+- **Risky PDFs:** JavaScript, launch actions, attached files, media, script forms and password protection are refused. Hidden names and compressed streams are opened before searching.
+- **Size bombs:** images over 60 MP and PDF pages too large to render are refused before decoding.
+- **Virus scan:** `SENIORLIFE_VIRUS_SCANNER` = `none` (default, with a warning), `defender` (Windows Defender's `MpCmdRun`, which never removes the file) or `clamav` (a ClamAV daemon at `SENIORLIFE_CLAMD=host:port`). With `SENIORLIFE_SCAN_REQUIRED=true`, an upload is refused when no scan could be made; use this in production.
+- **Results:** a dangerous file → `rejected`; a damaged file, an empty PDF or one over 20 pages → `needs_reupload`. The file's SHA-256 and scan result are kept in `document.sha256` and `document.virus_scan`.
+- **Not sure:** depending on the machine's settings, Windows Defender may send file details to Microsoft's cloud protection. ClamAV keeps everything on the server.
 
 ### Local OCR (`tools/ocr.py`)
 

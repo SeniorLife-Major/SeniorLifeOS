@@ -1,4 +1,4 @@
-"""Document intake graph: validate -> read file -> classify -> extract -> gate -> review -> protect -> publish.
+"""Document intake graph: validate -> check file -> read file -> classify -> extract -> gate -> review -> protect -> publish.
 
 Pages come from a real file (document.file_path, read by local OCR in tools/ocr.py)
 or from handwritten page fixtures (document.pages). Neither needs an API key. The
@@ -21,9 +21,11 @@ from ..tools.medical import (
 )
 from ..tools.ocr import OcrEngineError, OcrError, read_document
 from ..tools.cloud_ocr import ENGINES, CloudOcrError, cloud_engine, engine_key, engine_label, read_document_in_cloud
+from ..tools.file_safety import check_file as check_uploaded_file
 from ..tools.free_text import free_text_problems
 from ..tools.ocr_postprocess import clean_page, lookalike_key, repair_value
 from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier, mask_ids_in_text
+from ..utils.checkpoints import is_encrypted
 from ..utils.tracing import install_safe_client
 
 
@@ -109,6 +111,30 @@ def validate_upload(state: DocumentState) -> dict[str, Any]:
         "route": "stop" if errors else "continue",
         "events": add_event(state, "validate_upload"),
     }
+
+
+def check_file(state: DocumentState) -> dict[str, Any]:
+    """Look inside an uploaded file before anything reads it: real type, risky PDF content,
+    size bombs, and a virus scan (tools/file_safety.py). Page fixtures skip this."""
+    document = state["document"]
+    if not document.get("file_path"):
+        return {"route": "continue", "events": add_event(state, "check_file:fixture")}
+    result = check_uploaded_file(document["file_path"], document["mime_type"])
+    checked = {**document, "sha256": result.sha256, "virus_scan": result.scan}
+    warnings = [*state.get("warnings", []), *result.warnings]
+    if result.problems:
+        return {"document": checked, "status": "rejected", "route": "stop", "errors": result.problems,
+                "warnings": warnings, "events": add_event(state, "check_file:refused")}
+    if result.reupload:
+        # A broken or overlong file is a mistake, not a danger: ask for it again.
+        return {"document": checked, "status": "needs_reupload", "route": "stop",
+                "warnings": [*warnings, *result.reupload], "events": add_event(state, "check_file:reupload")}
+    if result.scan_unavailable_refuses:
+        return {"document": checked, "status": "failed_tool", "route": "stop",
+                "errors": ["A virus scan is required but could not be made"], "warnings": warnings,
+                "events": add_event(state, "check_file:scan_unavailable")}
+    return {"document": checked, "warnings": warnings, "route": "continue",
+            "events": add_event(state, f"check_file:{result.scan}")}
 
 
 def read_file(state: DocumentState) -> dict[str, Any]:
@@ -739,9 +765,14 @@ def route_step(state: DocumentState) -> str:
 
 
 def build_document_graph(checkpointer: Any = None):
+    """checkpointer: needed only for real pauses (use_interrupt). It must encrypt what it saves,
+    so use utils.checkpoints.make_checkpointer(); a plain one is refused."""
+    if checkpointer is not None and not is_encrypted(checkpointer):
+        raise ValueError("The document graph saves personal data; use utils.checkpoints.make_checkpointer()")
     install_safe_client()  # if LangSmith tracing is on, only masked data is sent
     graph = StateGraph(DocumentState)
     graph.add_node("validate_upload", validate_upload)
+    graph.add_node("check_file", check_file)
     graph.add_node("read_file", read_file)
     graph.add_node("classify_document", classify_document)
     graph.add_node("extract_content", extract_content)
@@ -753,7 +784,8 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_node("publish_confirmed_version", publish_confirmed_version)
 
     graph.add_edge(START, "validate_upload")
-    graph.add_conditional_edges("validate_upload", route_step, {"continue": "read_file", "stop": "mask_on_stop"})
+    graph.add_conditional_edges("validate_upload", route_step, {"continue": "check_file", "stop": "mask_on_stop"})
+    graph.add_conditional_edges("check_file", route_step, {"continue": "read_file", "stop": "mask_on_stop"})
     graph.add_conditional_edges("read_file", route_step, {
         "continue": "classify_document", "retry": "read_file", "stop": "mask_on_stop",
     })

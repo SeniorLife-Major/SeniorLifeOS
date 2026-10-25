@@ -160,7 +160,7 @@ class EarlyStopMaskingTests(unittest.TestCase):
 
     def test_unknown_type_masks(self, _):
         page = ocr_page([("SAMPLE CARD", 0.99), (AADHAAR, 0.99), (PAN, 0.99)])
-        result = self.run_upload(page, doc_type=None, filename="digital.pdf")
+        result = self.run_upload(page, doc_type=None)
         self.assertEqual(result["status"], "needs_classification")
         self.assert_no_full_numbers(result)
 

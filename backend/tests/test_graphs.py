@@ -3,6 +3,7 @@
 import unittest
 
 from langgraph.checkpoint.memory import InMemorySaver
+from backend.utils.checkpoints import make_checkpointer
 from langgraph.types import Command
 
 
@@ -38,7 +39,7 @@ class DocumentGraphTests(unittest.TestCase):
         self.assertNotIn("vault_record", result)
 
     def test_interrupt_can_resume_with_review(self):
-        graph = build_document_graph(checkpointer=InMemorySaver())
+        graph = build_document_graph(checkpointer=make_checkpointer(key=bytes(range(32))))  # a test key
         state = document_success_state()
         state.pop("review_decision")
         state["use_interrupt"] = True
