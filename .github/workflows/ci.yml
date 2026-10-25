@@ -18,10 +18,81 @@ env:
   REPO_OWNER: ${{ github.repository_owner }}
 
 jobs:
-  ci-cd:
-    name: Build, Tag, Publish & Deploy
+  # ============================================================================
+  # Stage 1: Build & Verify Docker Image
+  # ============================================================================
+  build:
+    name: "1. Build Image"
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Docker Image
+        run: python ci/build.py
+
+  # ============================================================================
+  # Stage 2: Calculate & Increment Version Tag
+  # ============================================================================
+  tag:
+    name: "2. Calculate Tag"
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.calc_tag.outputs.new_tag }}
+    steps:
+      - name: Checkout Code with Full Tag History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Calculate & Increment Version Tag
+        id: calc_tag
+        run: python ci/tag.py
+
+  # ============================================================================
+  # Stage 3: Publish Docker Image to GitHub Packages (ghcr.io)
+  # ============================================================================
+  publish:
+    name: "3. Publish to GHCR"
+    needs: [build, tag]
+    runs-on: ubuntu-latest
+    env:
+      NEW_TAG: ${{ needs.tag.outputs.new_tag }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & Publish Image to GHCR
+        run: |
+          python ci/build.py
+          python ci/publish.py
+
+  # ============================================================================
+  # Stage 4: Push Git Tag & Create GitHub Release
+  # ============================================================================
+  release:
+    name: "4. Create GitHub Release"
+    needs: [tag, publish]
+    runs-on: ubuntu-latest
+    env:
+      NEW_TAG: ${{ needs.tag.outputs.new_tag }}
     steps:
       - name: Checkout Code with Full Tag History
         uses: actions/checkout@v4
@@ -39,17 +110,26 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Stage 1 - Build Docker Image
-        run: python ci/build.py
-
-      - name: Stage 2 - Increment & Create Git Tag
-        run: python ci/tag.py
-
-      - name: Stage 3 - Publish to GitHub Container Registry (ghcr.io)
-        run: python ci/publish.py
-
-      - name: Stage 4 - Push Git Tag & Create GitHub Release
+      - name: Push Git Tag & Create GitHub Release
         run: python ci/tag.py --push
 
-      - name: Stage 5 - Deploy (Placeholder)
+  # ============================================================================
+  # Stage 5: Deploy (Placeholder)
+  # ============================================================================
+  deploy:
+    name: "5. Deploy Placeholder"
+    needs: [publish, release]
+    runs-on: ubuntu-latest
+    env:
+      NEW_TAG: ${{ needs.tag.outputs.new_tag }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Deploy Step
         run: python ci/deploy.py

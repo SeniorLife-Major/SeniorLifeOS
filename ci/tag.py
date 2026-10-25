@@ -83,17 +83,24 @@ def save_version(new_tag: str) -> None:
 
 
 def load_version() -> str:
+    if os.environ.get("NEW_TAG", "").strip():
+        return os.environ["NEW_TAG"].strip()
     if VERSION_FILE.exists():
         return VERSION_FILE.read_text(encoding="utf-8").strip()
-    return os.environ.get("NEW_TAG", "")
+    return ""
 
 
 def create_git_tag(tag: str) -> None:
+    check = subprocess.run(["git", "tag", "-l", tag], capture_output=True, text=True)
+    if tag in check.stdout.split():
+        print(f"Tag {tag} already exists locally.")
+        return
     print(f"Creating local git tag: {tag}")
     subprocess.run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], check=True)
 
 
 def push_git_tag(tag: str) -> None:
+    create_git_tag(tag)
     print(f"Pushing git tag to remote: {tag}")
     subprocess.run(["git", "push", "origin", tag], check=True)
 
