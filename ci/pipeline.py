@@ -2,10 +2,11 @@
 
 Runs all CI/CD stages in sequence:
   1. Build Docker image
-  2. Determine & create Git version tag
-  3. Publish image to Docker Hub
-  4. Push Git tag to remote GitHub repository
-  5. Deploy (placeholder)
+  2. Run automated Python test suite
+  3. Determine & create Git version tag
+  4. Publish image to Container Registry
+  5. Push Git tag to remote GitHub repository
+  6. Deploy
 """
 
 from __future__ import annotations
@@ -32,10 +33,11 @@ def main() -> None:
     print("=" * 60)
 
     run_stage("Stage 1: Build Image", "build.py")
-    run_stage("Stage 2: Create Git Tag", "tag.py")
-    run_stage("Stage 3: Publish to Docker Hub", "publish.py")
-    run_stage("Stage 4: Push Git Tag", "tag.py", "--push")
-    run_stage("Stage 5: Deploy Placeholder", "deploy.py")
+    run_stage("Stage 2: Run Tests", "test.py")
+    run_stage("Stage 3: Create Git Tag", "tag.py")
+    run_stage("Stage 4: Publish to Container Registry", "publish.py")
+    run_stage("Stage 5: Push Git Tag", "tag.py", "--push")
+    run_stage("Stage 6: Deploy", "deploy.py")
 
     print("\n[PIPELINE COMPLETE] All stages executed successfully!\n")
 

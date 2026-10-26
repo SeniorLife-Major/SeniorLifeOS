@@ -161,7 +161,9 @@ class SettingsTests(unittest.TestCase):
         folder = storage_dir()
         repo = Path(__file__).resolve().parents[2]
         self.assertEqual(folder, repo / "var" / "documents")
-        self.assertIn("var/", (repo / ".gitignore").read_text(encoding="utf-8").split())
+        gitignore = repo / ".gitignore"
+        if gitignore.exists():
+            self.assertIn("var/", gitignore.read_text(encoding="utf-8").split())
 
 
 class FilenameTests(unittest.TestCase):

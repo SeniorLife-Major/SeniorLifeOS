@@ -37,11 +37,32 @@ jobs:
         run: python ci/build.py
 
   # ============================================================================
-  # Stage 2: Calculate & Increment Version Tag
+  # Stage 2: Run Automated Python Test Suite
+  # ============================================================================
+  test:
+    name: "2. Run Tests"
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & Run Automated Tests
+        run: |
+          python ci/build.py
+          python ci/test.py
+
+  # ============================================================================
+  # Stage 3: Calculate & Increment Version Tag
   # ============================================================================
   tag:
-    name: "2. Calculate Tag"
-    needs: build
+    name: "3. Calculate Tag"
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       new_tag: ${{ steps.calc_tag.outputs.new_tag }}
@@ -67,11 +88,11 @@ jobs:
         run: python ci/tag.py
 
   # ============================================================================
-  # Stage 3: Publish Docker Image to GitHub Packages (ghcr.io)
+  # Stage 4: Publish Docker Image to GitHub Packages (ghcr.io)
   # ============================================================================
   publish:
-    name: "3. Publish to GHCR"
-    needs: [build, tag]
+    name: "4. Publish to GHCR"
+    needs: [test, tag]
     runs-on: ubuntu-latest
     env:
       NEW_TAG: ${{ needs.tag.outputs.new_tag }}
@@ -90,10 +111,10 @@ jobs:
           python ci/publish.py
 
   # ============================================================================
-  # Stage 4: Push Git Tag & Create GitHub Release
+  # Stage 5: Push Git Tag & Create GitHub Release
   # ============================================================================
   release:
-    name: "4. Create GitHub Release"
+    name: "5. Create GitHub Release"
     needs: [tag, publish]
     runs-on: ubuntu-latest
     env:
@@ -119,10 +140,10 @@ jobs:
         run: python ci/tag.py --push
 
   # ============================================================================
-  # Stage 5: Deploy (Placeholder)
+  # Stage 6: Deploy
   # ============================================================================
   deploy:
-    name: "5. Deploy Placeholder"
+    name: "6. Deploy"
     needs: [publish, release]
     runs-on: ubuntu-latest
     env:

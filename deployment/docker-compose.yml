@@ -1,0 +1,162 @@
+name: seniorlifeos
+
+# ==============================================================================
+# SeniorLife OS — Server Production Deployment (with Nginx HTTPS Reverse Proxy)
+#
+# Standalone Docker Compose specification for server environments.
+# Uses prebuilt production container images from GHCR and Docker Hub.
+# Includes Nginx handling HTTP (port 80) redirection and HTTPS (port 443).
+# All environment variables are set directly with their explicit values.
+# No external .env file or variable expansion is required.
+# ==============================================================================
+
+services:
+  # ============================================================================
+  # 1. Nginx Reverse Proxy (SSL / HTTPS Termination)
+  # ============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: seniorlife-nginx
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_www:/var/www/certbot:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - seniorlife-net
+
+  # ============================================================================
+  # 2. Application Backend: SeniorLife OS (FastAPI + LangGraph)
+  # ============================================================================
+  backend:
+    image: ghcr.io/seniorlife-major/seniorlifeos:latest
+    container_name: seniorlife-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "[Server Deploy] Running database migrations..."
+        python -m alembic -c backend/alembic.ini upgrade head
+        echo "[Server Deploy] Starting SeniorLife OS server..."
+        exec python backend/run_server.py
+    ports:
+      # Bound to localhost loopback only for local CLI debugging; public traffic routes via Nginx (80/443)
+      - "127.0.0.1:8000:8000"
+    environment:
+      # Application Configuration
+      APP_NAME: "SeniorLife OS"
+      APP_VERSION: "1.0.0"
+      APP_ENV: "production"
+      DEBUG: "false"
+      DEMO_MODE: "false"
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "8000"
+
+      # Database Configuration
+      DATABASE_URL: "postgresql+asyncpg://postgres:postgres@db:5432/seniorlife_os"
+      DATABASE_ECHO: "false"
+      DATABASE_POOL_SIZE: "10"
+      DATABASE_MAX_OVERFLOW: "20"
+
+      # Cryptography & Security Keys
+      JWT_SECRET: "change-me-to-a-secure-random-32-character-secret-in-production"
+      SENIORLIFE_HASH_KEY: "change-me-to-a-secure-salt-key-minimum-32-chars-long"
+      SENIORLIFE_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      SENIORLIFE_CHECKPOINT_KEY: "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+      SENIORLIFE_STORAGE_DIR: "/app/var/documents"
+
+      # AI & LLM Providers (Groq / OpenAI)
+      SENIORLIFE_LLM_PROVIDER: "groq"
+      SENIORLIFE_LLM_MODEL: "openai/gpt-oss-20b"
+      GROQ_API_KEY: ""
+      OPENAI_API_KEY: ""
+
+      # Cloud OCR (Optional)
+      SENIORLIFE_CLOUD_OCR: "google"
+      GOOGLE_VISION_API_KEY: ""
+
+      # Virus Scanning (Optional)
+      SENIORLIFE_VIRUS_SCANNER: "none"
+      SENIORLIFE_CLAMD: "clamav:3310"
+      SENIORLIFE_SCAN_REQUIRED: "false"
+
+      # Monitoring & Tracing
+      ACTUATOR_ENABLED: "true"
+      LANGSMITH_TRACING: "false"
+      LANGSMITH_API_KEY: ""
+    volumes:
+      - document_vault_data:/app/var/documents
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - seniorlife-net
+
+  # ============================================================================
+  # 3. Database: PostgreSQL 16 (Document Vault & Paused Workflows)
+  # ============================================================================
+  db:
+    image: postgres:16-alpine
+    container_name: seniorlife-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: seniorlife_os
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seniorlife_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - seniorlife-net
+
+  # ============================================================================
+  # 4. Antivirus Daemon: ClamAV (Optional profile: clamav)
+  # ============================================================================
+  clamav:
+    image: clamav/clamav:latest
+    container_name: seniorlife-clamav
+    restart: unless-stopped
+    profiles:
+      - clamav
+    volumes:
+      - clamav_db:/var/lib/clamav
+    networks:
+      - seniorlife-net
+
+volumes:
+  postgres_data:
+    name: seniorlife_postgres_data
+  document_vault_data:
+    name: seniorlife_document_vault_data
+  clamav_db:
+    name: seniorlife_clamav_db
+  certbot_www:
+    name: seniorlife_certbot_www
+
+networks:
+  seniorlife-net:
+    name: seniorlife-net
+    driver: bridge
