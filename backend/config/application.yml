@@ -9,11 +9,17 @@ server:
   host: ${SERVER_HOST:0.0.0.0}
   port: ${SERVER_PORT:8000}
 
+# PostgreSQL for the document vault (backend/storage). Set DATABASE_URL in .env:
+#   postgresql+asyncpg://USER:PASSWORD@localhost:5432/seniorlife_os
+# Any postgresql:// URL works; the vault connects with psycopg. No default here, so a
+# missing URL is reported (503) instead of trying a built-in user and password.
+# Tests use TEST_DATABASE_URL (a database whose name ends in _test); files are encrypted
+# with SENIORLIFE_STORAGE_KEY into SENIORLIFE_STORAGE_DIR. See backend/README.md.
 database:
-  url: ${DATABASE_URL:postgresql+asyncpg://postgres:postgres@localhost:5432/seniorlife_os}
-  echo: ${DATABASE_ECHO:true}
-  pool_size: ${DATABASE_POOL_SIZE:10}
-  max_overflow: ${DATABASE_MAX_OVERFLOW:20}
+  url: ${DATABASE_URL:}
+  echo: ${DATABASE_ECHO:false}  # log SQL statements (values are always hidden)
+  pool_size: ${DATABASE_POOL_SIZE:5}
+  max_overflow: ${DATABASE_MAX_OVERFLOW:10}
 
 security:
   hash_key: ${SENIORLIFE_HASH_KEY:}

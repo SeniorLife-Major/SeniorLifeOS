@@ -1,9 +1,11 @@
 """Integration tests for FastAPI application endpoints in main.py."""
 
 import unittest
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 
-from backend.main import app
+with patch("backend.utils.env.find_env_file", return_value=None):  # keep the real .env out of tests
+    from backend.main import app
 from backend.demo.demo_cases import document_success_state, benefits_success_state
 
 

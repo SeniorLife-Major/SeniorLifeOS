@@ -3,8 +3,10 @@
 import unittest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 
-from backend.main import app
+with patch("backend.utils.env.find_env_file", return_value=None):  # keep the real .env out of tests
+    from backend.main import app
 from backend.core.config import get_config
 from backend.errors import ErrorCode
 

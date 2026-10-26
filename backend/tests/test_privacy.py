@@ -133,12 +133,14 @@ class IdentifierExtractionTests(unittest.TestCase):
 def hash_key_env(key: str | None):
     """Environment with SENIORLIFE_HASH_KEY set to key (or removed), ignoring the real .env.
 
-    The upload checks (tools/file_safety.py) read their settings from .env too, so that
-    module is kept away from the real .env here as well."""
+    The upload checks (tools/file_safety.py) and storage settings (storage/settings.py) read
+    .env too, so those modules are kept away from the real .env here as well."""
     env = {k: v for k, v in os.environ.items() if k != "SENIORLIFE_HASH_KEY"}
     if key is not None:
         env["SENIORLIFE_HASH_KEY"] = key
-    with patch.dict(os.environ, env, clear=True),             patch("backend.tools.file_safety.find_env_file", return_value=None):
+    with patch.dict(os.environ, env, clear=True), \
+            patch("backend.tools.file_safety.find_env_file", return_value=None), \
+            patch("backend.storage.settings.find_env_file", return_value=None):
         yield
 
 

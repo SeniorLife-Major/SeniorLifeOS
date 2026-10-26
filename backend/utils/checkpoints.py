@@ -60,9 +60,34 @@ def encrypted_serde(key: bytes | None = None) -> StrictEncryptedSerializer:
 
 
 def make_checkpointer(key: bytes | None = None) -> InMemorySaver:
-    """An in-memory checkpointer that encrypts everything it saves. (A PostgreSQL one comes
-    with storage; it takes the same serializer.)"""
+    """An in-memory checkpointer that encrypts everything it saves (tests, one-off runs)."""
     return InMemorySaver(serde=encrypted_serde(key))
+
+
+def make_postgres_checkpointer(url: str, key: bytes | None = None, max_size: int = 5) -> Any:
+    """A PostgreSQL checkpointer with the same encryption, so a paused run survives a
+    restart. url: a plain postgresql://... URL (see storage.settings.with_driver).
+    Creates LangGraph's checkpoint tables if missing. Close it with close_checkpointer()."""
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    serde = encrypted_serde(key)  # check the key before connecting
+    pool = ConnectionPool(url, kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+                          min_size=1, max_size=max_size, open=True)
+    try:
+        saver = PostgresSaver(pool, serde=serde)
+        saver.setup()
+    except Exception:
+        pool.close()
+        raise
+    return saver
+
+
+def close_checkpointer(checkpointer: Any) -> None:
+    close = getattr(getattr(checkpointer, "conn", None), "close", None)
+    if close is not None:
+        close()
 
 
 def is_encrypted(checkpointer: Any) -> bool:

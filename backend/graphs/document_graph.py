@@ -22,7 +22,7 @@ from ..tools.medical import (
 from ..tools.ocr import OcrEngineError, OcrError, read_document
 from ..tools.cloud_ocr import ENGINES, CloudOcrError, cloud_engine, engine_key, engine_label, read_document_in_cloud
 from ..tools.file_safety import check_file as check_uploaded_file
-from ..tools.free_text import free_text_problems
+from ..tools.free_text import FREE_TEXT_FIELDS, comparable, free_text_problems
 from ..tools.ocr_postprocess import clean_page, lookalike_key, repair_value
 from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier, mask_ids_in_text
 from ..utils.checkpoints import is_encrypted
@@ -58,9 +58,11 @@ class DocumentState(TypedDict, total=False):
     use_llm: bool
     simulate_ocr_failures: int
     vault_identifier_hashes: dict[str, str]  # keyed hash -> document_id already in the vault
+    vault_organization_names: dict[str, list[str]]  # field -> names on the owner's earlier confirmed documents
     medical_cloud_consent: bool  # the senior allows the cloud model to read medical documents
     cloud_ocr_consent: bool  # the senior allows the cloud OCR engine to read unclear pages again
     cloud_ocr_used: bool
+    cloud_disagreements: list[str]  # organization fields the cloud read differently (local value kept)
 
     # Graph outputs / control
     document_type: str
@@ -390,7 +392,10 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
         # Flagged on every pass (validation runs again after a cloud read).
         flags.extend(f"{key}: {note}, please check" for note in item.get("corrections", []))
         # Organization names have no format; flag signs of a cut-off or misread word.
-        flags.extend(f"{key}: {note}, please check" for note in free_text_problems(key, item["value"]))
+        earlier = state.get("vault_organization_names", {}).get(key)
+        flags.extend(f"{key}: {note}, please check" for note in free_text_problems(key, item["value"], earlier))
+        if key in state.get("cloud_disagreements", []) and item.get("source") != "cloud_ocr":
+            flags.append(f"{key}: the cloud reading differs, please check")
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
         if is_blank(normalized.get(key)):
             flags.append(f"{key}: missing or invalid")
@@ -478,7 +483,7 @@ def cloud_ocr(state: DocumentState) -> dict[str, Any]:
     found.update(extract_lists(pages, state["document_type"]))
     found.update(heading_fields(pages, state["document_type"], found))
     fields = {name: dict(item) for name, item in local.items()}
-    replaced = 0
+    replaced, disagreements = 0, []
     for name, item in found.items():
         if name in ID_FIELDS:
             continue  # blacked out before sending; the local reading is kept
@@ -491,10 +496,14 @@ def cloud_ocr(state: DocumentState) -> dict[str, Any]:
             fields[name] = {**item, "source_ref": f"cloud:{item['source_ref']}", "source": "cloud_ocr",
                             "cloud_engine": ENGINES[engine][0]}
             replaced += 1
+        elif (name in FREE_TEXT_FIELDS and mine and isinstance(item["value"], str) and isinstance(mine["value"], str)
+              and comparable(item["value"]) != comparable(mine["value"])):
+            disagreements.append(name)  # two readings of a name differ: the owner decides
     return {
         **done,
         "document": {**document, "cloud_pages": pages},
         "extracted_fields": fields,
+        "cloud_disagreements": sorted(disagreements),
         "events": add_event(state, f"cloud_ocr:replaced_{replaced}"),
     }
 

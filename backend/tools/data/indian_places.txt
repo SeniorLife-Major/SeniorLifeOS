@@ -1,0 +1,1004 @@
+# Indian districts and their headquarters towns (784 districts, 36 states and UTs)
+# Source: https://en.wikipedia.org/wiki/List_of_districts_in_India (raw page text, retrieved 2026-10-26).
+# Names are facts; Wikipedia text is CC BY-SA 4.0, credited here.
+# Used only to flag near-misspellings for owner review (tools/free_text.py).
+# One name per line; lines starting with # are comments.
+Aalo
+Adilabad
+Agar
+Agar Malwa
+Agartala
+Agra
+Ahmedabad
+Ahmednagar
+Ahwa
+Aizawl
+Ajmer
+Akbarpur
+Akola
+Alappuzha
+Alibag
+Aligarh
+Alipore
+Alipurduar
+Alirajpur
+Alluri Sitharama Raju
+Almora
+Alwar
+Amalapuram
+Ambala
+Ambassa
+Ambedkar Nagar
+Ambikapur
+Amethi
+Amingaon
+Ampati
+Amravati
+Amreli
+Amritsar
+Amroha
+Anakapalli
+Anand
+Ananthapuramu
+Anantnag
+Angul
+Anini
+Anjaw
+Annamayya
+Anuppur
+Araria
+Aravalli
+Ariyalur
+Arrah
+Arwal
+Asansol
+Ashoknagar
+Asifabad
+Auraiya
+Aurangabad
+Ayodhya
+Azamgarh
+Bagalkot
+Bagalkote
+Bageshwar
+Baghmara
+Baghpat
+Bagpat
+Baharampur
+Bahraich
+Baikunthpur
+Bajali
+Baksa
+Balaghat
+Balangir
+Balasore
+Ballari
+Ballia
+Balod
+Baloda Bazar
+Balotra
+Balrampur
+Balrampur-Ramanujganj
+Balurghat
+Banaskantha
+Banda
+Bandipore
+Bandra (East)
+Bangalore
+Bangalore Rural
+Bangalore Urban
+Banka
+Bankura
+Banswara
+Bapatla
+Barabanki
+Baramulla
+Baran
+Barasat
+Bardhaman
+Bareilly
+Bargarh
+Baripada
+Barmer
+Barnala
+Barpeta
+Barwani
+Basar
+Bastar
+Basti
+Bathinda
+Beawar
+Beed
+Begusarai
+Belagavi
+Belgaum
+Belonia
+Bemetara
+Bengaluru South
+Bettiah
+Betul
+Bhabua
+Bhadohi
+Bhadradri Kothagudem
+Bhadrak
+Bhagalpur
+Bhandara
+Bharatpur
+Bharuch
+Bhavnagar
+Bhawanipatna
+Bhilwara
+Bhimavaram
+Bhind
+Bhiwani
+Bhojpur
+Bhongir
+Bhopal
+Bhuj
+Bhupalpally
+Bichom
+Bidar
+Bihar Sharif
+Bijapur
+Bijnor
+Bikaner
+Bilaspur
+Birbhum
+Bishnupur
+Bishramganj
+Biswanath
+Biswanath Chariali
+Bokaro
+Boleng
+Bomdila
+Bongaigaon
+Botad
+Boudh
+Budaun
+Budgam
+Bulandshahr
+Buldhana
+Bundi
+Burhanpur
+Buxar
+Cachar
+Car Nicobar
+Central Delhi
+Chaibasa
+Chamarajanagar
+Chamba
+Chamoli
+Champawat
+Champhai
+Chandauli
+Chandel
+Chandigarh
+Chandrapur
+Changlang
+Changthang
+Charaideo
+Charkhi Dadri
+Chatra
+Chengalpattu
+Chennai
+Chhapra
+Chhatarpur
+Chhatrapur
+Chhindwara
+Chhota Udaipur
+Chikkaballapur
+Chikmagalur
+Chinsurah
+Chirang
+Chitradurga
+Chitrakoot
+Chittoor
+Chittorgarh
+Churachandpur
+Churu
+Chümoukedima
+Coimbatore
+Connaught Place
+Cooch Behar
+Cuddalore
+Cuttack
+Dadra and Nagar Haveli
+Dahod
+Dakshin Dinajpur
+Dakshina Kannada
+Daltonganj
+Daman
+Damoh
+Dang
+Dantewada
+Daporijo
+Darbhanga
+Darjeeling
+Darrang
+Daryaganj
+Datia
+Dausa
+Davanagere
+Davangere
+Debagarh
+Deeg
+Defence Colony
+Dehradun
+Deoghar
+Deoria
+Devbhumi Dwarka
+Dewas
+Dhalai
+Dhamtari
+Dhanbad
+Dhar
+Dharamshala
+Dharmanagar
+Dharmapuri
+Dharwad
+Dhemaji
+Dhenkanal
+Dholpur
+Dhubri
+Dhule
+Dibrugarh
+Didwana
+Didwana Kuchaman
+Dima Hasao
+Dimapur
+Dindigul
+Dindori
+Diphu
+Diskit
+Diu
+Doda
+Dr. B.R. Ambedkar Konaseema
+Drass
+Dumka
+Dungarpur
+Durg
+East Champaran
+East Delhi
+East Garo Hills
+East Godavari
+East Jaintia Hills
+East Kameng
+East Khasi Hills
+East Siang
+East Singhbhum
+Eastern West Khasi Hills
+Eluru
+English Bazar
+Ernakulam
+Erode
+Etah
+Etawah
+Faridabad
+Faridkot
+Farrukhabad
+Fatehabad
+Fatehgarh
+Fatehgarh Sahib
+Fatehpur
+Fazilka
+Firozabad
+Firozpur
+Gadag-Betageri
+Gadaga
+Gadchiroli
+Gadwal
+Gajapati
+Ganderbal
+Gandhinagar
+Gangtok
+Ganjam
+Garamur
+Garhwa
+Gariaband
+Gaurela
+Gaurela-Pendra-Marwahi
+Gauriganj
+Gautam Buddha Nagar
+Gaya
+Ghaziabad
+Ghazipur
+Gir Somnath
+Giridih
+Goalpara
+Godda
+Godhra
+Golaghat
+Gomati
+Gonda
+Gondia
+Gopalganj
+Gopeshwar
+Gorakhpur
+Gumla
+Guna
+Guntur
+Gurdaspur
+Gurugram
+Guwahati
+Gwalior
+Gyalshing
+Gyanpur
+Haflong
+Hailakandi
+Hajipur
+Hamirpur
+Hamren
+Hanamkonda
+Hansi
+Hanumangarh
+Hapur
+Harda
+Hardoi
+Haridwar
+Hassan
+Hathras
+Hatsingimari
+Haveri
+Hawai
+Hazaribag
+Himatnagar
+Hingoli
+Hisar
+Hnahthial
+Hojai
+Hooghly
+Hoshangabad
+Hoshiarpur
+Hospete
+Howrah
+Hyderabad
+Idukki
+Imphal East
+Imphal West
+Indore
+Jabalpur
+Jagatsinghpur
+Jagdalpur
+Jagtial
+Jaipur
+Jaisalmer
+Jajpur
+Jalandhar
+Jalaun
+Jalgaon
+Jalna
+Jalore
+Jalpaiguri
+Jammu
+Jamnagar
+Jamshedpur
+Jamtara
+Jamui
+Jangaon
+Janjgir
+Janjgir-Champa
+Jashpur
+Jashpur Nagar
+Jaunpur
+Jayashankar Bhupalpally
+Jehanabad
+Jhabua
+Jhajjar
+Jhalawar
+Jhansi
+Jhargram
+Jharsuguda
+Jhunjhunu
+Jind
+Jiribam
+Jodhpur
+Jogulamba Gadwal
+Jorhat
+Jowai
+Junagadh
+Kabirdham
+Kadapa
+Kailashahar
+Kaimur
+Kaithal
+Kajalgaon
+Kakching
+Kakinada
+Kakkanad
+Kalaburagi
+Kalahandi
+Kalimpong
+Kallakurichi
+Kalpetta
+Kamareddy
+Kamjong
+Kamle
+Kamrup
+Kamrup Metropolitan
+Kanchipuram
+Kandhamal
+Kangpokpi
+Kangra
+Kanjhawala
+Kanker
+Kannauj
+Kannur
+Kanpur
+Kanpur Dehat
+Kanpur Nagar
+Kanyakumari
+Kapurthala
+Karaikal
+Karauli
+Karbi Anglong
+Kargil
+Karimganj
+Karimnagar
+Karnal
+Karur
+Karwar
+Karwi
+Kasaragod
+Kasganj
+Kathua
+Katihar
+Katni
+Kaushambi
+Kavaratti
+Kawardha
+Kendrapara
+Kendujhar
+Keyi Panyor
+Keylong
+Khagaria
+Khairagarh
+Khairagarh-Chhuikhadan-Gandai
+Khairthal
+Khairthal-Tijara
+Khalatse
+Khalilabad
+Khambhalia
+Khammam
+Khandwa
+Khargone
+Khawzawl
+Kheda
+Khliehriat
+Khonsa
+Khordha
+Khowai
+Khunti
+Kinnaur
+Kiphire
+Kishanganj
+Kishtwar
+Kodagu
+Koderma
+Kohima
+Kokrajhar
+Kolar
+Kolasib
+Kolhapur
+Kolkata
+Kollam
+Koloriang
+Kondagaon
+Koppal
+Koraput
+Korba
+Korea
+Kota
+Kothagudem
+Kotputli
+Kotputli-Behror
+Kottayam
+Kozhikode
+Kra Daadi
+Krishna
+Krishnagiri
+Krishnanagar
+Kulgam
+Kullu
+Kumuram Bheem Asifabad
+Kupwara
+Kurnool
+Kurukshetra
+Kurung Kumey
+Kushavati
+Kushinagar
+Kutch
+Lahaul and Spiti
+Lakhimpur
+Lakhimpur Kheri
+Lakhisarai
+Lakshadweep
+Lalitpur
+Lamphelpat
+Latehar
+Latur
+Lawngtlai
+Leh
+Lemmi
+Lepa Rada
+Likabali
+Lohardaga
+Lohit
+Longding
+Longleng
+Lower Dibang Valley
+Lower Siang
+Lower Subansiri
+Lucknow
+Ludhiana
+Lunavada
+Lunglei
+Machilipatnam
+Madanapalle
+Madhepura
+Madhubani
+Madikeri
+Madurai
+Mahabubabad
+Maharajganj
+Mahasamund
+Mahbubnagar
+Mahendragarh
+Mahisagar
+Mahoba
+Mahé
+Maihar
+Mainpuri
+Mairang
+Majuli
+Malappuram
+Maldah
+Malerkotla
+Malkangiri
+Mamit
+Mancherial
+Mandi
+Mandla
+Mandsaur
+Mandya
+Manendragarh
+Manendragarh-Chirmiri-Bharatpur
+Mangaldoi
+Mangalore
+Mangan
+Manjhanpur
+Mansa
+Margao
+Marigaon
+Markapuram
+Mathura
+Mau
+Mauganj
+Mawkyrwat
+Mayabunder
+Mayiladuthurai
+Mayurbhanj
+Medak
+Medchal–Malkajgiri
+Meerut
+Mehsana
+Midnapore
+Mirzapur
+Modasa
+Moga
+Mohla
+Mohla-Manpur-Ambagarh Chowki
+Mokokchung
+Mon
+Moradabad
+Morbi
+Morena
+Morigaon
+Motihari
+Mulugu
+Mumbai
+Mumbai City
+Mumbai Suburban
+Mungeli
+Munger
+Murshidabad
+Mushalpur
+Muzaffarnagar
+Muzaffarpur
+Mysore
+NTR
+Nabarangpur
+Nadia
+Nadiad
+Nagaon
+Nagapattinam
+Nagarkurnool
+Nagaur
+Nagercoil
+Nagpur
+Nahan
+Nainital
+Nalanda
+Nalbari
+Nalgonda
+Namakkal
+Namchi
+Namsai
+Nand Nagri
+Nanded
+Nandurbar
+Nandyal
+Napangphung
+Narasaraopet
+Narayanpet
+Narayanpur
+Narmada
+Narnaul
+Narsinghpur
+Nashik
+Naugarh
+Navsari
+Nawada
+Nawanshahr
+Nayagarh
+Neemuch
+Nellore
+New Delhi
+New Tehri
+Nicobar
+Nilgiris
+Nirmal
+Niuland
+Niwari
+Nizamabad
+Noida
+Noklak
+Noney
+Noney (Longmai)
+Nongpoh
+Nongstoin
+North 24 Parganas
+North Delhi
+North East Delhi
+North Garo Hills
+North Goa
+North Lakhimpur
+North Tripura
+North West Delhi
+North and Middle Andaman
+Nuapada
+Nubra
+Nuh
+Nyoma
+Ongole
+Ooty
+Orai
+Oros
+Osmanabad
+Paderu
+Padrauna
+Padum
+Painavu
+Pakke-Kessang
+Pakur
+Pakyong
+Palakkad
+Palamu
+Palanpur
+Palghar
+Pali
+Palin
+Palnadu
+Palwal
+Panaji
+Panchkula
+Panchmahal
+Pandhurna
+Panipat
+Panna
+Papum Pare
+Paralakhemundi
+Parbhani
+Parvathipuram
+Parvathipuram Manyam
+Paschim Bardhaman
+Paschim Medinipur
+Pasighat
+Patan
+Pathanamthitta
+Pathankot
+Pathsala
+Patiala
+Patna
+Pauri
+Pauri Garhwal
+Peddapalli
+Perambalur
+Peren
+Phalodi
+Phek
+Pherzawl
+Phulbani
+Pilibhit
+Pithoragarh
+Polavaram
+Pondicherry
+Poonch
+Porbandar
+Porompat
+Port Blair
+Prakasam
+Pratapgarh
+Prayagraj
+Preet Vihar
+Puducherry
+Pudukkottai
+Pulwama
+Pune
+Purba Bardhaman
+Purba Medinipur
+Puri
+Purnia
+Purulia
+Puttaparthi
+Quepem
+Raebareli
+Raga
+Raichur
+Raigad
+Raiganj
+Raigarh
+Raipur
+Raisen
+Rajamahendravaram
+Rajanna Sircilla
+Rajgarh
+Rajkot
+Rajnandgaon
+Rajouri
+Rajouri Garden
+Rajpipla
+Rajsamand
+Ramanathapuram
+Ramban
+Ramgarh
+Rampachodavaram
+Rampur
+Ranchi
+Ranga Reddy
+Ranipet
+Ranipettai
+Ratlam
+Ratnagiri
+Rayagada
+Reasi
+Reckong Peo
+Resubelpara
+Rewa
+Rewari
+Ri Bhoi
+Robertsganj
+Rohtak
+Rohtas
+Roing
+Rudraprayag
+Rudrapur
+Rupnagar
+Sabarkantha
+Sadar Bazaar
+Sagar
+Saharanpur
+Saharsa
+Sahebganj
+Sahibganj
+Sahibzada Ajit Singh Nagar
+Saiha
+Saitual
+Saket
+Sakti
+Salem
+Salumbar
+Samastipur
+Samba
+Sambalpur
+Sambhal
+Sangareddy
+Sangli
+Sangrur
+Sankardev Nagar
+Sankoo
+Sant Kabir Nagar
+Saran
+Sarangarh
+Sarangarh-Bilaigarh
+Sasaram
+Satara
+Satna
+Sawai Madhopur
+Seelampur
+Sehore
+Senapati
+Seoni
+Sepahijala
+Seppa
+Seraikela
+Seraikela-Kharsawan
+Serchhip
+Shahdara
+Shahdol
+Shahid Bhagat Singh Nagar
+Shahjahanpur
+Shajapur
+Sham
+Shamator
+Shamirpet
+Shamli
+Sheikhpura
+Sheohar
+Sheopur
+Shi Yomi
+Shillong
+Shimla
+Shimoga
+Shivpuri
+Shopian
+Shravasti
+Siang
+Sibsagar
+Siddharthnagar
+Siddipet
+Sidhi
+Sikar
+Silchar
+Silvassa
+Simdega
+Sindhudurg
+Singrauli
+Sircilla
+Sirmaur
+Sirohi
+Sirsa
+Sitamarhi
+Sitapur
+Sivaganga
+Sivagangai
+Sivasagar
+Siwan
+Solan
+Solapur
+Sonari
+Sonbhadra
+Sonipat
+Sonitpur
+Soreng
+South 24 Parganas
+South Andaman
+South Delhi
+South East Delhi
+South Garo Hills
+South Goa
+South Salmara-Mankachar
+South Tripura
+South West Delhi
+South West Garo Hills
+South West Khasi Hills
+Sri Ganganagar
+Sri Muktsar Sahib
+Sri Sathya Sai
+Srikakulam
+Srinagar
+Subarnapur
+Sukma
+Sultanpur
+Sundargarh
+Sundergarh
+Supaul
+Surajpur
+Surat
+Surendranagar
+Surguja
+Suri
+Suryapet
+Tamenglong
+Tamluk
+Tamulpur
+Tapi
+Tarn Taran
+Tarn Taran Sahib
+Tato
+Tawang
+Tehri Garhwal
+Tengnoupal
+Tenkasi
+Tezpur
+Tezu
+Thane
+Thanjavur
+Tharad
+Theni
+Thiruvananthapuram
+Thiruvarur
+Thoothukudi
+Thoubal
+Thrissur
+Tikamgarh
+Tinsukia
+Tirap
+Tiruchirappalli
+Tirunelveli
+Tirupati
+Tirupattur
+Tiruppur
+Tiruvallur
+Tiruvannaamalai
+Tiruvannamalai
+Tiruvarur
+Tonk
+Tseminyü
+Tuensang
+Tumakuru
+Tura
+Udaipur
+Udalguri
+Udham Singh Nagar
+Udhampur
+Udupi
+Ujjain
+Ukhrul
+Umaria
+Una
+Unakoti
+Unnao
+Upper Dibang Valley
+Upper Siang
+Upper Subansiri
+Uttar Dinajpur
+Uttara Kannada
+Uttarkashi
+Vadodara
+Vaishali
+Valsad
+Varanasi
+Vasant Vihar
+Vav-Tharad
+Vellore
+Veraval
+Vidisha
+Vijayanagara
+Vijayawada
+Vikarabad
+Viluppuram
+Virudhunagar
+Visakhapatnam
+Vizianagaram
+Vyara
+Waidhan
+Wanaparthy
+Warangal
+Wardha
+Washim
+Wayanad
+West Champaran
+West Delhi
+West Garo Hills
+West Godavari
+West Jaintia Hills
+West Kameng
+West Karbi Anglong
+West Khasi Hills
+West Siang
+West Singhbhum
+West Tripura
+Williamnagar
+Wokha
+YSR Kadapa
+Yachuli
+Yadadri Bhuvanagiri
+Yadgir
+Yamunanagar
+Yanam
+Yavatmal
+Yingkiong
+Yupia
+Zanskar
+Ziro
+Zunheboto

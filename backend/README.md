@@ -28,7 +28,8 @@ If `py` is unavailable, create the venv with another installed Python 3.11 execu
 | `tools/` | OCR, value parsing, layout rules, medical tables, Google Vision |
 | `agents/` | LLM calls and the model providers (Groq, OpenAI, mock) |
 | `utils/` | privacy (masking, hashing, redaction), tracing filter, `.env` loading |
-| `demo/` | sample states; `api/` exposes them over HTTP |
+| `storage/` | the document vault: database tables, migrations, encrypted file store, the service that runs the document graph and saves the result |
+| `demo/` | sample states; `api/` exposes them (and the document vault) over HTTP |
 | `core/`, `config/` | settings from `config/application.yml`, filled from environment variables |
 | `errors/`, `common/` | standard error responses and shared schemas |
 | `tests/` | unit tests and the dataset scripts |
@@ -178,13 +179,60 @@ print(result["status"])
 
 The Benefits graph (Part 2, not changed) supports the same pattern with `build_benefits_graph(checkpointer=InMemorySaver())` and does not require encryption yet; resume with `{"action": "approve", "reviewer_id": "senior-meera"}`. Without a decision or `use_interrupt`, the graphs stop at `needs_review`/`awaiting_review` without publishing or committing.
 
+## Document vault (database, stored files, API)
+
+Uploads are kept in PostgreSQL plus an encrypted file folder, and paused reviews survive a restart.
+
+**Setup (once):**
+
+1. Create two databases in your PostgreSQL, e.g. `seniorlife_os` and `seniorlife_os_test` (the test one must end in `_test`; its tests empty it).
+2. Add to `.env` (or the environment):
+
+   | Setting | What it is |
+   |---|---|
+   | `DATABASE_URL` | `postgresql+asyncpg://USER:PASSWORD@localhost:5432/seniorlife_os` (any `postgresql` URL works; psycopg is used) |
+   | `TEST_DATABASE_URL` | the same for `seniorlife_os_test`; without it the database tests are skipped |
+   | `SENIORLIFE_STORAGE_KEY` | 64 hex characters, encrypts stored files: `python -c "import secrets; print(secrets.token_hex(32))"` |
+   | `SENIORLIFE_STORAGE_DIR` | optional; default `var/documents` in the repository (git-ignored) |
+   | `SENIORLIFE_CHECKPOINT_KEY`, `SENIORLIFE_HASH_KEY` | as above (paused reviews, ID hashes) |
+   | `DATABASE_POOL_SIZE`, `DATABASE_MAX_OVERFLOW`, `DATABASE_ECHO` | optional; connections kept open (5) and extra under load (10), and SQL logging (off; values are never logged). Read through `config/application.yml` (`database:`), which has no built-in URL or password |
+
+   Never change the storage or checkpoint key after data is stored: old files and paused reviews can't be read with a new key.
+3. Create the tables: `backend\.venv\Scripts\alembic.exe -c backend\alembic.ini upgrade head`. LangGraph's checkpoint tables are created by the checkpointer on first start; migrations never touch them.
+
+**API** (`api/documents.py`; sign-in isn't built yet, so the caller names themselves with the `X-Actor-Id` header, which is refused when `APP_ENV=production`):
+
+| Call | What it does |
+|---|---|
+| `POST /api/v1/documents?filename=card.png&claimedType=identity` | upload; the file is the raw body, its type the `Content-Type` (PDF, PNG, JPEG, at most 5 MB). Options: `ownerName`, `cloudOcrConsent`, `medicalCloudConsent`, `useLlm` |
+| `GET /api/v1/documents?type=identity` | my documents (no field values) |
+| `GET /api/v1/documents/{id}` | one document with its confirmed fields (ID numbers masked) |
+| `GET /api/v1/documents/{id}/review` | the values waiting for my review, with full ID numbers so I can compare them with the card |
+| `POST /api/v1/documents/{id}/review` | `{"action": "confirm" or "reject", "edits": {...}}` |
+
+```powershell
+curl.exe -X POST "http://localhost:8000/api/v1/documents?filename=card.png&claimedType=identity" -H "X-Actor-Id: senior-meera" -H "Content-Type: image/png" --data-binary "@card.png"
+```
+
+Someone else's document is always "not found". Responses carry `Cache-Control: no-store`. A refused review (for example a required field left empty) can be sent again without reading the file again.
+
+**What is kept where:**
+
+| Where | What |
+|---|---|
+| file folder | the upload, AES-256-GCM encrypted under a random name; only decrypted to a private temporary folder while OCR reads it. Deleted when the run ends without a confirmed version (rejected, unreadable, unknown type, failed) |
+| database | documents, versions, status, review flags, warnings, events; confirmed fields and page text with ID numbers masked; keyed ID hashes (duplicates are only looked for among the same owner's documents); an audit trail without values. SQL errors never show the values sent |
+| encrypted checkpoint (PostgreSQL) | everything a paused review needs, including unmasked page text and full ID numbers. Deleted when the run ends |
+
+The owner's earlier confirmed documents are passed to the graph, so a repeated ID card and an organization name one or two letters away from an earlier one are flagged.
+
 ## Connection and local-demo boundaries
 
 Document Intake returns `vault_record` only after the owner confirms extracted fields. Put this record in the Benefits state's `documents` list. Benefits checks owner, confirmation, required fields, expiry, and provenance. A later confirmed upload can be passed to a *new* Benefits run for reassessment; the two graphs do not share one checkpoint.
 
 Shared document rules live in `tools/document_rules.py`: `match_requirements()` checks a fixed document type, and `match_proofs()` checks a need such as `proof_of_age` against every document type that can prove it (`PROOFS`). The Benefits graph does not use `match_proofs()` yet.
 
-The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), after the file checks below. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. Packages, tasks, and event trails exist only in the returned state; there is no database or external action. `InMemorySaver` loses state after process exit. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
+The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), after the file checks below. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. The graphs themselves never touch a database: uploads sent through the document vault API are saved by `storage/service.py` after the graph runs (see "Document vault" below). Benefits packages, tasks, and event trails exist only in the returned state, and no external action is taken. `InMemorySaver` and `make_checkpointer()` lose state after process exit; the vault uses the PostgreSQL checkpointer. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
 Optional structured LLM selection nodes are included for document classification and scheme resolution. Set `use_llm=True` and omit `claimed_type` or `scheme_id` respectively. The provider is chosen by `SENIORLIFE_LLM_PROVIDER` (see `agents/models.py`):
 
@@ -227,7 +275,11 @@ The document graph uses it when the upload names a real file instead of page fix
   - labels above their values on a two-column card (paired by position).
 - **Repairs:** if a value fails its check, look-alike characters are swapped where the field's shape requires it (`DEM00206791` → `DEMO0206791`), and text after a date, amount or ID is cut off. Names are never changed.
 - **Review:** anything found by a layout rule or repaired is **always sent to the owner for review**.
-- **Organization names** (issuing authority, insurer, bank, lab, provider) are flagged for review if they look cut off (`Medical Board, Demo D`) or contain a near-misspelling of a common word (`Distriet`), even when OCR was sure (`tools/free_text.py`).
+- **Organization names** (issuing authority, insurer, bank, lab, provider) are flagged for review, even when OCR was sure (`tools/free_text.py`), if:
+  - they look cut off (`Medical Board, Demo D`);
+  - a word is a near-misspelling of a common organization word (`Distriet`) or of a listed Indian district, town, bank or insurer (`Thame`, `Bajej`, `Heatlh`). The lists are in `tools/data/` (from Wikipedia, sources in each file);
+  - the name is one or two letters away from the same field on one of the owner's earlier documents (passed in as `vault_organization_names`);
+  - cloud OCR read the name differently from a sure local reading (the local reading is kept, the owner decides).
 - **Model fallback:** with `use_llm=True`, required fields the rules missed (values inside sentences, values with no label) are requested from the model through the `llm_extract` node.
   - The text is redacted first.
   - An answer is kept only if it appears word for word in the document.

@@ -9,6 +9,9 @@ pyctuator>=1.2.0
 # Persistence (SQLAlchemy 2.0 + PostgreSQL async/sync drivers)
 sqlalchemy>=2.0.28
 asyncpg>=0.29.0
+psycopg[binary]==3.3.6  # document vault database (backend/storage) and the PostgreSQL checkpointer
+alembic==1.20.1  # database migrations (backend/alembic.ini)
+langgraph-checkpoint-postgres==3.2.0  # paused runs survive a restart (encrypted, utils/checkpoints.py)
 
 # AI & Workflow Engine
 langgraph==1.2.12

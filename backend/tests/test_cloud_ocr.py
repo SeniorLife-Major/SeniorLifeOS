@@ -27,6 +27,18 @@ from test_ocr import UNIT, ensure_fixtures
 from backend.utils.privacy import keyed_hash
 from test_privacy import FAKE_HASH_KEY, fake_aadhaar, hash_key_env
 
+_no_env_file = patch("backend.tools.cloud_ocr.find_env_file", return_value=None)
+
+
+def setUpModule():
+    # Engine and model settings are read from .env; the real one must not decide these tests
+    # (and loading it would copy every key into os.environ for the tests that follow).
+    _no_env_file.start()
+
+
+def tearDownModule():
+    _no_env_file.stop()
+
 FAKE_KEY = "fake-vision-key-123"
 REAL_CLIENT = httpx.Client  # kept before any test swaps httpx.Client for a recorder
 
@@ -366,6 +378,26 @@ class GraphCloudOcrTests(unittest.TestCase):
         result = self.run_upload(recorder, doc_type="disability_certificate", cloud_ocr_consent=True)
         self.assertEqual(result["extracted_fields"]["issuing_authority"]["value"], "Medical Board, Demo D")
         self.assertIn("issuing_authority: may be cut off, please check", result["review_flags"])
+
+    def test_a_different_cloud_reading_of_a_sure_name_is_flagged(self, _):
+        self.LOCAL = [("Name: Meera Ra0", 0.6), ("Issuing authority: Medical Board, Demo District Hospital", 0.99),
+                      ("Issue date: 10/11/2025", 0.99), ("Disability: 40%", 0.99)]
+        cloud = [("Name: Meera Rao", 0.98, 0), ("Issuing authority: Medical Board, Demo Civil Hospital", 0.97, 40)]
+        result = self.run_upload(Recorder(vision_answer(cloud)), doc_type="disability_certificate",
+                                 cloud_ocr_consent=True)
+        self.assertEqual(result["extracted_fields"]["issuing_authority"]["value"],
+                         "Medical Board, Demo District Hospital")  # the sure local reading is kept
+        self.assertEqual(result["cloud_disagreements"], ["issuing_authority"])
+        self.assertIn("issuing_authority: the cloud reading differs, please check", result["review_flags"])
+
+    def test_the_same_cloud_reading_raises_nothing(self, _):
+        self.LOCAL = [("Name: Meera Ra0", 0.6), ("Issuing authority: Medical Board, Demo District Hospital", 0.99),
+                      ("Issue date: 10/11/2025", 0.99), ("Disability: 40%", 0.99)]
+        cloud = [("Name: Meera Rao", 0.98, 0), ("Issuing authority: MEDICAL BOARD, DEMO DISTRICT HOSPITAL.", 0.97, 40)]
+        result = self.run_upload(Recorder(vision_answer(cloud)), doc_type="disability_certificate",
+                                 cloud_ocr_consent=True)
+        self.assertEqual(result["cloud_disagreements"], [])
+        self.assertFalse(any("cloud reading differs" in flag for flag in result["review_flags"]))
 
     def test_unknown_engine_name_sends_nothing(self, _):
         recorder = Recorder(groq_answer("Name: Meera Rao"))

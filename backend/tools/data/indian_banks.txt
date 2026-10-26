@@ -1,0 +1,85 @@
+# Banks in India: public, private, regional rural, small finance, payments, local area
+# Source: https://en.wikipedia.org/wiki/List_of_banks_in_India (raw page text, retrieved 2026-10-26).
+# Names are facts; Wikipedia text is CC BY-SA 4.0, credited here.
+# Used only to flag near-misspellings for owner review (tools/free_text.py).
+# Not complete: co-operative and foreign banks are missing; unknown names are never flagged.
+# One name per line; lines starting with # are comments.
+AU Small Finance Bank
+Airtel Payments Bank
+Andhra Pradesh Grameena Bank
+Arunachal Pradesh Rural Bank
+Assam Gramin Bank
+Axis Bank
+Bandhan Bank
+Bank of Baroda
+Bank of India
+Bank of Maharashtra
+Bihar Gramin Bank
+CSB Bank
+Canara Bank
+Capital Small Finance Bank
+Central Bank of India
+Chhattisgarh Gramin Bank
+City Union Bank
+Coastal Local Area Bank
+DCB Bank
+Dhanlaxmi Bank
+ESAF Small Finance Bank
+Equitas Small Finance Bank
+Federal Bank
+Fino Payments Bank
+Gujarat Gramin Bank
+HDFC Bank
+Haryana Gramin Bank
+Himachal Pradesh Gramin Bank
+ICICI Bank
+IDBI Bank
+IDFC First Bank
+India Post Payments Bank
+Indian Bank
+Indian Overseas Bank
+IndusInd Bank
+Jammu & Kashmir Bank
+Jammu and Kashmir Grameen Bank
+Jana Small Finance Bank
+Jharkhand Gramin Bank
+Jio Payments Bank
+Karnataka Bank
+Karnataka Grameena Bank
+Karur Vysya Bank
+Kerala Grameena Bank
+Kotak Mahindra Bank
+Krishna Bhima Samruddhi Local Area Bank
+Madhya Pradesh Gramin Bank
+Maharashtra Gramin Bank
+Manipur Rural Bank
+Meghalaya Rural Bank
+Mizoram Rural Bank
+NSDL Payments Bank
+Nagaland Rural Bank
+Nainital Bank
+Odisha Grameen Bank
+Puducherry Grama Bank
+Punjab Gramin Bank
+Punjab National Bank
+Punjab and Sind Bank
+RBL Bank
+Rajasthan Gramin Bank
+Shivalik Small Finance Bank
+Slice Small Finance Bank
+South Indian Bank
+State Bank of India
+Suryoday Small Finance Bank
+Tamil Nadu Grama Bank
+Tamilnad Mercantile Bank
+Telangana Grameena Bank
+Tripura Gramin Bank
+UCO Bank
+Ujjivan Small Finance Bank
+Union Bank of India
+Unity Small Finance Bank
+Utkarsh Small Finance Bank
+Uttar Pradesh Gramin Bank
+Uttarakhand Gramin Bank
+West Bengal Gramin Bank
+Yes Bank

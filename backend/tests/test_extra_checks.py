@@ -7,7 +7,8 @@ from unittest.mock import patch
 from backend.graphs.document_graph import build_document_graph
 from backend.tools import document_rules
 from backend.tools.document_rules import PROOFS, REQUIRED_FIELDS, match_proofs
-from backend.tools.free_text import free_text_problems, looks_cut_off, near_miss
+from backend.tools import free_text
+from backend.tools.free_text import close_to_earlier, free_text_problems, looks_cut_off, near_miss
 from test_document_rules import AS_OF, OWNER, vault_doc
 from test_graph_ocr import ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
@@ -143,6 +144,85 @@ class ProofTests(unittest.TestCase):
     def test_unknown_proof_is_an_error_not_missing(self):
         with self.assertRaises(KeyError):
             match_proofs(["proof_of_magic"], [], OWNER, AS_OF)
+
+
+# Real places that are NOT in the district list, to measure false flags (Decision #38).
+TOWNS_NOT_LISTED = """Ranikhet Lonavala Mahabaleshwar Kodaikanal Munnar Shirdi Khandala Panchgani Matheran Mussoorie
+Rishikesh Pushkar Hampi Kovalam Varkala Alibaug Dapoli Karad Baramati Malegaon Bhiwandi Kalyan Vasai Panvel Ichalkaranji
+Sangamner Shrirampur Pandharpur Barshi Udgir Ambajogai Hinganghat Achalpur Gokarna Udupi Manipal Hosur Kumbakonam
+Rameswaram Kanyakumari Tirunelveli Pollachi Mettupalayam Guruvayur Kottarakkara Changanassery Thrissur Ottapalam
+Bhimavaram Tenali Proddatur Adoni Kadiri Madanapalle Hindupur Nandyal Jagtial Siddipet Bodhan Mandsaur Neemuch Itarsi
+Pithampur Kharagpur Asansol Durgapur Siliguri Haldia Bolpur Kalimpong Jorhat Tezpur Dibrugarh Tinsukia Silchar Phagwara
+Rajpura Khanna Zirakpur Kharar Ballabgarh Bahadurgarh Manesar Rewari Hansi Narnaul Bhiwadi Kishangarh Beawar Makrana
+Nathdwara Sanchore Phalodi Kotputli Modinagar Khurja Hathras Mughalsarai Sultanpur Tanda Akbarpur Nawabganj""".split()
+
+
+class NameListTests(unittest.TestCase):
+    def test_lists_are_loaded_with_their_source(self):
+        for name in free_text.LIST_FILES:
+            with self.subTest(name=name):
+                lines = (free_text.DATA_DIR / name).read_text(encoding="utf-8").splitlines()
+                self.assertTrue(lines[1].startswith("# Source: https://en.wikipedia.org/wiki/"))
+                entries = [line for line in lines if line and not line.startswith("#")]
+                self.assertNotIn("Govt", entries)
+                self.assertNotIn("Private", entries)
+                self.assertGreater(len(entries), 50)
+        self.assertIn("thane", free_text.listed_words())
+        self.assertIn("mahe", free_text.listed_words())       # "Mahé", accent removed
+        self.assertIn("bajaj", free_text.listed_words())
+        self.assertIn("sikkim", free_text.listed_words())     # state names count as places
+
+    def test_misspelled_places_banks_and_insurers_are_flagged(self):
+        cases = {"Thame": "thane", "Kolhapor": "kolhapur", "Ratnagri": "ratnagiri", "Barodda": "baroda",
+                 "Barod": "balod",  # still flagged; Balod is a district too
+                 "Bajej": "bajaj", "Lombarb": "lombard", "Heallh": "health", "Heatlh": "health",  # swapped letters
+                 "Sikkin": "sikkim", "Maharastra": "maharashtra", "Telengana": "telangana", "Natiomal": "national"}
+        for word, known in cases.items():
+            with self.subTest(word=word):
+                self.assertEqual(near_miss(word), known)
+
+    def test_correct_listed_names_pass(self):
+        for name in ("Bank of Baroda", "Bajaj Allianz General Insurance", "ICICI Lombard", "Niva Bupa Health Insurance",
+                     "Collector Office, Kolhapur", "Tahsildar, Ratnagiri", "Civil Hospital, Mahé",
+                     "Medical Board, District Hospital, Thane", "Karur Vysya Bank", "Tamilnad Mercantile Bank"):
+            with self.subTest(name=name):
+                self.assertEqual(free_text_problems("issuing_authority", name), [])
+
+    def test_known_false_flags_on_real_towns_stay_rare(self):
+        # Indian place names sit close together; listed words only match with one change and
+        # the same first letter. These three real towns still look like a listed district.
+        flagged = {town for town in TOWNS_NOT_LISTED if near_miss(town)}
+        self.assertEqual(flagged, {"Alibaug", "Bhiwandi", "Bhiwadi"})
+
+    def test_the_earlier_document_check(self):
+        earlier = ["Medical Board, Demo District Hospital"]
+        self.assertTrue(close_to_earlier("Medical Board, Demo District Hospita", earlier))
+        self.assertTrue(close_to_earlier("Medical Board, Demo Distrlct Hospital", earlier))
+        self.assertFalse(close_to_earlier("MEDICAL BOARD, DEMO DISTRICT HOSPITAL.", earlier))  # same name
+        self.assertFalse(close_to_earlier("Civil Surgeon, Demo District", earlier))           # another issuer
+        self.assertFalse(close_to_earlier("SBl", ["SBI"]))                                     # too short to judge
+        # Only this check catches "Sal": the word is too short for the misread-word check.
+        self.assertEqual(free_text_problems("lab_name", "Shree Sal Diagnostics", ["Shree Sai Diagnostics"]),
+                         ["differs slightly from your earlier document"])
+        self.assertEqual(free_text_problems("lab_name", "Shree Sal Diagnostics"), [])
+
+
+@patch("backend.utils.privacy.find_env_file", return_value=None)
+class GraphEarlierNameTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        ensure_fixtures()
+
+    def test_a_name_slightly_different_from_an_earlier_document_is_reviewed(self, _):
+        page = ocr_page([("Name: Meera Rao", 0.99), ("Issuing authority: Medical Board, Demo District Hospita", 0.98),
+                         ("Issue date: 10/11/2025", 0.99), ("Disability: 40%", 0.99)])
+        state = upload_state(UNIT / "sharp.png", "image/png", "disability_certificate",
+                             vault_organization_names={"issuing_authority": ["Medical Board, Demo District Hospital"]})
+        with patch("backend.graphs.document_graph.read_document", return_value=[page]), hash_key_env(FAKE_HASH_KEY):
+            result = build_document_graph().invoke(state)
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("issuing_authority: differs slightly from your earlier document, please check",
+                      result["review_flags"])
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ An agentic assistant that helps senior citizens manage documents, healthcare, an
 
 
 ```
-backend/    Python + LangGraph workflows, FastAPI server, tests, demo runner
+backend/    Python + LangGraph workflows, FastAPI server, document vault (PostgreSQL), tests, demo runner
 frontend/   Web app (React / Next.js — Senior Mode and Family Mode), not started yet
 docs/       Project blueprints and design documents
 ```

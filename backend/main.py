@@ -17,7 +17,7 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from backend.api import demo_router
+from backend.api import demo_router, documents_router
 from backend.common.schemas import ApiResponse, CamelModel
 from backend.core.config import get_config
 from backend.errors import register_global_error_handlers
@@ -85,6 +85,10 @@ if getattr(config, "actuator", None) and config.actuator.enabled:
 if config.app.demo_mode:
     logger.info("Demo mode is ACTIVE. Registering /api/v1/demo endpoints.")
     app.include_router(demo_router)
+
+
+# 4b. Document vault (upload, read, review); needs DATABASE_URL and storage keys, see backend/README.md
+app.include_router(documents_router)
 
 
 # 5. DTO Schemas (camelCase via CamelModel)

@@ -7,3 +7,4 @@ ideas/
 .conda
 backend/tests/datasets/
 ci/.version
+var/

@@ -1,0 +1,68 @@
+# Insurers in India (life, general, health)
+# Source: https://en.wikipedia.org/wiki/List_of_insurance_companies_in_India (raw page text, retrieved 2026-10-26).
+# Names are facts; Wikipedia text is CC BY-SA 4.0, credited here.
+# Used only to flag near-misspellings for owner review (tools/free_text.py).
+# Fixed by hand: removed 'Govt', 'Private', 'HDFC bank' (column values / a wrong row); added HDFC Life and ICICI Prudential Life.
+# One name per line; lines starting with # are comments.
+Acko General Insurance
+Acko Life Insurance Limited
+Aditya Birla Health Insurance
+Aditya Birla Sun Life Insurance Co. Ltd
+Ageas Federal Life Insurance Co. Ltd
+Agriculture Insurance Company of India
+Aviva Life Insurance Company India Ltd
+Axis Max Life Insurance Co. Ltd
+Bajaj Allianz General Insurance
+Bajaj Allianz Life Insurance Co. Ltd
+Bandhan Life Insurance Co. Ltd
+Bharti AXA Life Insurance Co. Ltd
+Canara HSBC Life Insurance Co. Ltd
+Care Health Insurance Ltd
+Cholamandalam MS General Insurance
+Credit Access Life Insurance limited
+ECGC Limited
+Edelweiss Life Insurance Co. Ltd
+Future Generali India Insurance
+Galaxy Health Insurance Co Ltd
+General Insurance Corporation of India
+Generali Central Life Insurance Co. Ltd
+Go Digit Insurance
+Go Digit Life Insurance Limited
+HDFC ERGO General Insurance Company
+HDFC Life Insurance Co. Ltd
+ICICI Life Insurance Limited
+ICICI Lombard
+ICICI Prudential Life Insurance
+IFFCO TOKIO General Insurance
+IndiaFirst Life Insurance Co. Ltd
+Kotak Life Insurance Co. Ltd
+Kshema General Insurance Limited
+Liberty General Insurance
+Life Insurance Corporation of India
+Magma General Insurance
+Manipal Cigna Health Insurance Company Limited
+National Insurance Company
+Navi General Insurance Limited
+New India Assurance
+Niva Bupa Health Insurance
+PNB MetLife India Insurance Co. Ltd
+Pramerica Life Insurance Co. Ltd
+Raheja QBE General Insurance
+Reliance General Insurance
+Reliance Nippon Life Insurance Company
+Royal Sundaram General Insurance
+SBI General Insurance
+SBI Life Insurance Co. Ltd
+Sahara India Life Insurance Co. Ltd
+Shriram General Insurance
+Shriram Life Insurance Co. Ltd
+Star Health and Allied Insurance
+Star Union Dai-ichi Life Insurance
+TATA AIA Life Insurance Co. Ltd
+Tata AIG General Insurance
+The Oriental Insurance Company
+United India Insurance Company
+Universal Sompo General Insurance Company
+Valueattics Re
+Zuno General Insurance
+Zurich Kotak General Insurance
