@@ -209,12 +209,22 @@ Uploads are kept in PostgreSQL plus an encrypted file folder, and paused reviews
 | `GET /api/v1/documents/{id}` | one document with its confirmed fields (ID numbers masked) |
 | `GET /api/v1/documents/{id}/review` | the values waiting for my review, with full ID numbers so I can compare them with the card |
 | `POST /api/v1/documents/{id}/review` | `{"action": "confirm" or "reject", "edits": {...}}` |
+| `POST /api/v1/documents/manual` | type the details in, no file: `{"documentType": "identity", "fields": {...}, "ownerName": "..."}` (see below) |
 
 ```powershell
 curl.exe -X POST "http://localhost:8000/api/v1/documents?filename=card.png&claimedType=identity" -H "X-Actor-Id: senior-meera" -H "Content-Type: image/png" --data-binary "@card.png"
 ```
 
 Someone else's document is always "not found". Responses carry `Cache-Control: no-store`. A refused review (for example a required field left empty) can be sent again without reading the file again.
+
+During review the owner can also **fill in a required field OCR missed**, such as a name printed without a label. The review view lists these as `missingFields`; send them in `edits` like any correction. The value is checked like a read one, and is stored with `source_ref` `document:<id>:entered_by_owner` and `correctedByUser: true`. Only fields that were read or that the document type requires can be edited; anything else is refused.
+
+**Typing a document in, with no file** (`POST /api/v1/documents/manual`): for when a photo isn't possible or typing is easier.
+- Allowed fields: the type's required fields, plus `aadhaar_number` and `pan_number` for `identity`, `issuing_authority` and `expiry_date` for income and residence certificates, `expiry_date` for a disability certificate. Medical lists (`tests`, `medicines`, `items`) are sent as lists of rows.
+- Each value gets the same checks as a value read from a page (Aadhaar checksum, PAN shape, dates, amounts, no future dates). Anything wrong gives `422` with the reasons in `details.errors` (never the values) and nothing is stored.
+- Typing in counts as the owner's confirmation: the document is saved `confirmed` at once, ID numbers masked and hashed, with `entry: "manual"`, no file, and every field's `source_ref` ending in `entered_by_owner`. A scheme that needs the paper itself can still ask for it.
+- A card already in the vault (same ID hash) is reported in `warnings`, as for uploads.
+- Needs the `0002_manual_entry` migration (`alembic ... upgrade head`).
 
 **What is kept where:**
 
@@ -300,6 +310,12 @@ The document graph uses it when the upload names a real file instead of page fix
 - **Review:** every row of a list is always sent to the owner for review. Bill items must add up to the total.
 - **Flags:** high and low come only from the range printed on that row.
 - **Consent:** medical pages are never sent to the cloud model, not even to work out their type, unless the state sets `medical_cloud_consent: True`. Without it, they are classified on this machine.
+- **Read by the vision model (`tools/vision_extract.py`):** with both `cloud_ocr_consent` and `medical_cloud_consent`, a scanned or photographed prescription, lab report or medical bill is read by the Groq vision model (`GROQ_API_KEY`, `SENIORLIFE_VISION_MODEL`) straight into fields, because it reads handwriting and free layouts far better than local OCR.
+  - Local OCR still runs first, to find ID numbers (Aadhaar, PAN, account, policy), ABHA health IDs and QR codes; they are painted black before the picture is sent. At most 3 pages, in one request.
+  - The model's values are used, and **every one is sent to review** (it gives no confidence and can make up a plausible value, such as a wrong dose). Where local OCR read the same field differently, the flag says "the local reading differs".
+  - ID numbers in its answer are masked; ID fields are always the local reading.
+  - A handwritten page that local OCR reads badly is no longer sent back; a **blurry** photo still is (its ID numbers couldn't be found to black them out).
+  - No key, an error or an unreadable answer: a warning, and the local reading carries on as before. A PDF with stored text is read only on this machine. The cloud is asked only once per document.
 - **Samples:** `lab_report_state()`, `prescription_state()` and `medical_bill_state()` in `demo/demo_cases.py`.
 
 ### Cloud OCR backup (`tools/cloud_ocr.py`)

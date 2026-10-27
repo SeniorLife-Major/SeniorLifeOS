@@ -9,6 +9,8 @@ Upload sends the file as the raw request body (no multipart form, so no extra pa
 
     curl -X POST "http://localhost:8000/api/v1/documents?filename=card.png&claimedType=identity" \\
          -H "X-Actor-Id: senior-meera" -H "Content-Type: image/png" --data-binary @card.png
+
+Or the owner types the details in, with no file (POST /api/v1/documents/manual, JSON body).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from pydantic import Field
 
 from backend.common.schemas import ApiResponse, CamelModel
 from backend.core.config import get_config
@@ -54,9 +57,10 @@ class FieldDto(CamelModel):
 
 class DocumentDto(CamelModel):
     document_id: str
-    filename: str
-    mime_type: str
-    size_bytes: int
+    entry: Literal["upload", "manual"] = "upload"  # manual: typed in by the owner, no file
+    filename: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
     document_type: str | None = None
     status: str
     version: int | None = None
@@ -75,6 +79,7 @@ class ReviewDto(CamelModel):
     document_id: str
     document_type: str | None = None
     candidates: dict[str, Any]
+    missing_fields: list[str] = []  # required fields OCR didn't find; the owner may fill them in
     flags: list[str]
     errors: list[str] = []
 
@@ -82,6 +87,12 @@ class ReviewDto(CamelModel):
 class ReviewRequest(CamelModel):
     action: Literal["confirm", "reject"]
     edits: dict[str, Any] = {}
+
+
+class ManualEntryRequest(CamelModel):
+    document_type: str
+    fields: dict[str, Any]  # field name -> text, or a list of rows for tests, medicines and bill items
+    owner_name: str | None = Field(default=None, max_length=200)
 
 
 # ---- dependencies -------------------------------------------------------------------------
@@ -180,6 +191,14 @@ def upload_document(
     result = service.upload(actor, filename, mime_type, data, claimed_type=claimed_type, owner_name=owner_name,
                             cloud_ocr_consent=cloud_ocr_consent, medical_cloud_consent=medical_cloud_consent,
                             use_llm=use_llm)
+    return envelope(DocumentDto.model_validate(result), response)
+
+
+@router.post("/manual", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[DocumentDto],
+             summary="Type in a document's details myself (no file, no OCR)")
+def create_manual_document(body: ManualEntryRequest, response: Response, actor: Actor,
+                           service: Service) -> ApiResponse[DocumentDto]:
+    result = service.create_manual(actor, body.document_type, body.fields, owner_name=body.owner_name)
     return envelope(DocumentDto.model_validate(result), response)
 
 

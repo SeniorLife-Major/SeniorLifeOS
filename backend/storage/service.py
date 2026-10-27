@@ -28,7 +28,13 @@ from sqlalchemy.orm import sessionmaker
 from ..errors import AppException, DocumentNotFoundException, ValidationException
 from ..errors.exceptions import ConflictException
 from ..errors.error_codes import ErrorCode
-from ..graphs.document_graph import ALLOWED_MIME_TYPES, MAX_UPLOAD_BYTES, REQUIRED_FIELDS, build_document_graph
+from ..graphs.document_graph import (
+    ALLOWED_MIME_TYPES,
+    MAX_UPLOAD_BYTES,
+    REQUIRED_FIELDS,
+    build_document_graph,
+    missing_required,
+)
 from ..utils.checkpoints import forget_run
 from ..utils.privacy import mask_ids_in_text
 from .files import EncryptedFileStore
@@ -78,6 +84,9 @@ class DocumentService:
         self.files = files
         self.checkpointer = checkpointer
         self.graph = build_document_graph(checkpointer=checkpointer)  # refuses an unencrypted one
+        # Typed-in documents never pause (typing in is the owner's confirmation), so nothing is
+        # checkpointed: the typed values exist only in memory for one call.
+        self.manual_graph = build_document_graph()
 
     # ---- upload --------------------------------------------------------------------------
 
@@ -132,6 +141,58 @@ class DocumentService:
             raise WorkflowFailed("The document could not be processed") from None
         return self._save_outcome(owner_id, document_id, run_id, result)
 
+    # ---- typed in by the owner -----------------------------------------------------------
+
+    def create_manual(self, owner_id: str, document_type: str, fields: dict[str, Any], *,
+                      owner_name: str | None = None) -> dict[str, Any]:
+        """A document whose details the owner typed in, with no file (Decision #42).
+
+        The values get the same checks as values read from a page, ID numbers are masked and
+        hashed, and the document is saved confirmed in one transaction. Anything invalid is
+        refused (422) with the reasons and nothing is stored. Records say entered_by_owner, so
+        a scheme that needs the paper itself can still ask for it.
+        """
+        if document_type not in REQUIRED_FIELDS:
+            raise ValidationException("Unknown document type")
+        if not isinstance(fields, dict) or not fields:
+            raise ValidationException("Type in at least one field")
+        with self.sessions() as session:
+            hashes = vault_identifier_hashes(session, owner_id)
+            names = vault_organization_names(session, owner_id)
+        document_id = str(uuid4())
+        state = {
+            "actor_id": owner_id,
+            "document_id": document_id,
+            "document": {"owner_id": owner_id, **({"owner_name": owner_name} if owner_name else {})},
+            "claimed_type": document_type,
+            "manual_fields": fields,
+            "vault_identifier_hashes": hashes,
+            "vault_organization_names": names,
+        }
+        try:
+            result = self.manual_graph.invoke(state)
+        except Exception as exc:
+            logger.error("A typed-in document failed: %s", type(exc).__name__)  # never the message
+            raise WorkflowFailed("The document could not be saved") from None
+        if result.get("status") == "rejected":
+            raise ValidationException("Some fields need correcting", details={"errors": result.get("errors", [])})
+        if result.get("status") != "confirmed":
+            raise WorkflowFailed("The document could not be saved")  # e.g. no hash key: never store a full ID
+        with self.sessions.begin() as session:
+            document = Document(id=document_id, owner_id=owner_id, entry="manual", document_type=document_type,
+                                status="confirmed")
+            session.add(document)
+            version = DocumentVersion(document_id=document_id, version=1, status="confirmed",
+                                      document_type=document_type, review_flags=list(result.get("review_flags", [])),
+                                      warnings=list(result.get("warnings", [])), errors=[],
+                                      events=list(result.get("events", [])), reviewed_by=owner_id,
+                                      confirmed_at=now())
+            session.add(version)
+            session.flush()
+            save_confirmed(session, document, version, result["vault_record"], [])
+            audit(session, owner_id, "document.manual_entry", document_id, fields=sorted(fields))
+        return self.get(owner_id, document_id)
+
     def _run_upload(self, storage_key: str, suffix: str, state: dict[str, Any], run_id: str) -> dict[str, Any]:
         with self.files.decrypted_copy(storage_key, suffix) as path:
             state["document"]["file_path"] = str(path)
@@ -154,8 +215,10 @@ class DocumentService:
             candidates, flags = payload["candidates"], payload["flags"]
         else:  # an earlier decision needs correcting
             candidates, flags = values.get("normalized_fields", {}), values.get("review_flags", [])
-        return {"document_id": document_id, "document_type": values.get("document_type"),
-                "candidates": candidates, "flags": flags, "errors": values.get("errors", [])}
+        document_type = values.get("document_type")
+        return {"document_id": document_id, "document_type": document_type, "candidates": candidates,
+                "missing_fields": missing_required(document_type, candidates) if document_type in REQUIRED_FIELDS else [],
+                "flags": flags, "errors": values.get("errors", [])}
 
     def review(self, owner_id: str, document_id: str, action: str,
                      edits: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -272,6 +335,7 @@ def view(document: Document, with_fields: bool = True) -> dict[str, Any]:
     version = document.versions[-1] if document.versions else None
     result = {
         "document_id": document.id,
+        "entry": document.entry,
         "filename": document.filename,
         "mime_type": document.mime_type,
         "size_bytes": document.size_bytes,

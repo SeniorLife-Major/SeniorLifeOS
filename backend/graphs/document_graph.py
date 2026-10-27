@@ -4,6 +4,10 @@ Pages come from a real file (document.file_path, read by local OCR in tools/ocr.
 or from handwritten page fixtures (document.pages). Neither needs an API key. The
 review node supports both a prefilled decision for one-call demos and a real
 LangGraph interrupt when built with a checkpointer.
+
+With consent, scanned medical documents are read by a vision model after local OCR
+(vision_extract, Decision #41). A document can also be typed in by its owner with no
+file (manual_fields -> take_manual_entry, Decision #42).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from ..tools.medical import (
 )
 from ..tools.ocr import OcrEngineError, OcrError, read_document
 from ..tools.cloud_ocr import ENGINES, CloudOcrError, cloud_engine, engine_key, engine_label, read_document_in_cloud
+from ..tools.vision_extract import extract_with_vision
 from ..tools.file_safety import check_file as check_uploaded_file
 from ..tools.free_text import FREE_TEXT_FIELDS, comparable, free_text_problems
 from ..tools.ocr_postprocess import clean_page, lookalike_key, repair_value
@@ -63,6 +68,8 @@ class DocumentState(TypedDict, total=False):
     cloud_ocr_consent: bool  # the senior allows the cloud OCR engine to read unclear pages again
     cloud_ocr_used: bool
     cloud_disagreements: list[str]  # organization fields the cloud read differently (local value kept)
+    local_disagreements: list[str]  # fields local OCR read differently from the vision model (vision value kept)
+    manual_fields: dict[str, Any]  # typed in by the owner, no file (Decision #42); emptied once taken
 
     # Graph outputs / control
     document_type: str
@@ -91,6 +98,21 @@ def validate_upload(state: DocumentState) -> dict[str, Any]:
         errors.append("actor_id and document_id are required")
     if document.get("owner_id") != state.get("actor_id"):
         errors.append("Document owner does not match the acting senior")
+    if "manual_fields" in state:
+        # Typed in by the owner (Decision #42): no file and nothing to read.
+        if document.get("file_path") or document.get("pages"):
+            errors.append("A typed-in document has no file or pages")
+        if state.get("claimed_type") not in REQUIRED_FIELDS:
+            errors.append(f"Choose one of: {', '.join(REQUIRED_FIELDS)}")
+        if not isinstance(state["manual_fields"], dict):
+            errors.append("The typed-in fields must be a set of field names and values")
+        return {
+            "errors": errors,
+            "status": "rejected" if errors else "processing",
+            "route": "stop" if errors else "manual",
+            "manual_fields": state["manual_fields"] if not errors else {},
+            "events": add_event(state, "validate_upload:manual"),
+        }
     if document.get("mime_type") not in ALLOWED_MIME_TYPES:
         errors.append("Unsupported file type")
     file_path = document.get("file_path")
@@ -253,7 +275,10 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
             "events": add_event(state, f"extract_content:retry_{retries}"),
         }
     pages = state["document"]["pages"]
-    if any(page.get("quality", 1.0) < 0.5 for page in pages):
+    vision = vision_possible(state)
+    # Low OCR confidence on handwriting is no reason to stop when the vision model will read
+    # the page; a blurry photo still is (its ID numbers can't be found to black them out).
+    if any(page.get("quality", 1.0) < 0.5 and (not vision or page.get("blurry")) for page in pages):
         return {
             "route": "stop",
             "status": "needs_reupload",
@@ -263,6 +288,14 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
     fields = extract_fields_from_pages(pages, state["document_type"])
     fields.update(extract_lists(pages, state["document_type"]))  # lab tests, medicines, bill items
     fields.update(heading_fields(pages, state["document_type"], fields))
+    if vision:
+        # The local reading is kept to find ID numbers to black out and to compare with.
+        return {
+            "extracted_fields": fields,
+            "retry_count": retries,
+            "route": "vision",
+            "events": add_event(state, "extract_content:to_vision"),
+        }
     missing = [key for key in sorted(REQUIRED_FIELDS[state["document_type"]]) if key not in fields]
     # Medical documents go to the cloud model only with the senior's consent (Decision #29).
     cloud_allowed = state["document_type"] not in MEDICAL_TYPES or state.get("medical_cloud_consent")
@@ -286,6 +319,72 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
         "retry_count": retries,
         "route": "continue",
         "events": add_event(state, "extract_content:success"),
+    }
+
+
+# Fields an owner may type in: the required ones, plus these.
+OPTIONAL_MANUAL_FIELDS = {
+    "identity": {"aadhaar_number", "pan_number"},
+    "income_certificate": {"issuing_authority", "expiry_date"},
+    "residence_proof": {"issuing_authority", "expiry_date"},
+    "disability_certificate": {"expiry_date"},
+}
+MANUAL_SOURCE = "entered_by_owner"
+
+
+def manual_fields_for(document_type: str) -> set[str]:
+    return REQUIRED_FIELDS[document_type] | OPTIONAL_MANUAL_FIELDS.get(document_type, set())
+
+
+def take_manual_entry(state: DocumentState) -> dict[str, Any]:
+    """Fields the owner typed in instead of uploading a file (Decision #42).
+
+    Each value gets the same checks as a value read from a page (format, checksum, dates);
+    anything that fails is refused with a reason and nothing is kept. Typing in counts as
+    the owner's confirmation, so the run goes on to masking ID numbers and publishing. The
+    typed values are removed from manual_fields so full ID numbers don't linger in state.
+    """
+    document_type = state["claimed_type"]
+    entered = state["manual_fields"]
+    allowed = manual_fields_for(document_type)
+    errors = [f"{key}: not a field of this document" for key in sorted(set(entered) - allowed)]
+    fields = {}
+    for key in sorted(set(entered) & allowed):
+        raw = entered[key]
+        if is_blank(raw):
+            continue
+        if key in LIST_FIELDS:
+            if not isinstance(raw, list) or not all(isinstance(row, dict) for row in raw):
+                errors.append(f"{key}: must be a list of rows")
+                continue
+            rows = normalize_field(key, raw) or []
+            errors.extend(f"{key} row {number}: {problem}" for number, row in enumerate(rows, start=1)
+                          for problem in row.get("problems", []))
+            value: Any = raw
+        elif isinstance(raw, (str, int, float)) and not isinstance(raw, bool):
+            value = " ".join(str(raw).split())
+            if is_blank(normalize_field(key, value)):
+                errors.append(f"{key}: not valid")
+        else:
+            errors.append(f"{key}: must be text or a number")
+            continue
+        fields[key] = {"value": value, "confidence": 1.0, "source": "owner", "source_ref": MANUAL_SOURCE,
+                       "box": None}
+    errors.extend(f"{key}: required" for key in sorted(REQUIRED_FIELDS[document_type] - set(fields)))
+    today = date.fromisoformat(state["document"].get("as_of", date.today().isoformat()))
+    for key, label in FUTURE_DATE_LABELS.items():
+        checked = normalize_field(key, fields[key]["value"]) if key in fields else None
+        if checked and date.fromisoformat(checked) > today:
+            errors.append(f"{label} cannot be in the future")
+    update = {"manual_fields": {}, "document_type": document_type, "extracted_fields": fields}
+    if errors:
+        return {**update, "status": "rejected", "route": "stop", "errors": errors,
+                "events": add_event(state, "take_manual_entry:refused")}
+    return {
+        **update,
+        "review_decision": {"action": "confirm", "reviewer_id": state["actor_id"]},
+        "route": "continue",
+        "events": add_event(state, f"take_manual_entry:{len(fields)}_fields"),
     }
 
 
@@ -354,7 +453,85 @@ def llm_extract(state: DocumentState) -> dict[str, Any]:
     }
 
 
+def vision_possible(state: DocumentState) -> bool:
+    """Read a medical document with the vision model (Decision #41)? Only an uploaded scan or
+    photo, only with both consents, and only once. A PDF whose text is stored in it is read
+    exactly on this machine and never sent."""
+    document = state["document"]
+    if state.get("document_type") not in MEDICAL_TYPES or not document.get("file_path"):
+        return False
+    if not (state.get("cloud_ocr_consent") and state.get("medical_cloud_consent")) or state.get("cloud_ocr_used"):
+        return False
+    return not all(page.get("engine") == "pdf_text" for page in document.get("pages", []))
+
+
+def same_reading(key: str, first: Any, second: Any) -> bool:
+    """Do two readings of a field say the same thing (ignoring case, spacing and row metadata)?"""
+    def plain(value: Any) -> Any:
+        if isinstance(value, list):
+            rows = normalize_field(key, value) or []
+            return [{name: str(cell).casefold() for name, cell in row.items()
+                     if name not in ("source_ref", "confidence", "box", "problems") and cell is not None}
+                    for row in rows]
+        if isinstance(value, str) and key in FREE_TEXT_FIELDS:
+            return comparable(value)
+        checked = normalize_field(key, value) if isinstance(value, str) else value
+        return " ".join(str(checked if checked is not None else value).split()).casefold()
+    return plain(first) == plain(second)
+
+
+def vision_extract(state: DocumentState) -> dict[str, Any]:
+    """Read a prescription, lab report or medical bill with the Groq vision model, ID numbers and
+    QR codes blacked out first. Its values are used, and every one is reviewed by the owner;
+    where local OCR read the same field differently, the owner is told. If the model can't be
+    used, the local reading carries on as before."""
+    done = {"cloud_ocr_used": True}  # one cloud reading per document
+    document = state["document"]
+    local = state.get("extracted_fields", {})
+    warnings = list(state.get("warnings", []))
+
+    def local_only(warning: str, event: str) -> dict[str, Any]:
+        update = {**done, "warnings": [*warnings, warning], "events": add_event(state, event)}
+        if any(page.get("quality", 1.0) < 0.5 for page in document["pages"]) or not local:
+            return {**update, "route": "stop", "status": "needs_reupload",
+                    "warnings": [*update["warnings"], "The page could not be read reliably on this machine"]}
+        return {**update, "route": "continue"}
+
+    key = engine_key("groq")
+    if not key:
+        return local_only(f"Vision reading skipped: {ENGINES['groq'][2]} is not set", "vision_extract:no_key")
+    boxes: dict[int, list[list[int]]] = {}
+    for field in ID_FIELDS:
+        if field in local and local[field].get("box"):
+            boxes.setdefault(local[field]["page"], []).append(local[field]["box"])
+    try:  # more than 3 pages is refused before anything is sent
+        found = extract_with_vision(document["file_path"], document["mime_type"], document["pages"], boxes,
+                                    state["document_type"], key)
+    except (CloudOcrError, OcrError) as exc:
+        return local_only(f"Vision reading unavailable ({exc})", "vision_extract:failed")
+    fields = {name: dict(item) for name, item in local.items()}
+    disagreements = []
+    for name, value in found.items():  # only this type's medical fields: never an ID field
+        if name in fields and not same_reading(name, fields[name]["value"], value):
+            disagreements.append(name)
+        if isinstance(value, list):
+            value = [{**row, "source_ref": "vision_model", "confidence": 0.0, "box": None} for row in value]
+        # Confidence 0.0: the model gives none, so every value goes to review.
+        fields[name] = {"value": value, "confidence": 0.0, "source": "vision_model", "source_ref": "vision_model",
+                        "layout": "vision", "box": None}
+    if not found:
+        return local_only("The vision model found no fields", "vision_extract:no_fields")
+    return {
+        **done,
+        "extracted_fields": fields,
+        "local_disagreements": sorted(disagreements),
+        "route": "continue",
+        "events": add_event(state, f"vision_extract:found_{len(found)}"),
+    }
+
+
 LAYOUT_NOTES = {
+    "vision": "read by the AI vision model from the picture",
     "no_colon": "found by layout (no colon)",
     "label_above": "found by layout (label above)",
     "llm": "found by AI reading the text",
@@ -396,6 +573,8 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
         flags.extend(f"{key}: {note}, please check" for note in free_text_problems(key, item["value"], earlier))
         if key in state.get("cloud_disagreements", []) and item.get("source") != "cloud_ocr":
             flags.append(f"{key}: the cloud reading differs, please check")
+        if key in state.get("local_disagreements", []):
+            flags.append(f"{key}: the local reading differs, please check")
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
         if is_blank(normalized.get(key)):
             flags.append(f"{key}: missing or invalid")
@@ -530,6 +709,10 @@ def confidence_gate(state: DocumentState) -> dict[str, Any]:
     }
 
 
+def missing_required(document_type: str, fields: dict[str, Any]) -> list[str]:
+    return sorted(key for key in REQUIRED_FIELDS[document_type] if is_blank(fields.get(key)))
+
+
 def human_field_review(state: DocumentState) -> dict[str, Any]:
     decision = state.get("review_decision")
     if not decision and state.get("use_interrupt"):
@@ -538,8 +721,9 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
             "document_id": state["document_id"],
             "document_type": state["document_type"],
             "candidates": state["normalized_fields"],
+            "missing_fields": missing_required(state["document_type"], state["normalized_fields"]),
             "flags": state["review_flags"],
-            "question": "Confirm, edit, or reject these extracted fields",
+            "question": "Confirm, edit, or reject these extracted fields; fill in any missing required field",
         })
     if not decision:
         return {
@@ -568,18 +752,21 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
             "events": add_event(state, "human_field_review:invalid_decision"),
         }
     edits = decision.get("edits", {})
-    if any(key not in state["extracted_fields"] for key in edits):
+    # The owner may correct what was read, and fill in a required field OCR missed (e.g. a
+    # name printed without a label). Other fields can't be added: nothing would check them.
+    allowed = set(state["extracted_fields"]) | REQUIRED_FIELDS[state["document_type"]]
+    if any(key not in allowed for key in edits):
         return {
             "status": "needs_review",
             "route": "stop",
-            "errors": ["Edits may only correct extracted fields in this prototype"],
+            "errors": ["Edits may only correct extracted fields or fill in this document's required fields"],
             "events": add_event(state, "human_field_review:invalid_edit"),
         }
     confirmed = dict(state["normalized_fields"])
     for key, raw_value in edits.items():
         # A list (tests, medicines, items) is corrected as a whole list of rows.
         confirmed[key] = normalize_field(key, raw_value if isinstance(raw_value, list) else str(raw_value))
-    missing = [key for key in REQUIRED_FIELDS[state["document_type"]] if is_blank(confirmed.get(key))]
+    missing = missing_required(state["document_type"], confirmed)
     if missing:
         return {
             "status": "needs_review",
@@ -744,7 +931,9 @@ def publish_confirmed_version(state: DocumentState) -> dict[str, Any]:
     confirmed_fields = {
         key: {
             "value": value,
-            "source_ref": f"document:{state['document_id']}:{extracted[key]['source_ref']}",
+            # A field OCR never read was typed in by the owner during review.
+            "source_ref": (f"document:{state['document_id']}:{extracted[key]['source_ref']}" if key in extracted
+                           else f"document:{state['document_id']}:entered_by_owner"),
             "reviewed_by": decision["reviewer_id"],
             "corrected_by_user": key in decision.get("edits", {}),
         }
@@ -793,16 +982,25 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_node("publish_confirmed_version", publish_confirmed_version)
 
     graph.add_edge(START, "validate_upload")
-    graph.add_conditional_edges("validate_upload", route_step, {"continue": "check_file", "stop": "mask_on_stop"})
+    graph.add_conditional_edges("validate_upload", route_step, {
+        "continue": "check_file", "manual": "take_manual_entry", "stop": "mask_on_stop",
+    })
+    graph.add_node("take_manual_entry", take_manual_entry)
+    graph.add_conditional_edges("take_manual_entry", route_step, {
+        "continue": "validate_candidates", "stop": "mask_on_stop",
+    })
     graph.add_conditional_edges("check_file", route_step, {"continue": "read_file", "stop": "mask_on_stop"})
     graph.add_conditional_edges("read_file", route_step, {
         "continue": "classify_document", "retry": "read_file", "stop": "mask_on_stop",
     })
     graph.add_conditional_edges("classify_document", route_step, {"continue": "extract_content", "stop": "mask_on_stop"})
     graph.add_conditional_edges("extract_content", route_step, {
-        "continue": "validate_candidates", "retry": "extract_content", "llm": "llm_extract", "stop": "mask_on_stop",
+        "continue": "validate_candidates", "retry": "extract_content", "llm": "llm_extract",
+        "vision": "vision_extract", "stop": "mask_on_stop",
     })
     graph.add_conditional_edges("llm_extract", route_step, {"continue": "validate_candidates", "stop": "mask_on_stop"})
+    graph.add_node("vision_extract", vision_extract)
+    graph.add_conditional_edges("vision_extract", route_step, {"continue": "validate_candidates", "stop": "mask_on_stop"})
     graph.add_node("cloud_ocr", cloud_ocr)
     graph.add_conditional_edges("validate_candidates", route_step, {
         "continue": "confidence_gate", "cloud_ocr": "cloud_ocr",

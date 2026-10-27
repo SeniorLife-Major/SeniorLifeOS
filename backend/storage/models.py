@@ -51,10 +51,13 @@ class Document(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     owner_id: Mapped[str] = mapped_column(String(128), index=True)
-    filename: Mapped[str] = mapped_column(String(255))  # ID numbers in the name are masked
-    mime_type: Mapped[str] = mapped_column(String(64))
-    size_bytes: Mapped[int] = mapped_column(Integer)
-    sha256: Mapped[str] = mapped_column(String(64))
+    # "upload": read from a file; "manual": typed in by the owner, no file (Decision #42).
+    entry: Mapped[str] = mapped_column(String(16), default="upload", server_default="upload")
+    # The file's details: None for a typed-in document.
+    filename: Mapped[str | None] = mapped_column(String(255))  # ID numbers in the name are masked
+    mime_type: Mapped[str | None] = mapped_column(String(64))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    sha256: Mapped[str | None] = mapped_column(String(64))
     storage_key: Mapped[str | None] = mapped_column(String(32), unique=True)  # None once the file is removed
     document_type: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32))

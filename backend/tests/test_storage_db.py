@@ -290,6 +290,16 @@ class ReviewTests(DatabaseCase):
         with self.assertRaises(ConflictException):
             self.review(document_id, action="reject")
 
+    def test_the_owner_fills_in_a_name_ocr_missed(self):
+        unlabelled = [("SAMPLE IDENTITY CARD", 0.99), ("Meera Rao", 0.99), *IDENTITY[1:]]
+        document_id = self.upload(unlabelled)["document_id"]
+        self.assertEqual(self.service.pending_review(OWNER, document_id)["missing_fields"], ["name"])
+        result = self.review(document_id, edits={"name": "Meera Rao"})
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["fields"]["name"]["value"], "Meera Rao")
+        self.assertEqual(result["fields"]["name"]["source_ref"], f"document:{document_id}:entered_by_owner")
+        self.assertTrue(result["fields"]["name"]["corrected_by_user"])
+
     def test_a_document_not_waiting_has_nothing_to_review(self):
         document_id = self.upload(IDENTITY)["document_id"]  # confirmed straight away
         with self.assertRaisesRegex(ConflictException, "not waiting for review"):
