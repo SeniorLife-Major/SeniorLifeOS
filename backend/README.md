@@ -210,6 +210,9 @@ Uploads are kept in PostgreSQL plus an encrypted file folder, and paused reviews
 | `GET /api/v1/documents/{id}/review` | the values waiting for my review, with full ID numbers so I can compare them with the card |
 | `POST /api/v1/documents/{id}/review` | `{"action": "confirm" or "reject", "edits": {...}}` |
 | `POST /api/v1/documents/manual` | type the details in, no file: `{"documentType": "identity", "fields": {...}, "ownerName": "..."}` (see below) |
+| `POST /api/v1/documents/{id}/versions?filename=new.png` | replace a confirmed document with a newer copy (e.g. a renewed certificate); raw body and options as for upload |
+| `POST /api/v1/documents/{id}/versions/manual` | replace it by typing in the new details: `{"fields": {...}}` |
+| `DELETE /api/v1/documents/{id}` | delete the document and everything stored for it |
 
 ```powershell
 curl.exe -X POST "http://localhost:8000/api/v1/documents?filename=card.png&claimedType=identity" -H "X-Actor-Id: senior-meera" -H "Content-Type: image/png" --data-binary "@card.png"
@@ -225,6 +228,15 @@ During review the owner can also **fill in a required field OCR missed**, such a
 - Typing in counts as the owner's confirmation: the document is saved `confirmed` at once, ID numbers masked and hashed, with `entry: "manual"`, no file, and every field's `source_ref` ending in `entered_by_owner`. A scheme that needs the paper itself can still ask for it.
 - A card already in the vault (same ID hash) is reported in `warnings`, as for uploads.
 - Needs the `0002_manual_entry` migration (`alembic ... upgrade head`).
+
+**Renewing a document** (`POST /{id}/versions`, or `/versions/manual` to type it in): for a renewed income certificate, a new insurance year, and so on.
+- Only a confirmed document, and only when no newer version is already being read or waiting for review (`409` otherwise). The document type stays the same.
+- The new copy is read and reviewed like an upload. Until it is confirmed, the old version stays in use: the document shows the old fields, and the new one under `replacement` (its version, status, flags, warnings, errors).
+- Once the new one is confirmed, the old version is marked `replaced`, and its fields, page text, ID hashes and file are removed. Only its version number, dates and status are kept.
+- If the new copy is rejected, unreadable or fails, its file is removed and the old version stays in use. The same card is not reported as "already in the vault" for its own renewal.
+
+**Deleting a document** (`DELETE /{id}`): removes every version, field, page text, ID hash, run, paused checkpoint and stored file. The audit trail keeps that it was deleted (audit events hold no values). Refused with `409` only while the file is being read at that moment.
+- Needs the `0003_versions_hold_files` migration: each version now holds its own file details, so a renewal's file can sit next to the old one until it is confirmed.
 
 **What is kept where:**
 
@@ -368,5 +380,22 @@ $env:SENIORLIFE_RUN_OCR_TESTS = "1"; backend\.venv\Scripts\python.exe -m unittes
 ```
 
 `backend/tests/make_hard_dataset.py` makes a harder set of fake documents in `backend/tests/datasets/ocr_hard/`. They have realistic layouts, Hindi and English text, stamps and signatures, and photo, photocopy and worn-paper damage. Add `--score` to run PaddleOCR on them (about 25 minutes), or `--rescore` to re-score from the saved OCR text.
+
+### Complete-project suite
+
+`backend/tests/run_complete_suite.py` tests every part of the backend on a new fake dataset and gives each part a score from 0 to 100. Here, "every part" means OCR, the document graph before and after review, classification, privacy and prompt redaction, cloud blackout, file checks, manual entry, benefit rules, page-to-eligibility runs, the vault database and API, the main app, and the existing unit tests. `backend/tests/make_complete_dataset.py` makes the dataset in `backend/tests/datasets/complete/`, and the suite makes it on first use if it is missing. Results go to `backend/tests/datasets/results/` as `complete_<time>.json` / `.md`, plus `latest.json` / `latest.md`. Each score says what it counts, and every failure is listed.
+
+```powershell
+backend\.venv\Scripts\python.exe backend\tests\run_complete_suite.py            # about 10 minutes once the OCR output is saved (first run about 45)
+backend\.venv\Scripts\python.exe backend\tests\run_complete_suite.py --quick    # fewer pages, no blackout re-reading
+```
+
+Other options:
+- `--fresh-ocr` reads every page again.
+- `--no-db` skips the vault part. That part needs `TEST_DATABASE_URL` naming a database whose name ends in `_test`, and it empties that database.
+- `--no-unit` skips the unit tests.
+- `--live` also scores the Groq vision model and LLM. It sends the fake pages to Groq and uses the API quota.
+
+The suite never reads `.env`, except for `TEST_DATABASE_URL` and, with `--live`, the Groq key. It uses its own test hash key and turns tracing off.
 
 See the [workflow technical blueprint](../docs/SeniorLife-OS-Workflow-Technical-Blueprint.md) for the intended real integrations.

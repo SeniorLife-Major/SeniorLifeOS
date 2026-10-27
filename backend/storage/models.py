@@ -51,15 +51,8 @@ class Document(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     owner_id: Mapped[str] = mapped_column(String(128), index=True)
-    # "upload": read from a file; "manual": typed in by the owner, no file (Decision #42).
-    entry: Mapped[str] = mapped_column(String(16), default="upload", server_default="upload")
-    # The file's details: None for a typed-in document.
-    filename: Mapped[str | None] = mapped_column(String(255))  # ID numbers in the name are masked
-    mime_type: Mapped[str | None] = mapped_column(String(64))
-    size_bytes: Mapped[int | None] = mapped_column(Integer)
-    sha256: Mapped[str | None] = mapped_column(String(64))
-    storage_key: Mapped[str | None] = mapped_column(String(32), unique=True)  # None once the file is removed
     document_type: Mapped[str | None] = mapped_column(String(64))
+    # The status of the current version: the newest confirmed one, else the newest (Decision #43).
     status: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = created()
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
@@ -72,12 +65,24 @@ class Document(Base):
 
 
 class DocumentVersion(Base):
+    """One reading of a document: the first upload, or a renewal that replaces it (Decision #43).
+    status: processing, needs_review, confirmed, replaced (a newer version was confirmed; its
+    fields, page text, ID hashes and file are removed), or how it ended (rejected, ...)."""
+
     __tablename__ = "document_versions"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
     version: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32))
+    # "upload": read from a file; "manual": typed in by the owner, no file (Decision #42).
+    entry: Mapped[str] = mapped_column(String(16), default="upload", server_default="upload")
+    # The file's details: None for a typed-in version.
+    filename: Mapped[str | None] = mapped_column(String(255))  # ID numbers in the name are masked
+    mime_type: Mapped[str | None] = mapped_column(String(64))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    storage_key: Mapped[str | None] = mapped_column(String(32), unique=True)  # None once the file is removed
     document_type: Mapped[str | None] = mapped_column(String(64))
     run_id: Mapped[str | None] = mapped_column(String(36))
     review_flags: Mapped[list[Any]] = mapped_column(default=list)

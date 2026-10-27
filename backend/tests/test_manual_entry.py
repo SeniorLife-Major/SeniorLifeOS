@@ -154,7 +154,7 @@ class StorageTests(DatabaseCase):
         with self.engine.connect() as connection:
             detail = connection.execute(select(AuditEvent.detail)
                                         .where(AuditEvent.action == "document.manual_entry")).scalar_one()
-        self.assertEqual(detail, {"fields": sorted(TYPED_IDENTITY)})  # names, never values
+        self.assertEqual(detail, {"fields": sorted(TYPED_IDENTITY), "version": 1})  # names, never values
 
     def test_typing_in_a_card_already_uploaded_is_reported(self):
         uploaded = self.upload(IDENTITY)

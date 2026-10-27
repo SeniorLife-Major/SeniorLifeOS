@@ -35,11 +35,13 @@ def owned_documents(session: Session, owner_id: str, document_type: str | None =
     return list((session.execute(query)).scalars())
 
 
-def vault_identifier_hashes(session: Session, owner_id: str) -> dict[str, str]:
-    """keyed hash -> document id, for the owner's confirmed documents (what the graph expects)."""
-    rows = session.execute(select(IdentifierHash.digest, IdentifierHash.document_id)
-                                 .where(IdentifierHash.owner_id == owner_id))
-    return {digest: document_id for digest, document_id in rows}
+def vault_identifier_hashes(session: Session, owner_id: str, exclude_document: str | None = None) -> dict[str, str]:
+    """keyed hash -> document id, for the owner's confirmed documents (what the graph expects).
+    exclude_document: the document being renewed (the same card again is expected there)."""
+    query = select(IdentifierHash.digest, IdentifierHash.document_id).where(IdentifierHash.owner_id == owner_id)
+    if exclude_document:
+        query = query.where(IdentifierHash.document_id != exclude_document)
+    return {digest: document_id for digest, document_id in session.execute(query)}
 
 
 def vault_organization_names(session: Session, owner_id: str) -> dict[str, list[str]]:

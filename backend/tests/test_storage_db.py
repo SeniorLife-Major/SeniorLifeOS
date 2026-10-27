@@ -159,8 +159,7 @@ class MigrationTests(DatabaseCase):
 
 class EngineTests(DatabaseCase):
     def test_database_errors_never_show_the_values_sent(self):
-        row = {"id": "same-id", "owner_id": OWNER, "filename": "Meera-secret-name.png", "mime_type": "image/png",
-               "size_bytes": 1, "sha256": "0" * 64, "status": "processing"}
+        row = {"id": "same-id", "owner_id": "Meera-secret-name", "status": "processing"}
         with self.engine.begin() as connection:
             connection.execute(insert(Document).values(**row))
         with self.assertRaises(IntegrityError) as caught, self.engine.begin() as connection:
@@ -190,7 +189,7 @@ class UploadTests(DatabaseCase):
     def test_the_stored_file_is_encrypted_and_readable_back(self):
         result = self.upload(IDENTITY)
         with self.engine.connect() as connection:
-            key = connection.execute(text("SELECT storage_key FROM documents WHERE id = :id"),
+            key = connection.execute(text("SELECT storage_key FROM document_versions WHERE document_id = :id"),
                                      {"id": result["document_id"]}).scalar_one()
         on_disk = (self.root / key[:2] / key).read_bytes()
         self.assertNotIn(self.png[:64], on_disk)

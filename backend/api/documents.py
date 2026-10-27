@@ -55,6 +55,16 @@ class FieldDto(CamelModel):
     corrected_by_user: bool = False
 
 
+class ReplacementDto(CamelModel):
+    """A newer version being read, waiting for review, or refused; the current one stays in use."""
+    version: int
+    entry: Literal["upload", "manual"] = "upload"
+    status: str
+    review_flags: list[str] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+
+
 class DocumentDto(CamelModel):
     document_id: str
     entry: Literal["upload", "manual"] = "upload"  # manual: typed in by the owner, no file
@@ -73,6 +83,12 @@ class DocumentDto(CamelModel):
     warnings: list[str] = []
     errors: list[str] = []
     fields: dict[str, FieldDto] = {}
+    replacement: ReplacementDto | None = None
+
+
+class DeletedDto(CamelModel):
+    document_id: str
+    deleted: bool = True
 
 
 class ReviewDto(CamelModel):
@@ -92,6 +108,11 @@ class ReviewRequest(CamelModel):
 class ManualEntryRequest(CamelModel):
     document_type: str
     fields: dict[str, Any]  # field name -> text, or a list of rows for tests, medicines and bill items
+    owner_name: str | None = Field(default=None, max_length=200)
+
+
+class ManualVersionRequest(CamelModel):
+    fields: dict[str, Any]  # the type is the document's own
     owner_name: str | None = Field(default=None, max_length=200)
 
 
@@ -200,6 +221,43 @@ def create_manual_document(body: ManualEntryRequest, response: Response, actor: 
                            service: Service) -> ApiResponse[DocumentDto]:
     result = service.create_manual(actor, body.document_type, body.fields, owner_name=body.owner_name)
     return envelope(DocumentDto.model_validate(result), response)
+
+
+@router.post("/{document_id}/versions", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[DocumentDto],
+             summary="Replace a confirmed document with a newer copy (raw body), e.g. a renewed certificate")
+def replace_document(
+    document_id: str,
+    request: Request,
+    response: Response,
+    actor: Actor,
+    service: Service,
+    filename: Annotated[str, Query(min_length=1, max_length=255)],
+    data: Annotated[bytes, Depends(upload_body)],
+    owner_name: Annotated[str | None, Query(alias="ownerName", max_length=200)] = None,
+    cloud_ocr_consent: Annotated[bool, Query(alias="cloudOcrConsent")] = False,
+    medical_cloud_consent: Annotated[bool, Query(alias="medicalCloudConsent")] = False,
+    use_llm: Annotated[bool, Query(alias="useLlm")] = False,
+) -> ApiResponse[DocumentDto]:
+    mime_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    result = service.replace_upload(actor, document_id, filename, mime_type, data, owner_name=owner_name,
+                                    cloud_ocr_consent=cloud_ocr_consent,
+                                    medical_cloud_consent=medical_cloud_consent, use_llm=use_llm)
+    return envelope(DocumentDto.model_validate(result), response)
+
+
+@router.post("/{document_id}/versions/manual", status_code=status.HTTP_201_CREATED,
+             response_model=ApiResponse[DocumentDto], summary="Replace a confirmed document by typing in the new details")
+def replace_document_manually(document_id: str, body: ManualVersionRequest, response: Response, actor: Actor,
+                              service: Service) -> ApiResponse[DocumentDto]:
+    result = service.replace_manual(actor, document_id, body.fields, owner_name=body.owner_name)
+    return envelope(DocumentDto.model_validate(result), response)
+
+
+@router.delete("/{document_id}", response_model=ApiResponse[DeletedDto],
+               summary="Delete my document and everything stored for it")
+def delete_document(document_id: str, response: Response, actor: Actor, service: Service) -> ApiResponse[DeletedDto]:
+    service.delete(actor, document_id)
+    return envelope(DeletedDto(document_id=document_id), response)
 
 
 @router.get("", response_model=ApiResponse[list[DocumentDto]], summary="List my documents")
