@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
 
@@ -19,19 +19,22 @@ from backend.tools.cloud_ocr import GROQ_CHAT_URL, GROQ_DEFAULT_MODEL, CloudOcrE
 from backend.tools.vision_extract import (
     HEALTH_ID_MASK, extract_with_vision, fields_from_answer, health_id_boxes, prompt_for,
 )
-from test_cloud_ocr import FAKE_KEY, Recorder, groq_answer, page_with_qr
+from test_cloud_ocr import FAKE_KEY, Busy, Recorder, groq_answer, page_with_qr
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
 
 _no_env_file = patch("backend.tools.cloud_ocr.find_env_file", return_value=None)
+_no_wait = patch("backend.tools.cloud_ocr.cloud_limiter", lambda service: MagicMock())  # acquire() never waits
 
 
 def setUpModule():
     _no_env_file.start()  # the developer's own .env must not decide these tests
+    _no_wait.start()  # fake requests need no spacing
 
 
 def tearDownModule():
+    _no_wait.stop()
     _no_env_file.stop()
 
 
@@ -143,10 +146,20 @@ class RequestTests(unittest.TestCase):
 
     def test_failures_never_show_the_answer_body(self):
         recorder = Recorder({"error": {"message": f"echo {AADHAAR}"}}, status=429)
-        with self.assertRaises(CloudOcrError) as caught:
+        with self.assertRaises(CloudOcrError) as caught, patch("backend.tools.cloud_ocr.time.sleep"):
             extract_with_vision(str(UNIT / "sharp.png"), "image/png", [ocr_page([("x", 0.9)])], {}, "lab_report",
                                 FAKE_KEY, recorder.client())
         self.assertEqual(str(caught.exception), "the vision model failed (HTTP 429)")
+
+
+    def test_a_busy_model_is_waited_out_and_tried_again(self):
+        recorder = Busy(answer(PRESCRIPTION), [{"retry-after": "3"}])
+        with patch("backend.tools.cloud_ocr.time.sleep") as sleep:
+            found = extract_with_vision(str(UNIT / "sharp.png"), "image/png", [ocr_page([("x", 0.9)])], {},
+                                        "prescription", FAKE_KEY, recorder.client())
+        self.assertEqual(len(recorder.requests), 2)
+        sleep.assert_called_once_with(3.0)
+        self.assertEqual(found["name"], PRESCRIPTION["name"])
 
 
 @patch("backend.utils.privacy.find_env_file", return_value=None)

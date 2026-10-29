@@ -77,6 +77,14 @@ def _clean(text: Any) -> str:
     return " ".join(str(text or "").split())
 
 
+# "x 30 days", "× 30 days", "for 30 days" all mean "30 days"; stored one way whoever read it.
+DURATION_LEAD = re.compile(r"^(?:x|×|for)\s*(?=\d)", re.IGNORECASE)
+
+
+def clean_duration(text: Any) -> str | None:
+    return DURATION_LEAD.sub("", _clean(text)) or None
+
+
 def normalize_rows(key: str, rows: Any) -> list[dict[str, Any]] | None:
     """Checked copies of list rows. Each row may carry "problems" for the reviewer. None if empty."""
     if not isinstance(rows, list) or not rows:
@@ -98,8 +106,8 @@ def normalize_rows(key: str, rows: Any) -> list[dict[str, Any]] | None:
             if not clean["name"]:
                 problems.append("no test name")
         elif key == "medicines":
-            clean = {field: _clean(row.get(field)) or None
-                     for field in ("name", "form", "strength", "frequency", "duration")}
+            clean = {field: _clean(row.get(field)) or None for field in ("name", "form", "strength", "frequency")}
+            clean["duration"] = clean_duration(row.get("duration"))
             if not clean["name"]:
                 problems.append("no medicine name")
         else:  # items

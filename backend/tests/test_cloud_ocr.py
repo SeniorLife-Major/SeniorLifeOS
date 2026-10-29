@@ -9,7 +9,7 @@ import io
 import json
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
 import httpx
@@ -25,18 +25,24 @@ from backend.tools.cloud_ocr import (
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from backend.utils.privacy import keyed_hash
+from backend.utils.rate_limit import CLOUD_RATE_SETTING
 from test_privacy import FAKE_HASH_KEY, fake_aadhaar, hash_key_env
 
 _no_env_file = patch("backend.tools.cloud_ocr.find_env_file", return_value=None)
+REAL_CLOUD_LIMITER = cloud_ocr.cloud_limiter
+# Fake requests need no spacing; RateLimitTests below check the real limit.
+_no_wait = patch("backend.tools.cloud_ocr.cloud_limiter", lambda service: MagicMock())  # acquire() never waits
 
 
 def setUpModule():
     # Engine and model settings are read from .env; the real one must not decide these tests
     # (and loading it would copy every key into os.environ for the tests that follow).
     _no_env_file.start()
+    _no_wait.start()
 
 
 def tearDownModule():
+    _no_wait.stop()
     _no_env_file.stop()
 
 FAKE_KEY = "fake-vision-key-123"
@@ -84,6 +90,104 @@ class Recorder:
             png = base64.b64decode(body["requests"][0]["image"]["content"])
         with Image.open(io.BytesIO(png)) as image:
             return np.asarray(image.convert("RGB"))
+
+
+class Busy(Recorder):
+    """Answers "busy" (status, headers) for the first requests, then the normal answer."""
+
+    def __init__(self, answer, busy, status=429):
+        super().__init__(answer)
+        self.busy, self.busy_status = list(busy), status
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if self.busy:
+            return httpx.Response(self.busy_status, headers=self.busy.pop(0), json={"error": "busy"})
+        return httpx.Response(200, json=self.answer)
+
+
+@patch("backend.tools.cloud_ocr.time.sleep")
+class BusyRetryTests(unittest.TestCase):
+    IMAGE = np.full((60, 400, 3), 255, np.uint8)
+
+    def read(self, recorder):
+        return read_with_groq_vision(self.IMAGE, FAKE_KEY, recorder.client())
+
+    def test_a_busy_answer_is_waited_out_and_tried_again(self, sleep):
+        for status in (429, 503):
+            with self.subTest(status=status):
+                sleep.reset_mock()
+                recorder = Busy(groq_answer("Name: Meera Rao"), [{}], status)
+                self.assertEqual(self.read(recorder)[0]["text"], "Name: Meera Rao")
+                self.assertEqual(len(recorder.requests), 2)
+                self.assertEqual(recorder.requests[0].content, recorder.requests[1].content)  # same request
+                sleep.assert_called_once_with(2.0)
+
+    def test_the_wait_the_service_asks_for_is_used(self, sleep):
+        recorder = Busy(groq_answer("Name: Meera Rao"), [{"retry-after": "7"}])
+        self.read(recorder)
+        sleep.assert_called_once_with(7.0)
+
+    def test_it_gives_up_after_two_more_tries(self, sleep):
+        recorder = Busy(groq_answer("x"), [{}, {}, {}, {}])
+        with self.assertRaises(CloudOcrError) as caught:
+            self.read(recorder)
+        self.assertEqual(str(caught.exception), "Cloud OCR failed (HTTP 429)")
+        self.assertEqual(len(recorder.requests), 3)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [2.0, 4.0])
+
+    def test_a_long_or_unreadable_wait_is_not_done(self, sleep):
+        for header in ("60", "Wed, 21 Oct 2026 07:28:00 GMT"):
+            with self.subTest(header=header):
+                recorder = Busy(groq_answer("x"), [{"retry-after": header}])
+                with self.assertRaises(CloudOcrError):
+                    self.read(recorder)
+                self.assertEqual(len(recorder.requests), 1)
+        sleep.assert_not_called()
+
+    def test_other_failures_are_not_retried(self, sleep):
+        recorder = Recorder({"error": "x"}, status=500)
+        with self.assertRaises(CloudOcrError):
+            self.read(recorder)
+        self.assertEqual(len(recorder.requests), 1)
+        sleep.assert_not_called()
+
+    def test_google_vision_is_retried_too(self, sleep):
+        recorder = Busy(vision_answer([("Name: Meera Rao", 0.98, 10)]), [{}])
+        self.assertTrue(read_with_vision(self.IMAGE, FAKE_KEY, recorder.client()))
+        self.assertEqual(len(recorder.requests), 2)
+
+
+class CloudRateLimitTests(unittest.TestCase):
+    IMAGE = np.full((60, 400, 3), 255, np.uint8)
+
+    def test_every_attempt_waits_its_turn_under_the_limit(self):
+        limiter = MagicMock()
+        recorder = Busy(groq_answer("Name: Meera Rao"), [{}])
+        with patch.object(cloud_ocr, "cloud_limiter", return_value=limiter) as chosen,                 patch("backend.tools.cloud_ocr.time.sleep"):
+            read_with_groq_vision(self.IMAGE, FAKE_KEY, recorder.client())
+        chosen.assert_called_once_with("groq_vision")
+        self.assertEqual(limiter.acquire.call_count, 2)  # the retry is paid for too
+
+    def test_each_service_has_its_own_limit(self):
+        limiters = []
+        with patch.object(cloud_ocr, "cloud_limiter", side_effect=lambda s: limiters.append(s) or MagicMock()):
+            read_with_vision(self.IMAGE, FAKE_KEY, Recorder(vision_answer([])).client())
+            read_with_groq_vision(self.IMAGE, FAKE_KEY, Recorder(groq_answer("x")).client())
+        self.assertEqual(limiters, ["google_vision", "groq_vision"])
+
+    def test_the_real_limit_comes_from_the_setting(self):
+        with patch.object(cloud_ocr, "cloud_limiter", REAL_CLOUD_LIMITER),                 patch.dict(os.environ, {CLOUD_RATE_SETTING: "12"}):
+            limiter = cloud_ocr.cloud_limiter("google_vision")
+            self.assertIs(cloud_ocr.cloud_limiter("google_vision"), limiter)  # shared by every request
+        self.assertEqual(limiter.gap, 5.0)
+
+    def test_a_bad_setting_sends_nothing(self):
+        recorder = Recorder(groq_answer("x"))
+        with patch.object(cloud_ocr, "cloud_limiter", REAL_CLOUD_LIMITER),                 patch.dict(os.environ, {CLOUD_RATE_SETTING: "lots"}), self.assertRaises(CloudOcrError) as caught:
+            read_with_groq_vision(self.IMAGE, FAKE_KEY, recorder.client())
+        self.assertEqual(str(caught.exception), f"{CLOUD_RATE_SETTING} must be a number of requests per minute")
+        self.assertEqual(recorder.requests, [])
 
 
 class VisionRequestTests(unittest.TestCase):

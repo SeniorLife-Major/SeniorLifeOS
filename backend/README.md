@@ -265,6 +265,15 @@ Optional structured LLM selection nodes are included for document classification
 
 These variables are read from the environment, or from `backend/.env` / the repository root `.env` (shell variables win). LangSmith tracing settings are read the same way; see "LangSmith tracing" below.
 
+**Rate limits and retries (paid services).** Every OpenAI, Groq and Google Vision request waits its turn under a per-service limit, shared by the whole process (`utils/rate_limit.py`); requests are spaced evenly and the first goes at once. A busy answer is retried at most twice (429 or 503 for the cloud readers; 429 and server errors for the chat models, by their own libraries).
+
+| Setting | Default | Covers |
+|---|---|---|
+| `SENIORLIFE_LLM_MAX_PER_MINUTE` | 30 | each chat model provider (OpenAI, Groq) |
+| `SENIORLIFE_CLOUD_MAX_PER_MINUTE` | 20 | each cloud reader (Google Vision, Groq vision), retries included |
+
+This slows spending down; it does not cap the total, and each server process has its own limit. Set a spending limit on the provider's dashboard too.
+
 ### ID numbers in the vault
 
 Aadhaar, PAN, account, and insurance policy numbers are stored masked (`XXXX XXXX 9012`) plus a keyed hash (HMAC-SHA256) for duplicate detection; the full number is never stored. This needs `SENIORLIFE_HASH_KEY` (at least 32 characters) in the environment or `.env`. Without it, a document that contains an ID number stops with `failed_tool` instead of being published. Documents without ID numbers don't need the key. Never change the key after data is stored, or old hashes stop matching. Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
@@ -342,7 +351,7 @@ If local OCR leaves a required field missing, unsure, cut off or misread, or a p
 
   The Groq model returns plain text only, with no positions or confidence, so its values count as unsure and table layouts are read from the text. It took 11–88 s per page in testing.
 - **Conditions:** the state sets `cloud_ocr_consent: True` (medical documents also need `medical_cloud_consent: True`), and the engine's key is set in the environment or `.env`.
-- **Before sending:** image regions that show ID numbers, and any QR code, are painted black. The key goes in a request header, never in the URL.
+- **Before sending:** image regions that show ID numbers, and any QR code, are painted black. The key goes in a request header, never in the URL. An identity card, insurance card or passbook whose ID number local OCR could not locate is not sent at all (nothing to black out).
 - **Results:**
   - Cloud values only replace weak local ones, never ID numbers, and are always sent to review.
   - The cloud text is stored separately (`document.cloud_pages`) and masked the same way.

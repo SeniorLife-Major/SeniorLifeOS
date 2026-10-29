@@ -512,7 +512,7 @@ def make_prescription(rng, person):
         text = f"{index}. {form}. {name} {strength} {frequency} x {days} days"
         draw.text((90, 380 + (index - 1) * 70), text, font=font("arial.ttf", 30), fill=INK)
         rows.append({"name": name, "form": form, "strength": strength, "frequency": frequency,
-                     "duration": f"x {days} days"})
+                     "duration": f"{days} days"})  # stored without the printed "x"
     y = 380 + len(rows) * 70 + 40
     draw.text((60, y), "Advice: Walk 30 minutes daily. Review after one month.", font=font("arial.ttf", 26), fill=INK)
     signature(img, rng, 860, y + 120, doctor)

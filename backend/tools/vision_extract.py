@@ -34,6 +34,7 @@ from .cloud_ocr import (
     black_out,
     groq_model,
     id_boxes,
+    post_with_retry,
     qr_boxes,
 )
 from .ocr import page_images
@@ -162,7 +163,8 @@ def extract_with_vision(path: str, mime_type: str, local_pages: list[dict[str, A
     own_client = client is None
     client = client or httpx.Client(timeout=GROQ_TIMEOUT_SECONDS)
     try:
-        response = client.post(GROQ_CHAT_URL, json=body, headers={"Authorization": f"Bearer {api_key}"})
+        response = post_with_retry(client, GROQ_CHAT_URL, "groq_vision", json=body,
+                                   headers={"Authorization": f"Bearer {api_key}"})
     except httpx.HTTPError as exc:
         raise CloudOcrError(f"the vision model could not be reached ({type(exc).__name__})") from exc
     finally:

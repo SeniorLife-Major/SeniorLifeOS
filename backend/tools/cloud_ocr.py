@@ -21,6 +21,7 @@ import base64
 import io
 import os
 import re
+import time
 from typing import Any
 
 import cv2
@@ -30,6 +31,7 @@ from PIL import Image, ImageDraw
 
 from ..utils.env import find_env_file, load_env_file
 from ..utils.privacy import mask_ids_in_text
+from ..utils.rate_limit import CLOUD_RATE_SETTING, DEFAULT_CLOUD_PER_MINUTE, SpacedRateLimiter, rate_limiter
 from .ocr import group_lines, page_images, page_quality
 
 VISION_URL = "https://vision.googleapis.com/v1/images:annotate"
@@ -52,6 +54,9 @@ THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)  # reasoning some models
 TIMEOUT_SECONDS = 30
 GROQ_TIMEOUT_SECONDS = 120
 BLACKOUT_PAD = 6  # pixels added around a box before painting it black
+BUSY_STATUSES = {429, 503}  # the service is busy or rate limited: worth one more try after a wait
+MAX_RETRIES = 2
+MAX_WAIT_SECONDS = 20  # a longer wait asked for by the service is not done: the owner is waiting
 LINE_BREAKS = {"LINE_BREAK", "EOL_SURE_SPACE"}
 
 
@@ -154,6 +159,44 @@ def _piece(words: list[dict[str, Any]]) -> tuple[list[tuple[float, float]], str,
     return polygon, text.strip(), float(confidence)
 
 
+def busy_wait(response: httpx.Response, attempt: int) -> float | None:
+    """Seconds to wait before trying again: the service's Retry-After, else 2 then 4 seconds.
+    None when the service asks for longer than MAX_WAIT_SECONDS (or for a date): give up now."""
+    asked = response.headers.get("retry-after")
+    if asked is None:
+        return float(2 ** (attempt + 1))
+    try:
+        seconds = float(asked)
+    except ValueError:
+        return None
+    return max(seconds, 0.0) if seconds <= MAX_WAIT_SECONDS else None
+
+
+def cloud_limiter(service: str) -> SpacedRateLimiter:
+    """The shared requests-per-minute limit of one paid cloud service (SENIORLIFE_CLOUD_MAX_PER_MINUTE)."""
+    try:
+        return rate_limiter(service, CLOUD_RATE_SETTING, DEFAULT_CLOUD_PER_MINUTE)
+    except RuntimeError as exc:  # a bad setting: nothing is sent, the local result is kept
+        raise CloudOcrError(str(exc)) from None
+
+
+def post_with_retry(client: httpx.Client, url: str, service: str, **kwargs: Any) -> httpx.Response:
+    """POST, and when the service answers busy (429 or 503), wait and send the same request
+    again, at most MAX_RETRIES times. Any other answer is returned at once. Every attempt,
+    a retry too, first waits its turn under the service's per-minute limit (credits are paid)."""
+    limiter = cloud_limiter(service)
+    for attempt in range(MAX_RETRIES + 1):
+        limiter.acquire()
+        response = client.post(url, **kwargs)
+        if response.status_code not in BUSY_STATUSES or attempt == MAX_RETRIES:
+            return response
+        wait = busy_wait(response, attempt)
+        if wait is None:
+            return response
+        time.sleep(wait)
+    return response
+
+
 def read_with_vision(image: np.ndarray, api_key: str, client: httpx.Client | None = None):
     """Send one (already blacked-out) image; return (box polygon, text, confidence) pieces."""
     buffer = io.BytesIO()
@@ -166,7 +209,8 @@ def read_with_vision(image: np.ndarray, api_key: str, client: httpx.Client | Non
     own_client = client is None
     client = client or httpx.Client(timeout=TIMEOUT_SECONDS)
     try:
-        response = client.post(VISION_URL, json=body, headers={"X-Goog-Api-Key": api_key})
+        response = post_with_retry(client, VISION_URL, "google_vision", json=body,
+                                   headers={"X-Goog-Api-Key": api_key})
     except httpx.HTTPError as exc:
         raise CloudOcrError(f"Cloud OCR could not be reached ({type(exc).__name__})") from exc
     finally:
@@ -224,7 +268,8 @@ def read_with_groq_vision(image: np.ndarray, api_key: str, client: httpx.Client 
     own_client = client is None
     client = client or httpx.Client(timeout=GROQ_TIMEOUT_SECONDS)
     try:
-        response = client.post(GROQ_CHAT_URL, json=body, headers={"Authorization": f"Bearer {api_key}"})
+        response = post_with_retry(client, GROQ_CHAT_URL, "groq_vision", json=body,
+                                   headers={"Authorization": f"Bearer {api_key}"})
     except httpx.HTTPError as exc:
         raise CloudOcrError(f"Cloud OCR could not be reached ({type(exc).__name__})") from exc
     finally:

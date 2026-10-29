@@ -123,6 +123,17 @@ class ParsingTests(unittest.TestCase):
             ("Omeprazole", "Cap", "20mg", "BD", None),
             ("Cough Relief", "Syp", "10 ml", "at night", "for 5 days")])
 
+    def test_durations_are_stored_one_way_whoever_read_them(self):
+        # Local OCR keeps "x 30 days" as printed; the vision model and typed-in rows give "30 days".
+        for raw in ("x 30 days", "X30 days", "× 30 days", "for 30 days", "For  30 days", "30 days"):
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_rows("medicines", [{"name": "Metformin", "duration": raw}])[0]["duration"],
+                                 "30 days")
+        for raw, kept in (("till review", "till review"), ("", None), (None, None)):  # no number: left as it is
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_rows("medicines", [{"name": "Metformin", "duration": raw}])[0]["duration"],
+                                 kept)
+
     def test_bill_items_stop_at_the_total(self):
         page = {"page": 1, "text": "S.No Description Qty Rate Amount\n1 Metformin 500mg (10 tabs) 2 60.00 120.00\n"
                                    "2 Consultation 500.00\nSub Total 620.00\nGrand Total: ₹620.00\n3 After 1.00"}
