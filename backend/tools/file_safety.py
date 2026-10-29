@@ -97,8 +97,9 @@ def type_matches(head: bytes, mime_type: str) -> bool:
 
 
 def image_problems(path: Path) -> tuple[list[str], list[str]]:
-    """(problems, reupload). Reads only the image header: the size is known before any
-    pixel is decoded."""
+    """(problems, reupload). The size comes from the header first, so a huge image is refused
+    before any pixel is decoded. Then the whole image is decoded once: a file cut off part way
+    has a good header but fails here (Pillow refuses truncated images by default)."""
     try:
         with Image.open(path) as image:
             width, height = image.size
@@ -108,6 +109,11 @@ def image_problems(path: Path) -> tuple[list[str], list[str]]:
         return [], ["The image file is damaged"]
     if width * height > MAX_IMAGE_PIXELS:
         return ["The image is too large to open safely"], []
+    try:
+        with Image.open(path) as image:
+            image.load()
+    except Exception:
+        return [], ["The image file is damaged"]
     return [], []
 
 

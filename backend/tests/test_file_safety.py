@@ -4,6 +4,7 @@ Risky PDFs are built by hand here, so no real malware is used. The virus scanner
 replaced by stand-ins: a fake MpCmdRun result, and a small local ClamAV-like server.
 """
 
+import io
 import json
 import os
 import socket
@@ -183,6 +184,17 @@ class ImageBombTests(TempFiles):
     def test_damaged_image_asks_for_a_new_upload(self):
         result = check_file(self.write("cut.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 20), "image/png")
         self.assertEqual((result.problems, result.reupload), ([], ["The image file is damaged"]))
+
+    def test_image_cut_off_part_way_asks_for_a_new_upload(self):
+        # The header (and so the size) is fine; the pixels stop half way, as in a broken download.
+        for name, kind in (("photo.png", "PNG"), ("photo.jpg", "JPEG")):
+            with self.subTest(kind=kind):
+                whole = io.BytesIO()
+                Image.effect_noise((600, 400), 64).convert("RGB").save(whole, kind)
+                data = whole.getvalue()
+                self.assertEqual(check_file(self.write(name, data), f"image/{kind.lower()}").reupload, [])
+                result = check_file(self.write(name, data[: len(data) // 2]), f"image/{kind.lower()}")
+                self.assertEqual((result.problems, result.reupload), ([], ["The image file is damaged"]))
 
 
 class FakeClamd:

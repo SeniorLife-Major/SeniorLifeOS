@@ -52,21 +52,52 @@ class GraphUnlabelledIdTests(unittest.TestCase):
         with patch("backend.graphs.document_graph.read_document", return_value=[page]), hash_key_env(key):
             return build_document_graph().invoke(upload_state(UNIT / "sharp.png", "image/png", doc_type, **extra))
 
-    def test_unlabelled_aadhaar_on_an_id_card_is_masked(self, _):
-        page = ocr_page([("SAMPLE IDENTITY CARD", 0.99), ("Name: Meera Rao", 0.99),
-                         ("DOB: 17/09/1950", 0.99), (AADHAAR, 0.99)])
-        result = self.run_upload(page, "identity")
+    # A residence proof that also prints an Aadhaar number: no ID field is read on this type.
+    RESIDENCE_WITH_BARE_AADHAAR = [("SAMPLE RESIDENCE CERTIFICATE", 0.99), ("Name: Meera Rao", 0.99),
+                                   ("State: Maharashtra", 0.99), ("Issue date: 01/06/2026", 0.99), (AADHAAR, 0.99)]
+
+    def test_unlabelled_aadhaar_with_no_id_field_is_masked(self, _):
+        result = self.run_upload(ocr_page(self.RESIDENCE_WITH_BARE_AADHAAR), "residence_proof")
         self.assertEqual(result["status"], "confirmed")
         self.assertIn("protect_identifiers:none", result["events"])  # no ID *field* was extracted
         self.assertIn("XXXX XXXX 7973", result["document"]["pages"][0]["text"])
-        self.assertEqual(result["document"]["pages"][0]["lines"][3]["text"], "XXXX XXXX 7973")
+        self.assertEqual(result["document"]["pages"][0]["lines"][4]["text"], "XXXX XXXX 7973")
         self.assertNotIn(AADHAAR, json.dumps(result, default=str))
 
     def test_masking_needs_no_hash_key_when_no_id_field_is_stored(self, _):
-        page = ocr_page([("Name: Meera Rao", 0.99), ("DOB: 17/09/1950", 0.99), (AADHAAR, 0.99)])
-        result = self.run_upload(page, "identity", key=None)
+        result = self.run_upload(ocr_page(self.RESIDENCE_WITH_BARE_AADHAAR), "residence_proof", key=None)
         self.assertEqual(result["status"], "confirmed")
         self.assertNotIn(AADHAAR, json.dumps(result, default=str))
+
+    ID_CARD = [("SAMPLE IDENTITY CARD", 0.99), ("Name: Meera Rao", 0.99), ("DOB: 17/09/1950", 0.99), (AADHAAR, 0.99)]
+
+    def test_unlabelled_aadhaar_on_an_id_card_is_found_by_its_check_digit_and_reviewed(self, _):
+        result = self.run_upload(ocr_page(self.ID_CARD), "identity")
+        self.assertEqual(result["status"], "needs_review")
+        field = result["extracted_fields"]["aadhaar_number"]
+        self.assertEqual((field["layout"], field["line"]), ("checksum", 4))
+        self.assertIn("aadhaar_number: found by its check digit (printed with no label), please check",
+                      result["review_flags"])
+
+    def test_the_confirmed_card_stores_the_aadhaar_masked_and_hashed(self, _):
+        result = self.run_upload(ocr_page(self.ID_CARD), "identity",
+                                 review_decision={"action": "confirm", "reviewer_id": "senior-meera"})
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["vault_record"]["confirmed_fields"]["aadhaar_number"]["value"], "XXXX XXXX 7973")
+        self.assertIn("aadhaar_number", result["identifier_hashes"])
+        self.assertNotIn(AADHAAR.replace(" ", ""), json.dumps(result, default=str))
+
+    def test_no_guess_when_the_card_shows_two_different_valid_numbers_or_none(self, _):
+        other = fake_aadhaar(7)
+        for extra in ([(other, 0.99)],  # two different valid numbers: which one is the holder's?
+                      []):
+            lines = self.ID_CARD + extra if extra else self.ID_CARD[:3] + [("3399 8698 7974", 0.99)]  # bad check digit
+            result = self.run_upload(ocr_page(lines), "identity")
+            self.assertNotIn("aadhaar_number", result["extracted_fields"])
+
+    def test_the_rule_is_only_for_identity_documents(self, _):
+        result = self.run_upload(ocr_page(self.RESIDENCE_WITH_BARE_AADHAAR), "residence_proof")
+        self.assertNotIn("aadhaar_number", result["extracted_fields"])
 
     def test_unlabelled_pan_next_to_a_labelled_aadhaar(self, _):
         page = ocr_page([("Name: Meera Rao", 0.99), ("DOB: 17/09/1950", 0.99), (f"Aadhaar: {AADHAAR}", 0.99),

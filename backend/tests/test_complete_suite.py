@@ -73,6 +73,42 @@ class TypedValueTests(unittest.TestCase):
         self.assertIs(suite.typed_value({"shown": "", "value": rows}), rows)
 
 
+class IsolatedEnvironmentTests(unittest.TestCase):
+    """--live must let the Groq code find .env; offline must not. Only checks which function
+    is in place; the real .env is never read here."""
+
+    LIVE_MODULES = ("backend.tools.cloud_ocr", "backend.agents.models")
+
+    def fresh_import_inside(self, live: bool) -> dict:
+        """Import the Groq modules for the first time inside the block, as a suite run does."""
+        import importlib
+        import sys
+
+        import backend.agents
+        import backend.tools
+        saved = {name: importlib.import_module(name) for name in self.LIVE_MODULES}
+        for name in self.LIVE_MODULES:
+            del sys.modules[name]
+        try:
+            with suite.isolated_environment(live):
+                return {name: importlib.import_module(name).find_env_file for name in self.LIVE_MODULES}
+        finally:
+            sys.modules.update(saved)  # the rest of the tests keep the modules they already use
+            backend.tools.cloud_ocr = saved["backend.tools.cloud_ocr"]
+            backend.agents.models = saved["backend.agents.models"]
+
+    def test_live_mode_gives_the_groq_code_the_real_env_finder(self):
+        from backend.utils.env import find_env_file
+        for name, finder in self.fresh_import_inside(live=True).items():
+            self.assertIs(finder, find_env_file, name)
+
+    def test_offline_mode_still_blocks_the_groq_code(self):
+        import importlib
+        with suite.isolated_environment(False):
+            for name in self.LIVE_MODULES:
+                self.assertIsNone(importlib.import_module(name).find_env_file(), name)
+
+
 class SquashTests(unittest.TestCase):
     def test_case_and_spacing_are_ignored(self):
         self.assertEqual(suite.squash("  Kavita\n  SHARMA "), "kavita sharma")

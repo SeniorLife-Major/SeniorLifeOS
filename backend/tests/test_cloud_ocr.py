@@ -335,6 +335,27 @@ class GraphCloudOcrTests(unittest.TestCase):
         self.assertIn("Card XXXXXX814K", result["document"]["cloud_pages"][0]["text"])
         self.assertNotIn("HAVPC1814K", json.dumps(result, default=str))
 
+    def test_id_card_whose_number_was_not_found_is_never_sent(self, _):
+        # Local OCR read the card but not the Aadhaar number, so its place on the page is unknown
+        # and it could not be blacked out: the page must stay on the machine.
+        self.LOCAL = [("Name: Meera Ra0", 0.62), ("DOB: 01/01/1950", 0.99), ("2377 72B3 5757", 0.4)]
+        recorder = Recorder(vision_answer(self.CLOUD))
+        result = self.run_upload(recorder, doc_type="identity", cloud_ocr_consent=True)
+        self.assertEqual(recorder.requests, [])
+        self.assertIn("cloud_ocr:id_not_located", result["events"])
+        self.assertIn("Cloud OCR skipped: the ID number on this document could not be found on the page to "
+                      "black it out", result["warnings"])
+        self.assertEqual(result["extracted_fields"]["name"]["value"], "Meera Ra0")  # local result kept
+        self.assertEqual(result["status"], "needs_review")
+
+    def test_id_card_whose_number_was_found_is_sent_with_it_blacked_out(self, _):
+        self.LOCAL = [("Name: Meera Ra0", 0.62), ("DOB: 01/01/1950", 0.99), (f"Aadhaar: {AADHAAR}", 0.99)]
+        recorder = Recorder(vision_answer(self.CLOUD))
+        result = self.run_upload(recorder, doc_type="identity", cloud_ocr_consent=True)
+        self.assertEqual(len(recorder.requests), 1)
+        self.assertNotIn("cloud_ocr:id_not_located", result["events"])
+        self.assertTrue((recorder.sent_image()[80:110, 10:600] == 0).all())  # the Aadhaar line
+
     def test_cloud_is_asked_only_once(self, _):
         recorder = Recorder(vision_answer([("Name: Meera Ra0", 0.5, 0)]))  # the cloud is unsure too
         result = self.run_upload(recorder, cloud_ocr_consent=True)

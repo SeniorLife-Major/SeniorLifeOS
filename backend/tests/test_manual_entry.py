@@ -74,6 +74,18 @@ class GraphTests(unittest.TestCase):
         row = result["vault_record"]["confirmed_fields"]["medicines"]["value"][0]
         self.assertEqual((row["name"], row["strength"], row["frequency"]), ("Metformin", "500 mg", "1-0-1"))
 
+    def test_typed_in_bill_may_list_its_items(self):
+        bill = {"name": "Meera Rao", "provider": "Demo Care Hospital", "bill_date": "10/10/2026",
+                "total_amount": "1,250.50", "items": [{"description": "Consultation", "amount": "500"},
+                                                      {"description": "Dressing", "amount": "750.50"}]}
+        result = self.run_graph("medical_bill", bill)
+        self.assertEqual(result["status"], "confirmed")
+        rows = result["vault_record"]["confirmed_fields"]["items"]["value"]
+        self.assertEqual([(row["description"], row["amount"]) for row in rows],
+                         [("Consultation", 500.0), ("Dressing", 750.5)])
+        without = self.run_graph("medical_bill", {key: value for key, value in bill.items() if key != "items"})
+        self.assertEqual(without["status"], "confirmed")  # the items are not required
+
     def test_invalid_values_are_refused_with_reasons_and_no_full_number_is_left(self):
         wrong = str(int(DIGITS) + 1)  # fails the Aadhaar checksum
         cases = [
@@ -89,6 +101,9 @@ class GraphTests(unittest.TestCase):
                                                                                 "medicines: required"]),
             ("prescription", {**TYPED_PRESCRIPTION, "medicines": [{"strength": "500 mg"}]},
              ["medicines row 1: no medicine name"]),
+            ("medical_bill", {"name": "Meera Rao", "provider": "Demo Care Hospital", "bill_date": "10/10/2026",
+                              "total_amount": "100", "items": [{"description": "Dressing", "amount": "abc"}]},
+             ["items row 1: amount is not readable"]),
         ]
         for document_type, fields, errors in cases:
             with self.subTest(errors=errors):

@@ -11,7 +11,7 @@ from statistics import fmean
 from unittest.mock import patch
 
 from backend.demo.demo_cases import document_success_state
-from backend.graphs.document_graph import OCR_MAX_ATTEMPTS, build_document_graph
+from backend.graphs.document_graph import NO_KNOWN_LABELS, OCR_MAX_ATTEMPTS, build_document_graph
 from backend.tools.demo_tools import extract_fields_from_pages
 from backend.tools.ocr import OcrEngineError
 from test_ocr import BENCHMARK, RUN_SLOW, UNIT, ensure_fixtures
@@ -147,6 +147,39 @@ class UploadedFileTests(unittest.TestCase):
         self.assertEqual(sorted(result["review_flags"]), [
             "annual_income: low confidence (0.85)", "issue_date: low confidence (0.85)", "name: low confidence (0.85)",
         ])
+
+    # A clear photo of a form whose labels the reader doesn't know (none of these are labels).
+    UNKNOWN_LABELS = [("INCOME DECLARATION", 0.99), ("Applicant Meera Rao", 0.98), ("Yearly earnings Rs. 1,20,000", 0.97)]
+
+    def test_clear_page_with_unknown_labels_goes_to_review_not_reupload(self, _):
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(self.UNKNOWN_LABELS)]):
+            result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("extract_content:no_known_labels", result["events"])
+        self.assertIn(NO_KNOWN_LABELS, result["warnings"])
+        for key in ("name", "annual_income", "issue_date"):
+            self.assertIn(f"{key}: missing or invalid", result["review_flags"])
+
+    def test_owner_types_in_every_field_of_a_clear_unknown_form(self, _):
+        decision = {"action": "confirm", "reviewer_id": "senior-meera",
+                    "edits": {"name": "Meera Rao", "annual_income": "Rs. 1,20,000", "issue_date": "01/06/2026"}}
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(self.UNKNOWN_LABELS)]):
+            result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate",
+                                                 review_decision=decision))
+        self.assertEqual(result["status"], "confirmed")
+        fields = result["vault_record"]["confirmed_fields"]
+        self.assertEqual(fields["annual_income"]["value"], 120000)
+        self.assertEqual(fields["issue_date"]["value"], "2026-06-01")
+        self.assertEqual(fields["name"]["source_ref"], "document:doc-upload-001:entered_by_owner")
+        self.assertTrue(fields["name"]["corrected_by_user"])
+
+    def test_unclear_page_with_no_fields_still_asks_for_reupload(self, _):
+        for page in (ocr_page(self.UNKNOWN_LABELS, quality=0.8),  # OCR unsure of the page
+                     ocr_page(self.UNKNOWN_LABELS, blurry=True, quality=0.85)):  # blurry photo
+            with patch("backend.graphs.document_graph.read_document", return_value=[page]):
+                result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
+            self.assertEqual(result["status"], "needs_reupload")
+            self.assertIn("extract_content:no_fields", result["events"])
 
     def test_full_id_number_is_masked_in_every_ocr_line(self, _):
         with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(IDENTITY_LINES)]):

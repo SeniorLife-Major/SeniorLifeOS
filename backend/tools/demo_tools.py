@@ -10,7 +10,7 @@ import re
 from datetime import date
 from typing import Any
 
-from ..utils.privacy import is_valid_aadhaar, is_valid_ifsc, is_valid_pan
+from ..utils.privacy import AADHAAR_PATTERN, is_valid_aadhaar, is_valid_ifsc, is_valid_pan
 from .layout import STOP, label_above, no_colon_pair, pairs_in_line
 from .medical import LIST_FIELDS, normalize_rows, parse_money
 
@@ -190,6 +190,13 @@ def extract_fields_from_pages(pages: list[dict[str, Any]], document_type: str | 
                                                       layout="label_above"))
         for key, entry in layout_found.items():
             found.setdefault(key, entry)
+        if document_type == "identity" and "aadhaar_number" not in found:
+            # ID cards often print the number with no label. The check digit makes a wrong
+            # 12-digit number very unlikely to pass; two different valid numbers are not guessed.
+            hits = [(number, match.group(0)) for number, line in enumerate(text_lines, start=1)
+                    for match in AADHAAR_PATTERN.finditer(line) if is_valid_aadhaar(match.group(0))]
+            if len({re.sub(r"\D", "", text) for _, text in hits}) == 1:
+                found["aadhaar_number"] = item(hits[0][1], hits[0][0], layout="checksum")
     return found
 
 

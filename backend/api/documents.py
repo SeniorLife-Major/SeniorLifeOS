@@ -96,6 +96,7 @@ class ReviewDto(CamelModel):
     document_type: str | None = None
     candidates: dict[str, Any]
     missing_fields: list[str] = []  # required fields OCR didn't find; the owner may fill them in
+    optional_fields: list[str] = []  # optional fields not read (e.g. the Aadhaar); the owner may add them
     flags: list[str]
     errors: list[str] = []
 

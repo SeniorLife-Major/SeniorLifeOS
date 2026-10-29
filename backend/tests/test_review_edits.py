@@ -65,8 +65,32 @@ class OwnerFillsInMissingFieldTests(unittest.TestCase):
         result = self.confirm(UNLABELLED_NAME, {"name": "Meera Rao", "annual_income": "5,00,000"})
         self.assertEqual(result["status"], "needs_review")
         self.assertEqual(result["errors"],
-                         ["Edits may only correct extracted fields or fill in this document's required fields"])
+                         ["Edits may only correct extracted fields or fill in this document's required or optional fields"])
         self.assertNotIn("vault_record", result)
+
+    def test_the_owner_adds_an_optional_id_number_ocr_missed(self, _):
+        lines = [line for line in UNLABELLED_NAME if not line[0].startswith("Aadhaar")]  # no Aadhaar read
+        result = self.confirm(lines, {"name": "Meera Rao", "aadhaar_number": AADHAAR})
+        self.assertEqual(result["status"], "confirmed")
+        field = result["vault_record"]["confirmed_fields"]["aadhaar_number"]
+        self.assertEqual(field["value"], "XXXX XXXX 7973")
+        self.assertEqual(field["source_ref"], "document:doc-upload-001:entered_by_owner")
+        self.assertIn("aadhaar_number", result["identifier_hashes"])
+        self.assertNotIn(AADHAAR.replace(" ", ""), json.dumps(result, default=str))
+
+    def test_an_added_optional_field_is_checked_like_a_read_one(self, _):
+        lines = [line for line in UNLABELLED_NAME if not line[0].startswith("Aadhaar")]
+        wrong = AADHAAR[:-1] + "4"  # one digit off: fails the check digit
+        result = self.confirm(lines, {"name": "Meera Rao", "aadhaar_number": wrong})
+        self.assertEqual(result["status"], "needs_review")  # refused, not silently dropped
+        self.assertEqual(result["errors"], ["Correct these fields: aadhaar_number"])
+        self.assertNotIn("vault_record", result)
+
+    def test_optional_fields_of_another_type_are_still_refused(self, _):
+        result = self.confirm(PASSBOOK_WITHOUT_ACCOUNT, {"account_number": "44719041229", "aadhaar_number": AADHAAR},
+                              doc_type="bank_passbook")
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("required or optional fields", result["errors"][0])
 
     def test_a_filled_in_value_is_checked_like_a_read_one(self, _):
         lines = [line for line in UNLABELLED_NAME if not line[0].startswith("DOB")]
@@ -106,6 +130,7 @@ class OwnerFillsInMissingFieldTests(unittest.TestCase):
             paused = graph.invoke(upload_state(UNIT / "sharp.png", "image/png", "identity", use_interrupt=True),
                                   config)
             self.assertEqual(paused["__interrupt__"][0].value["missing_fields"], ["name"])
+            self.assertEqual(paused["__interrupt__"][0].value["optional_fields"], ["pan_number"])  # Aadhaar was read
             finished = graph.invoke(Command(resume={"action": "confirm", "reviewer_id": OWNER,
                                                     "edits": {"name": "Meera Rao"}}), config)
         self.assertEqual(finished["status"], "confirmed")

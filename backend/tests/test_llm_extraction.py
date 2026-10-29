@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.agents import models
 from backend.agents.llm_agents import extract_missing_fields, invoke_structured
-from backend.graphs.document_graph import build_document_graph
+from backend.graphs.document_graph import NO_KNOWN_LABELS, build_document_graph
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -178,6 +178,24 @@ class GraphLlmExtractionTests(unittest.TestCase):
         result = self.run_upload(CERTIFICATE, fake, use_llm=False)
         self.assertEqual(fake.prompts, [])
         self.assertNotIn("llm_extract", " ".join(result["events"]))
+
+    def test_id_numbers_already_read_are_hidden_from_the_model(self, _):
+        # Spaced like this, no pattern recognises the policy number; only the value read is known.
+        lines = [("Name: Meera Rao", 0.99), ("Policy No: PLCY 4471 9041", 0.99), ("Cover for 2 members", 0.99)]
+        fake = FakeStructuredModel({})
+        with patch("backend.graphs.document_graph.read_document", return_value=[ocr_page(lines)]), \
+                patch("backend.agents.llm_agents.structured_model", fake), hash_key_env(FAKE_HASH_KEY):
+            build_document_graph().invoke(upload_state(UNIT / "sharp.png", "image/png", "health_insurance",
+                                                       use_llm=True))
+        self.assertEqual(len(fake.prompts), 1)
+        self.assertNotIn("4471 9041", fake.prompts[0])
+        self.assertIn("Policy No: [POLICY_NUMBER_1]", fake.prompts[0])
+
+    def test_model_finds_nothing_on_a_clear_page_so_the_owner_types_it_in(self, _):
+        result = self.run_upload([("INCOME DECLARATION", 0.99), ("Applicant Meera Rao", 0.98)], FakeStructuredModel({}))
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("llm_extract:found_0_of_3", result["events"])
+        self.assertIn(NO_KNOWN_LABELS, result["warnings"])
 
     def test_nothing_found_anywhere_asks_for_a_reupload(self, _):
         result = self.run_upload([("INCOME CERTIFICATE", 0.99), ("illegible", 0.6)], FakeStructuredModel({}))

@@ -40,6 +40,7 @@ from ..graphs.document_graph import (
     MAX_UPLOAD_BYTES,
     REQUIRED_FIELDS,
     build_document_graph,
+    missing_optional,
     missing_required,
 )
 from ..utils.checkpoints import forget_run
@@ -295,8 +296,10 @@ class DocumentService:
         else:  # an earlier decision needs correcting
             candidates, flags = values.get("normalized_fields", {}), values.get("review_flags", [])
         document_type = values.get("document_type")
+        known = document_type in REQUIRED_FIELDS
         return {"document_id": document_id, "document_type": document_type, "candidates": candidates,
-                "missing_fields": missing_required(document_type, candidates) if document_type in REQUIRED_FIELDS else [],
+                "missing_fields": missing_required(document_type, candidates) if known else [],
+                "optional_fields": missing_optional(document_type, candidates) if known else [],
                 "flags": flags, "errors": values.get("errors", [])}
 
     def review(self, owner_id: str, document_id: str, action: str,

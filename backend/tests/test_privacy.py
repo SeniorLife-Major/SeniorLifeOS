@@ -230,11 +230,26 @@ class RedactTests(unittest.TestCase):
         text = "Policy: GOLDPLAN\nThis policy covers 5 members"
         self.assertEqual(redact(text), (text, {}))
 
-    def test_twelve_digits_with_bad_checksum_are_kept(self):
+    def test_twelve_digits_with_bad_checksum_are_not_called_aadhaar_but_still_hidden(self):
+        # A misread Aadhaar fails its check digit but is still nearly the number (full-test-review #3).
         not_aadhaar = break_checksum(fake_aadhaar(3))
         safe, mapping = redact(f"Receipt number: {not_aadhaar}")
-        self.assertIn(not_aadhaar, safe)
-        self.assertEqual(mapping, {})
+        self.assertEqual(safe, "Receipt number: [ID_1]")
+        self.assertEqual(mapping, {"[ID_1]": not_aadhaar})
+
+    def test_id_shaped_values_whose_label_was_misread_or_missing_are_hidden(self):
+        lines = {"Joseph D'Souza HLT/2024/288382": "HLT/2024/288382",  # policy number under its label
+                 "A/e No. ........... :36762196150346": "36762196150346",  # "A/c" misread
+                 "MID64277000 2,00,000": "MID64277000"}
+        for line, secret in lines.items():
+            safe, mapping = redact(line)
+            self.assertNotIn(secret, safe, line)
+            self.assertIn(secret, mapping.values(), line)
+
+    def test_dates_amounts_ifsc_and_medical_values_stay_for_the_model(self):
+        text = ("Valid till 28-Aug-2029, issued 23/12/2026 and 2026-06-01\nTotal Rs. 1,45,000/- paid 2,450.00\n"
+                "IFSC: SBIN0001234\nTab. Metformin 500 mg 1-0-1 x 30 days\nHbA1c 7.8 % 4.0-5.6\nPIN 560001")
+        self.assertEqual(redact(text), (text, {}))
 
     def test_same_value_gets_same_placeholder(self):
         first, second = fake_aadhaar(11), fake_aadhaar(12)

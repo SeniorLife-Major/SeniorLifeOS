@@ -60,6 +60,13 @@ PHONE_PATTERN = re.compile(r"(?<![\d+])(?:\+91[ -]?)?[6-9]\d{9}(?!\d)")
 EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 # Policy numbers have no fixed format, so only hide them after a "Policy No" label.
 POLICY_PATTERN = re.compile(r"(?i)\bpolicy\s*(?:no\.?|number|#)?\s*[:.\-]?\s*((?=[A-Z0-9/-]*\d)[A-Z0-9][A-Z0-9/-]{5,29})\b")
+# Prompts only: an ID whose label OCR misread, or that has no label, still looks like one.
+# A plain run of 9-18 digits (amounts keep their commas, so they stay), and a code that mixes
+# capitals, "/" or "-" with at least 5 digits (HLT/2024/288382, MID64277000).
+LONG_NUMBER_PATTERN = re.compile(r"(?<![\w,./-])\d{9,18}(?![\w,./-])")
+CODE_PATTERN = re.compile(r"(?<![\w/-])(?=[A-Z0-9/-]*[A-Z/-])(?=(?:[A-Z/-]*\d){5})[A-Z0-9][A-Z0-9/-]{5,29}(?![\w/-])")
+# Dates look like codes but are needed by the model: 23/12/2026, 2026-12-23, 28-Aug-2029.
+DATE_LIKE = re.compile(r"\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}[-/. ]?[A-Za-z]{3,9}[-/. ,]*\d{4}")
 
 
 def verhoeff_check_digit(digits: str) -> str:
@@ -128,6 +135,12 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
         whole = match.group(0)
         return whole[:start] + placeholder("POLICY", match.group(1)) + whole[end:]
 
+    def replace_code(match: re.Match) -> str:
+        found = match.group(0)
+        if DATE_LIKE.fullmatch(found) or is_valid_ifsc(found):  # dates are needed; IFSC is public
+            return found
+        return placeholder("ID", found)
+
     safe = text
     for label, value in (known_values or {}).items():
         value = (value or "").strip()
@@ -140,6 +153,11 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
     safe = PHONE_PATTERN.sub(lambda m: placeholder("PHONE", m.group(0)), safe)
     safe = EMAIL_PATTERN.sub(lambda m: placeholder("EMAIL", m.group(0)), safe)
     safe = PAN_PATTERN.sub(replace_pan, safe)
+    # Anything still shaped like an ID: an Aadhaar-shaped number whose check digit fails (a
+    # misread Aadhaar is still nearly the number), a long plain number, an ID-like code.
+    safe = AADHAAR_PATTERN.sub(lambda m: placeholder("ID", m.group(0)), safe)
+    safe = LONG_NUMBER_PATTERN.sub(lambda m: placeholder("ID", m.group(0)), safe)
+    safe = CODE_PATTERN.sub(replace_code, safe)
     return safe, mapping
 
 

@@ -62,6 +62,8 @@ SCORE_MEANING = {
     "documents_after_review": "fields right in the vault after the owner corrects what was wrong (what the pipeline can deliver)",
     "auto_accept_safety": "fields confirmed WITHOUT review that are right (a wrong one is a critical problem)",
     "classification": "pages whose type was found without being told (no LLM)",
+    "classification_heldout": ("short page texts in wording the type rules were not written from, given the right "
+                               "type or rightly left to the owner (no LLM)"),
     "privacy": "privacy checks passed: masking, prompt redaction, tracing, final states free of full ID numbers",
     "cloud_blackout": "pages with an ID number where the blacked-out picture (what the cloud would get) shows no readable ID",
     "file_safety": "files given the right verdict (accept / refuse)",
@@ -150,6 +152,12 @@ def file_sha(path: Path) -> str:
 @contextlib.contextmanager
 def isolated_environment(live: bool):
     """The suite never reads the real .env (except where noted) and never traces."""
+    # Loaded before .env is blocked: a module keeps the find_env_file it got when first
+    # imported, so one first imported inside the block would keep the blocked stand-in and,
+    # with --live, never reach the Groq key.
+    import backend.agents.models  # noqa: F401
+    import backend.tools.cloud_ocr  # noqa: F401
+
     env = {k: v for k, v in os.environ.items()}
     env["SENIORLIFE_HASH_KEY"] = SUITE_HASH_KEY
     env["SENIORLIFE_VIRUS_SCANNER"] = "none"  # an EICAR test needs the owner's OK; see the report
@@ -267,10 +275,10 @@ def field_right(result: dict[str, Any], key: str, truth: Any, confirmed: bool) -
 def owner_edits(entry: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     """What the owner types to correct the proposal: each wrong field as printed on the paper
     (in normal letter case when the paper prints it in capitals). Only fields the review step
-    lets them change (read ones, or the type's required ones)."""
-    from backend.graphs.document_graph import REQUIRED_FIELDS
+    lets them change (read ones, or the type's required and optional ones)."""
+    from backend.graphs.document_graph import manual_fields_for
 
-    allowed = set(result.get("extracted_fields", {})) | REQUIRED_FIELDS[entry["type"]]
+    allowed = set(result.get("extracted_fields", {})) | manual_fields_for(entry["type"])
     edits = {}
     for key, truth in entry["fields"].items():
         if key in allowed and not field_right(result, key, truth["value"], confirmed=False):
@@ -342,8 +350,8 @@ def section_documents(manifest: list[dict], ocr: dict[str, list], runs: dict[str
     after.metrics = {"pages_reviewed": len(edits_needed),
                      "average_fields_the_owner_had_to_correct": round(sum(edits_needed) / len(edits_needed), 2)
                      if edits_needed else 0,
-                     "note": "the owner can only add fields the type requires; an optional field OCR missed "
-                             "(e.g. the Aadhaar on an identity card) can't be added and counts as not right"}
+                     "note": "the owner can add the type's required and optional fields (as when typing in); "
+                             "any other field OCR missed can't be added and counts as not right"}
     if not safety.total:
         safety.metrics["note"] = "no page was confirmed without review"
     return [before, after, safety, classify]
@@ -442,20 +450,27 @@ def section_cloud_blackout(manifest: list[dict], ocr: dict[str, list], runs: dic
     again with the real OCR: can the ID number still be read?"""
     from PIL import Image
 
+    from backend.graphs.document_graph import id_not_located
     from backend.tools.ocr import read_document
     from backend.tools.ocr_postprocess import clean_page
     from backend.tools.vision_extract import safe_page_images
     from backend.utils.privacy import ID_FIELDS
 
     section = Section("cloud_blackout")
-    partial = 0
+    partial = kept_local = 0
     for entry in manifest:
         ids = truth_ids(entry)
         pages = ocr.get(entry["path"])
         if not ids or not pages or all(page.get("engine") == "pdf_text" for page in pages):
             continue
         local = [clean_page(page) for page in pages]
-        extracted = runs.get(entry["path"], {}).get("first", {}).get("extracted_fields", {})
+        first = runs.get(entry["path"], {}).get("first", {})
+        extracted = first.get("extracted_fields", {})
+        if id_not_located(first.get("document_type") or entry["type"], extracted):
+            # The graph keeps this page local (its ID number couldn't be found to black out): nothing leaks.
+            kept_local += 1
+            section.check(True, f"{entry['path']}: not sent, ID number not located")
+            continue
         boxes: dict[int, list] = {}
         for key in ID_FIELDS:
             if extracted.get(key, {}).get("box"):
@@ -479,7 +494,23 @@ def section_cloud_blackout(manifest: list[dict], ocr: dict[str, list], runs: dic
             if digits and not visible and any(digits[-8:] in line for line in digits_lines):
                 partial += 1
         say(f"  blackout {entry['path']}")
-    section.metrics = {"ids_with_last_8_digits_still_readable": partial}
+    section.metrics = {"ids_with_last_8_digits_still_readable": partial,
+                       "pages_kept_local_id_not_located": kept_local}
+    return section
+
+
+def section_classification_heldout() -> Section:
+    """The local type rules on page texts kept apart from the ones they were written from."""
+    from backend.tools.document_type import type_from_text
+
+    section = Section("classification_heldout")
+    wrong_type = 0
+    for case in load_json(TESTS / "datasets" / "classify_heldout" / "cases.json"):
+        got = type_from_text(case["text"])
+        wrong_type += got is not None and got != case["expect"]  # worse than "not sure"
+        section.check(got == case["expect"], f"{case['id']}: {got or 'left to the owner'}, expected "
+                                             f"{case['expect'] or 'left to the owner'}")
+    section.metrics = {"given_a_wrong_type": wrong_type}
     return section
 
 
@@ -653,7 +684,8 @@ def section_storage_api(manifest: list[dict], ocr: dict[str, list], db_url: str)
         for key, truth in entry["fields"].items():
             got = pending["candidates"].get(key)
             import make_hard_dataset as hard
-            if not hard.same_value(key, got, truth["value"]) and (key in pending["candidates"] or key in pending["missingFields"]):
+            addable = set(pending["candidates"]) | set(pending["missingFields"]) | set(pending.get("optionalFields", []))
+            if not hard.same_value(key, got, truth["value"]) and key in addable:
                 edits[key] = typed_value(truth)
         with patch("backend.graphs.document_graph.read_document", return_value=ocr[entry["path"]]):
             return client.post(f"/api/v1/documents/{doc_id}/review", headers=owner,
@@ -931,6 +963,7 @@ def main() -> None:
     with isolated_environment(args.live):
         run("ocr_reading", lambda: section_ocr(manifest, args.fresh_ocr, ocr))
         run("documents", lambda: section_documents(manifest, ocr, runs))
+        run("classification_heldout", section_classification_heldout)
         run("privacy", lambda: section_privacy(manifest, ocr, runs))
         if args.quick:
             sections.append(Section("cloud_blackout").skip("--quick"))

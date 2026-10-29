@@ -89,7 +89,9 @@ class DemoModeTests(unittest.TestCase):
         self.assertEqual(info_resp.status_code, 200)
         info_json = info_resp.json()
         self.assertEqual(info_json["app"]["name"], "SeniorLife OS")
-        self.assertEqual(info_json["build"]["version"], "1.0.0")
+        # The version the app started with (git tag or APP_VERSION); get_config() may have been
+        # reloaded by another test since.
+        self.assertEqual(info_json["build"]["version"], app.version)
 
         metrics_resp = self.client.get("/actuator/metrics")
         self.assertEqual(metrics_resp.status_code, 200)

@@ -20,8 +20,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..tools.demo_tools import extract_fields_from_pages, normalize_field
+from ..tools.document_type import type_from_text
 from ..tools.medical import (
-    LIST_FIELDS, MEDICAL_TYPES, extract_lists, heading_fields, looks_medical, medical_type_from_text,
+    LIST_FIELDS, MEDICAL_TYPES, extract_lists, heading_fields, looks_medical,
 )
 from ..tools.ocr import OcrEngineError, OcrError, read_document
 from ..tools.cloud_ocr import ENGINES, CloudOcrError, cloud_engine, engine_key, engine_label, read_document_in_cloud
@@ -217,11 +218,11 @@ FILENAME_HINTS = (
 
 
 def guess_type_locally(filename: str, page_text: str) -> str | None:
-    """Type from the file name, then (for medical documents) from words on the page. No network."""
+    """Type from the file name, then from words on the page (None if unclear). No network."""
     for hint, document_type in FILENAME_HINTS:
         if hint in filename:
             return document_type
-    return medical_type_from_text(page_text)
+    return type_from_text(page_text)
 
 
 def classify_document(state: DocumentState) -> dict[str, Any]:
@@ -307,12 +308,22 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
             "route": "llm",
             "events": add_event(state, "extract_content:missing_fields"),
         }
-    if not fields:
+    if not fields and not pages_clear(pages):
         return {
             "route": "stop",
             "status": "needs_reupload",
             "warnings": ["No labelled fields could be extracted from the demo page text"],
             "events": add_event(state, "extract_content:no_fields"),
+        }
+    if not fields:
+        # The photo is fine; the form just uses labels we don't know. A new photo would fail
+        # the same way, so the owner types the values in at review instead.
+        return {
+            "extracted_fields": {},
+            "retry_count": retries,
+            "route": "continue",
+            "warnings": [*state.get("warnings", []), NO_KNOWN_LABELS],
+            "events": add_event(state, "extract_content:no_known_labels"),
         }
     return {
         "extracted_fields": fields,
@@ -322,12 +333,23 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
     }
 
 
+NO_KNOWN_LABELS = "The page is clear, but none of its labels are known yet; please type in the details"
+
+
+def pages_clear(pages: list[dict[str, Any]]) -> bool:
+    """Every page read clearly (OCR sure of it, not blurry). Tells "nothing we know how to read
+    is printed here" (review, the owner types it in) from "the photo can't be read" (re-upload)."""
+    return bool(pages) and all(page.get("quality", 1.0) >= CONFIDENCE_THRESHOLD and not page.get("blurry")
+                               for page in pages)
+
+
 # Fields an owner may type in: the required ones, plus these.
 OPTIONAL_MANUAL_FIELDS = {
     "identity": {"aadhaar_number", "pan_number"},
     "income_certificate": {"issuing_authority", "expiry_date"},
     "residence_proof": {"issuing_authority", "expiry_date"},
     "disability_certificate": {"expiry_date"},
+    "medical_bill": {"items"},  # the bill's lines; only the total is required
 }
 MANUAL_SOURCE = "entered_by_owner"
 
@@ -407,11 +429,16 @@ def llm_extract(state: DocumentState) -> dict[str, Any]:
     pages = state["document"]["pages"]
     owner_name = state["document"].get("owner_name")
     warnings = list(state.get("warnings", []))
+    # Hidden in the prompt like the owner's name: every ID number already read, in whatever
+    # layout it was printed (e.g. a policy number under its label, which no pattern catches).
+    known = {"NAME": owner_name} if owner_name else {}
+    known.update({field.upper(): str(fields[field]["value"]) for field in ID_FIELDS
+                  if field in fields and not is_blank(fields[field].get("value"))})
     try:
         from ..agents.llm_agents import extract_missing_fields
 
         found = extract_missing_fields("\n".join(page.get("text", "") for page in pages), document_type, missing,
-                                       {"NAME": owner_name} if owner_name else None)
+                                       known or None)
     except Exception as exc:  # no model, no key, network, or redaction failure: never guess
         found = {}
         warnings.append(f"AI extraction unavailable ({type(exc).__name__}); missing fields need the owner")
@@ -438,13 +465,15 @@ def llm_extract(state: DocumentState) -> dict[str, Any]:
                            "layout": "llm"}
         else:
             fields[key] = {**place(value), "value": value, "layout": "llm"}
-    if not fields:
+    if not fields and not pages_clear(pages):
         return {
             "route": "stop",
             "status": "needs_reupload",
             "warnings": [*warnings, "No fields could be found in the document"],
             "events": add_event(state, "llm_extract:no_fields"),
         }
+    if not fields:
+        warnings.append(NO_KNOWN_LABELS)  # clear page: the owner types the values in at review
     return {
         "extracted_fields": fields,
         "warnings": warnings,
@@ -537,6 +566,7 @@ LAYOUT_NOTES = {
     "llm": "found by AI reading the text",
     "heading": "taken from the page heading",
     "doctor_line": "taken from a line starting with Dr.",
+    "checksum": "found by its check digit (printed with no label)",
 }
 FUTURE_DATE_LABELS = {"issue_date": "Issue date", "report_date": "Report date",
                       "prescription_date": "Prescription date", "bill_date": "Bill date"}
@@ -630,12 +660,30 @@ def wants_cloud_ocr(state: DocumentState, fields: dict[str, Any], normalized: di
     return weak or any(page.get("blurry") for page in document.get("pages", []))
 
 
+# The ID number each type carries. Local OCR must have found where it is printed (its box)
+# before a page of that type may go to the cloud with the number blacked out.
+ID_FIELD_OF_TYPE = {"identity": "aadhaar_number", "health_insurance": "policy_number",
+                    "bank_passbook": "account_number"}
+
+
+def id_not_located(document_type: str, fields: dict[str, Any]) -> bool:
+    """True if the document should carry an ID number but local OCR didn't locate it. A card
+    without that number (e.g. a PAN card as identity) is then not sent either: safer, less help."""
+    field = ID_FIELD_OF_TYPE.get(document_type)
+    return bool(field) and not (fields.get(field) or {}).get("box")
+
+
 def cloud_ocr(state: DocumentState) -> dict[str, Any]:
     """Read the file again in the cloud (Google Vision, or a Groq vision model if
     SENIORLIFE_CLOUD_OCR=groq), with ID regions blacked out, and use its values for fields
     the local reading got wrong or was unsure of. ID fields always stay local."""
     done = {"cloud_ocr_used": True, "route": "continue"}
     warnings = list(state.get("warnings", []))
+    if id_not_located(state["document_type"], state["extracted_fields"]):
+        # Fail closed: an ID number we couldn't find can't be blacked out, so nothing is sent.
+        return {**done, "warnings": [*warnings, "Cloud OCR skipped: the ID number on this document could not be "
+                                                "found on the page to black it out"],
+                "events": add_event(state, "cloud_ocr:id_not_located")}
     try:
         engine = cloud_engine()
     except CloudOcrError as exc:
@@ -713,6 +761,11 @@ def missing_required(document_type: str, fields: dict[str, Any]) -> list[str]:
     return sorted(key for key in REQUIRED_FIELDS[document_type] if is_blank(fields.get(key)))
 
 
+def missing_optional(document_type: str, fields: dict[str, Any]) -> list[str]:
+    """Optional fields the owner may still add at review (the ones typing in allows)."""
+    return sorted(key for key in OPTIONAL_MANUAL_FIELDS.get(document_type, set()) if is_blank(fields.get(key)))
+
+
 def human_field_review(state: DocumentState) -> dict[str, Any]:
     decision = state.get("review_decision")
     if not decision and state.get("use_interrupt"):
@@ -722,6 +775,7 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
             "document_type": state["document_type"],
             "candidates": state["normalized_fields"],
             "missing_fields": missing_required(state["document_type"], state["normalized_fields"]),
+            "optional_fields": missing_optional(state["document_type"], state["normalized_fields"]),
             "flags": state["review_flags"],
             "question": "Confirm, edit, or reject these extracted fields; fill in any missing required field",
         })
@@ -752,14 +806,15 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
             "events": add_event(state, "human_field_review:invalid_decision"),
         }
     edits = decision.get("edits", {})
-    # The owner may correct what was read, and fill in a required field OCR missed (e.g. a
-    # name printed without a label). Other fields can't be added: nothing would check them.
-    allowed = set(state["extracted_fields"]) | REQUIRED_FIELDS[state["document_type"]]
+    # The owner may correct what was read, and fill in a field OCR missed: a required one (e.g.
+    # a name printed without a label) or one of the optional fields typing in allows (e.g. the
+    # Aadhaar on an ID card). Other fields can't be added: nothing would check them.
+    allowed = set(state["extracted_fields"]) | manual_fields_for(state["document_type"])
     if any(key not in allowed for key in edits):
         return {
             "status": "needs_review",
             "route": "stop",
-            "errors": ["Edits may only correct extracted fields or fill in this document's required fields"],
+            "errors": ["Edits may only correct extracted fields or fill in this document's required or optional fields"],
             "events": add_event(state, "human_field_review:invalid_edit"),
         }
     confirmed = dict(state["normalized_fields"])
@@ -773,6 +828,15 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
             "route": "stop",
             "errors": [f"Correct these required fields: {', '.join(sorted(missing))}"],
             "events": add_event(state, "human_field_review:missing_fields"),
+        }
+    # A typed-in optional value that fails its check is refused, never silently dropped.
+    invalid = sorted(key for key, raw in edits.items() if not is_blank(raw) and is_blank(confirmed.get(key)))
+    if invalid:
+        return {
+            "status": "needs_review",
+            "route": "stop",
+            "errors": [f"Correct these fields: {', '.join(invalid)}"],
+            "events": add_event(state, "human_field_review:invalid_fields"),
         }
     today = date.fromisoformat(state["document"].get("as_of", date.today().isoformat()))
     for key, label in FUTURE_DATE_LABELS.items():
