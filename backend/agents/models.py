@@ -6,6 +6,8 @@ Groq uses langchain-groq; OpenAI uses langchain-openai.
 Both are paid per use, so each provider gets a shared requests-per-minute limit
 (SENIORLIFE_LLM_MAX_PER_MINUTE, default 30) and retries a busy answer (429/5xx) at most
 MAX_RETRIES times, with the client library's own growing wait.
+Each try gives up after REQUEST_TIMEOUT_SECONDS. LangChain passes no timeout as None, and both
+SDKs read an explicit None as "wait forever", so without this a silent server hangs the call.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from ..utils.rate_limit import DEFAULT_LLM_PER_MINUTE, LLM_RATE_SETTING, SpacedR
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 PROVIDERS = {"groq", "openai"}
 MAX_RETRIES = 2  # stated here so a library default change cannot alter it
+REQUEST_TIMEOUT_SECONDS = 60  # the SDKs' own default, which LangChain otherwise turns off
 
 
 def _load_env() -> None:
@@ -44,7 +47,7 @@ def groq_model():
 
     model_name = os.getenv("SENIORLIFE_LLM_MODEL") or DEFAULT_GROQ_MODEL
     return ChatGroq(model=model_name, api_key=api_key, temperature=0, max_retries=MAX_RETRIES,
-                    rate_limiter=llm_limiter("groq"))
+                    timeout=REQUEST_TIMEOUT_SECONDS, rate_limiter=llm_limiter("groq"))
 
 
 def openai_model():
@@ -55,7 +58,8 @@ def openai_model():
         raise RuntimeError("Set SENIORLIFE_LLM_MODEL before using use_llm=True")
     from langchain_openai import ChatOpenAI
 
-    return ChatOpenAI(model=model_name, temperature=0, max_retries=MAX_RETRIES, rate_limiter=llm_limiter("openai"))
+    return ChatOpenAI(model=model_name, temperature=0, max_retries=MAX_RETRIES, timeout=REQUEST_TIMEOUT_SECONDS,
+                      rate_limiter=llm_limiter("openai"))
 
 
 def get_model():

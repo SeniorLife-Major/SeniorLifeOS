@@ -1,7 +1,10 @@
 """Tests for chat model selection and .env loading. No network calls; keys are fake."""
 
 import os
+import socket
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -67,6 +70,7 @@ class ModelSelectionTests(unittest.TestCase):
         # Pinned: confirmed available on Groq by the 2026-10-19 smoke test.
         self.assertEqual(models.DEFAULT_GROQ_MODEL, "openai/gpt-oss-20b")
         self.assertEqual(model.groq_api_key.get_secret_value(), "fake-groq")
+        self.assertEqual(model.request_timeout, 60)  # each try gives up after a minute
 
     def test_groq_model_name_can_be_overridden(self, _):
         with patch.dict(os.environ, clean_env(GROQ_API_KEY="fake-groq", SENIORLIFE_LLM_MODEL="other-model"), clear=True):
@@ -89,6 +93,7 @@ class ModelSelectionTests(unittest.TestCase):
             model = models.get_model()
         self.assertEqual(type(model).__name__, "ChatOpenAI")
         self.assertEqual(model.model_name, "gpt-model")
+        self.assertEqual(model.request_timeout, 60)
 
     def test_unknown_provider_is_rejected(self, _):
         with patch.dict(os.environ, clean_env(SENIORLIFE_LLM_PROVIDER="someone-else"), clear=True):
@@ -107,6 +112,65 @@ class ModelSelectionTests(unittest.TestCase):
                 patch("backend.agents.models.get_model", return_value=fake):
             models.structured_model(Answer)
         fake.with_structured_output.assert_called_once_with(Answer)
+
+
+class SilentServer:
+    """A local server that accepts connections and never answers, like a stuck API."""
+
+    def __init__(self):
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.held: list[socket.socket] = []
+        self.url = f"http://127.0.0.1:{self.listener.getsockname()[1]}/v1"
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                connection, _ = self.listener.accept()
+            except OSError:
+                return
+            self.held.append(connection)
+
+    def close(self):
+        self.listener.close()
+        for connection in self.held:
+            connection.close()
+
+
+@patch("backend.agents.models._load_env")
+@patch.object(models, "REQUEST_TIMEOUT_SECONDS", 1)  # the real value is 60; 1 keeps the test short
+@patch.object(models, "MAX_RETRIES", 0)
+class TimeoutTests(unittest.TestCase):
+    def ask_silent_server(self, **settings):
+        server = SilentServer()
+        self.addCleanup(server.close)
+        outcome = {}
+
+        def ask():
+            try:
+                models.get_model().invoke("hello")
+                outcome["error"] = None
+            except Exception as exc:
+                outcome["error"] = exc
+        env = clean_env(GROQ_API_BASE=server.url, GROQ_BASE_URL=server.url, OPENAI_API_BASE=server.url,
+                        OPENAI_BASE_URL=server.url, **settings)
+        with patch.dict(os.environ, env, clear=True):
+            started = time.monotonic()
+            worker = threading.Thread(target=ask, daemon=True)
+            worker.start()
+            worker.join(15)  # without a timeout the call would never come back
+        self.assertFalse(worker.is_alive(), "the model call waited on a silent server with no timeout")
+        self.assertIsNotNone(outcome["error"])
+        self.assertIn("timeout", type(outcome["error"]).__name__.lower())
+        self.assertLess(time.monotonic() - started, 15)
+
+    def test_groq_gives_up_on_a_server_that_never_answers(self, _):
+        self.ask_silent_server(GROQ_API_KEY="fake-groq")
+
+    def test_openai_gives_up_on_a_server_that_never_answers(self, _):
+        self.ask_silent_server(SENIORLIFE_LLM_PROVIDER="openai", OPENAI_API_KEY="fake-openai",
+                               SENIORLIFE_LLM_MODEL="gpt-model")
+
 
 
 if __name__ == "__main__":

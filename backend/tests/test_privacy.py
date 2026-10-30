@@ -19,6 +19,7 @@ from backend.utils.privacy import (
     load_hash_key,
     mask_identifier,
     redact,
+    shows_identifier,
     verhoeff_check_digit,
 )
 
@@ -69,6 +70,27 @@ class ValidatorTests(unittest.TestCase):
         self.assertTrue(is_valid_ifsc("HDFC0ABC123"))
         self.assertFalse(is_valid_ifsc("SBIN1001234"))  # fifth character must be 0
         self.assertFalse(is_valid_ifsc("SBIN000123"))
+
+
+class ShowsIdentifierTests(unittest.TestCase):
+    def test_lines_that_must_not_reach_a_cloud_service(self):
+        aadhaar = fake_aadhaar(3)
+        wrong_digit = aadhaar[:-1] + str((int(aadhaar[-1]) + 1) % 10)
+        for text in (aadhaar, f"Aadhaar: {aadhaar}", wrong_digit, "VID 9134 5678 9012 3456", "Virtual ID",
+                     "Enrolment No.: 1234/56789/01234", "Ph 9876543210", "a@b.in", "PAN HAVPC1814K",
+                     "A/c No: 123456789012", "Policy No: HLT/2024/288382", "819758864455"):
+            with self.subTest(text=text):
+                self.assertTrue(shows_identifier(text))
+
+    def test_lines_with_values_the_model_needs(self):
+        for text in ("Kavita Sharma", "DOB: 06/10/1958", "annual income of Rs. 1,43,000/-", "IFSC: SBIN0001234",
+                     "Tab. Metformin 500 mg 1-0-1 x 30 days", "Haemoglobin 12.1 g/dL 12-15", "PIN 560001",
+                     "Sum Insured: Rs 5,00,000", "Percentage of Disability 75%", "Your Aadhaar No.:"):
+            with self.subTest(text=text):
+                self.assertFalse(shows_identifier(text))
+
+    def test_a_virtual_id_is_hidden_whole_in_prompts(self):
+        self.assertEqual(redact("VID 9134 5678 9012 3456")[0], "VID [ID_1]")
 
 
 class StorageProtectionTests(unittest.TestCase):

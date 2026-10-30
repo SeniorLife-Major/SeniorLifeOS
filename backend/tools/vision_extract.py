@@ -1,14 +1,18 @@
-"""Medical documents read by a vision language model (Groq), straight into fields.
+"""Documents read by a vision language model (Groq), straight into fields.
 
-For prescriptions, lab reports and medical bills a vision model reads handwriting and
-free layouts far better than local OCR, so with the senior's consent it is the main
-reader for these types (Decision #41). It is never the only step:
-- local OCR always runs first, to find where ID numbers (Aadhaar, PAN, account and
-  policy numbers, ABHA health IDs) and QR codes are, so they are painted black before
-  the picture leaves the machine;
+A vision model reads handwriting, free layouts and values printed with no label (a name in a
+sentence of a certificate) far better than local OCR and its label rules, so with the senior's
+consent it is the main reader for every document type (Decision #41; all types since
+full-test-review Decision 14). It is never the only step:
+- local OCR always runs first, to find where identifiers (Aadhaar, PAN, account, policy and
+  Virtual ID numbers, ABHA health IDs, phone numbers), QR codes and faces are, so they are
+  painted black before the picture leaves the machine; an ID card whose number local OCR
+  could not find is not sent at all;
+- the model is never asked for an ID field: those always come from the local reading;
 - every value the model gives is reviewed by the owner (the model gives no confidence
   and can make up a plausible value, e.g. a wrong dose);
-- where the local reading has the same field and it differs, the owner is told.
+- where the local reading has the same field and it differs, the owner is told; where the
+  local text does not contain the model's value at all, the owner is told too.
 
 Values never include ID numbers: any that come back are masked.
 """
@@ -32,6 +36,7 @@ from .cloud_ocr import (
     CloudOcrError,
     _shrink,
     black_out,
+    face_boxes,
     groq_model,
     id_boxes,
     post_with_retry,
@@ -62,8 +67,48 @@ SHAPES: dict[str, dict[str, Any]] = {
         "total_amount": "the total amount payable",
         "items": [{"description": "item or service", "amount": "its amount"}],
     },
+    # Never an ID field (Aadhaar, PAN, account or policy number): see the module note.
+    "identity": {
+        "name": "the card holder's name in English letters",
+        "date_of_birth": "the date of birth",
+    },
+    "income_certificate": {
+        "name": "the name of the person the certificate is about",
+        "annual_income": "the yearly income amount, with Rs. or the rupee sign if printed",
+        "issue_date": "the date the certificate was issued",
+        "issuing_authority": "the office or officer that issued it",
+        "expiry_date": "the date it is valid until, if printed",
+    },
+    "residence_proof": {
+        "name": "the name of the person the certificate is about",
+        "residence_state": "the Indian state the person lives in",
+        "issue_date": "the date the certificate was issued",
+        "issuing_authority": "the office or officer that issued it",
+        "expiry_date": "the date it is valid until, if printed",
+    },
+    "health_insurance": {
+        "name": "the insured person's name",
+        "insurer": "the insurance company's name",
+        "expiry_date": "the date the cover ends",
+        "sum_insured": "the sum insured (cover amount)",
+    },
+    "bank_passbook": {
+        "name": "the account holder's name",
+        "bank_name": "the bank's name",
+        "ifsc": "the IFSC code of the branch",
+    },
+    "disability_certificate": {
+        "name": "the name of the person the certificate is about",
+        "issuing_authority": "the medical board or authority that issued it",
+        "issue_date": "the date the certificate was issued",
+        "disability_percent": "the percentage of disability",
+        "expiry_date": "the date it is valid until, if printed",
+    },
 }
-LABELS = {"prescription": "a prescription", "lab_report": "a lab report", "medical_bill": "a medical bill"}
+LABELS = {"prescription": "a prescription", "lab_report": "a lab report", "medical_bill": "a medical bill",
+          "identity": "an identity card", "income_certificate": "an income certificate",
+          "residence_proof": "a residence (domicile) certificate", "health_insurance": "a health insurance card or policy",
+          "bank_passbook": "a bank passbook", "disability_certificate": "a disability certificate"}
 
 ABHA_NUMBER = re.compile(r"(?<!\d)\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}(?!\d)")
 ABHA_ADDRESS = re.compile(r"\b[\w.]+@(?:abdm|sbx)\b", re.IGNORECASE)
@@ -137,11 +182,11 @@ def fields_from_answer(answer: str, document_type: str) -> dict[str, Any]:
 
 def safe_page_images(path: str, mime_type: str, local_pages: list[dict[str, Any]],
                      id_field_boxes: dict[int, list[list[int]]]) -> list[np.ndarray]:
-    """Every page with ID numbers, health IDs and QR codes painted black."""
+    """Every page with identifiers (ID numbers, phone, e-mail, health IDs), QR codes and faces painted black."""
     images = []
     for local, image in zip(local_pages, page_images(path, mime_type)):
         boxes = id_boxes(local, id_field_boxes.get(local["page"], [])) + health_id_boxes(local)
-        images.append(black_out(image, boxes + qr_boxes(image)))
+        images.append(black_out(image, boxes + qr_boxes(image) + face_boxes(image)))
     return images
 
 
@@ -149,7 +194,7 @@ def extract_with_vision(path: str, mime_type: str, local_pages: list[dict[str, A
                         id_field_boxes: dict[int, list[list[int]]], document_type: str, api_key: str,
                         client: httpx.Client | None = None, model: str | None = None) -> dict[str, Any]:
     if document_type not in SHAPES:
-        raise CloudOcrError("The vision model reads only prescriptions, lab reports and medical bills")
+        raise CloudOcrError("The vision model does not read this document type")
     if len(local_pages) > MAX_PAGES:
         raise CloudOcrError(f"more than {MAX_PAGES} pages")
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt_for(document_type)}]

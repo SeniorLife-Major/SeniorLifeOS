@@ -317,6 +317,40 @@ class BlackoutTests(unittest.TestCase):
         page = ocr_page([("Name: Meera Rao", 0.99), (f"Card {AADHAAR}", 0.99), ("PAN HAVPC1814K", 0.99)])
         self.assertEqual(id_boxes(page, [[1, 2, 3, 4]]), [[10, 40, 600, 70], [10, 80, 600, 110], [1, 2, 3, 4]])
 
+    def test_lines_that_only_look_like_an_id_are_found_too(self):
+        # Before a picture leaves the machine, even a number OCR misread (wrong check digit), a
+        # Virtual ID (even one OCR read with letters in it), an enrolment number or a phone number is
+        # painted black; values stay.
+        wrong_digit = AADHAAR[:-1] + str((int(AADHAAR[-1]) + 1) % 10)
+        lines = [("Name: Meera Rao", 0.99), (wrong_digit, 0.8), ("VID: 9134 5678 9012 3456", 0.9),
+                 ("Enrolment No.: 1234/56789/01234", 0.9), ("Mobile 9876543210", 0.9),
+                 ("VID: 9134 5G78 9O12 3456", 0.6),
+                 ("annual income of Rs. 1,43,000/-", 0.99), ("DOB: 06/10/1958", 0.99), ("IFSC: SBIN0001234", 0.99)]
+        boxes = id_boxes(ocr_page(lines))
+        self.assertEqual(boxes, [[10, 40 * i, 600, 40 * i + 30] for i in (1, 2, 3, 4, 5)])
+
+
+class FaceTests(unittest.TestCase):
+    def test_no_face_is_found_on_a_page_of_text(self):
+        ensure_fixtures()
+        with Image.open(UNIT / "sharp.png") as picture:
+            self.assertEqual(cloud_ocr.face_boxes(np.asarray(picture.convert("RGB"))), [])
+
+    def test_a_found_face_gets_a_margin(self):
+        detector = unittest.mock.MagicMock()
+        detector.detectMultiScale.return_value = [(100, 50, 40, 40)]
+        with patch.object(cloud_ocr, "_face_detector", detector):
+            boxes = cloud_ocr.face_boxes(np.full((400, 600, 3), 255, np.uint8))
+        self.assertEqual(boxes, [[84, 34, 156, 106]])  # 40% of the face's side on each side
+
+    def test_faces_are_black_in_what_the_cloud_ocr_gets(self):
+        ensure_fixtures()
+        page = ocr_page([("Name: Meera Rao", 0.6)])
+        recorder = Recorder(vision_answer([("Name: Meera Rao", 0.98, 0)]))
+        with patch.object(cloud_ocr, "face_boxes", return_value=[[300, 40, 400, 140]]):
+            read_document_in_cloud(str(UNIT / "sharp.png"), "image/png", [page], {}, FAKE_KEY, recorder.client())
+        self.assertTrue((recorder.sent_image()[40:140, 300:400] == 0).all())
+
 
 class ReadDocumentInCloudTests(unittest.TestCase):
     @classmethod
@@ -467,8 +501,12 @@ class GraphCloudOcrTests(unittest.TestCase):
         self.assertEqual(sum(event.startswith("cloud_ocr") for event in result["events"]), 1)
 
     def test_groq_engine_reads_again_and_names_itself_in_the_flag(self, _):
+        # With a Groq key every type now goes to the vision model first (vision_extract), so this
+        # cloud OCR path is checked with that step switched off.
         recorder = Recorder(groq_answer("Name: Meera Rao\nAnnual income: 1,20,000\nIssue date: 2026-06-01"))
-        result = self.run_upload(recorder, engine="groq", key_name=cloud_ocr.GROQ_KEY_NAME, cloud_ocr_consent=True)
+        with patch("backend.graphs.document_graph.vision_possible", return_value=False):
+            result = self.run_upload(recorder, engine="groq", key_name=cloud_ocr.GROQ_KEY_NAME,
+                                     cloud_ocr_consent=True)
         self.assertEqual(str(recorder.requests[0].url), GROQ_CHAT_URL)
         self.assertIn("cloud_ocr:replaced_1", result["events"])
         self.assertEqual(result["extracted_fields"]["name"]["cloud_engine"], "groq_vision")

@@ -265,7 +265,7 @@ Optional structured LLM selection nodes are included for document classification
 
 These variables are read from the environment, or from `backend/.env` / the repository root `.env` (shell variables win). LangSmith tracing settings are read the same way; see "LangSmith tracing" below.
 
-**Rate limits and retries (paid services).** Every OpenAI, Groq and Google Vision request waits its turn under a per-service limit, shared by the whole process (`utils/rate_limit.py`); requests are spaced evenly and the first goes at once. A busy answer is retried at most twice (429 or 503 for the cloud readers; 429 and server errors for the chat models, by their own libraries).
+**Rate limits and retries (paid services).** Every OpenAI, Groq and Google Vision request waits its turn under a per-service limit, shared by the whole process (`utils/rate_limit.py`); requests are spaced evenly and the first goes at once. A busy answer is retried at most twice (429 or 503 for the cloud readers; 429 and server errors for the chat models, by their own libraries). Each try of a chat model gives up after 60 s (`REQUEST_TIMEOUT_SECONDS` in `agents/models.py`); without it, LangChain would let a server that never answers hang the call forever. The cloud readers give up after 30 s (Google Vision) or 120 s (Groq vision) without an answer.
 
 | Setting | Default | Covers |
 |---|---|---|
@@ -332,12 +332,21 @@ The document graph uses it when the upload names a real file instead of page fix
 - **Flags:** high and low come only from the range printed on that row.
 - **Consent:** medical pages are never sent to the cloud model, not even to work out their type, unless the state sets `medical_cloud_consent: True`. Without it, they are classified on this machine.
 - **Read by the vision model (`tools/vision_extract.py`):** with both `cloud_ocr_consent` and `medical_cloud_consent`, a scanned or photographed prescription, lab report or medical bill is read by the Groq vision model (`GROQ_API_KEY`, `SENIORLIFE_VISION_MODEL`) straight into fields, because it reads handwriting and free layouts far better than local OCR.
-  - Local OCR still runs first, to find ID numbers (Aadhaar, PAN, account, policy), ABHA health IDs and QR codes; they are painted black before the picture is sent. At most 3 pages, in one request.
+  - Local OCR still runs first. Every line that shows an identifier is painted black before the picture is sent: ID numbers (Aadhaar, PAN, account, policy), even one read with a wrong digit, Virtual ID and enrolment numbers, phone numbers, e-mails and ABHA health IDs. QR codes and faces are painted black too. At most 3 pages, in one request.
   - The model's values are used, and **every one is sent to review** (it gives no confidence and can make up a plausible value, such as a wrong dose). Where local OCR read the same field differently, the flag says "the local reading differs".
   - ID numbers in its answer are masked; ID fields are always the local reading.
   - A handwritten page that local OCR reads badly is no longer sent back; a **blurry** photo still is (its ID numbers couldn't be found to black them out).
   - No key, an error or an unreadable answer: a warning, and the local reading carries on as before. A PDF with stored text is read only on this machine. The cloud is asked only once per document.
 - **Samples:** `lab_report_state()`, `prescription_state()` and `medical_bill_state()` in `demo/demo_cases.py`.
+
+### Vision reading of the other types
+
+With `cloud_ocr_consent` and `GROQ_API_KEY`, a scanned or photographed identity card, certificate, insurance card or passbook is also read by the vision model, with the same blackout as above. The model is asked for the plain fields (name, dates, income, issuer, and so on), never for an ID number.
+- **ID numbers** always come from the local reading. A card whose ID number local OCR could not find is not sent (`vision_extract:id_not_located`), because there would be nothing to black out. A card that shows only a PAN number is therefore never sent unless local OCR found the PAN.
+- **Cross-check:** a model value that appears nowhere in the text read on this machine gets the flag "not found in the text read on this machine, please check carefully". Every model value is reviewed anyway.
+- **The answer** is JSON asked for in the prompt and parsed from the text reply (`fields_from_answer`); the request does not use Groq's `response_format`.
+- **Without a Groq key**, these types keep the cloud OCR backup below. With a key, the vision model reads them first and the cloud is not asked again.
+- **Faces** are found with OpenCV's Haar face detector, with a margin around each. It has been tested only on drawn pages, not on real photos.
 
 ### Cloud OCR backup (`tools/cloud_ocr.py`)
 
@@ -351,7 +360,7 @@ If local OCR leaves a required field missing, unsure, cut off or misread, or a p
 
   The Groq model returns plain text only, with no positions or confidence, so its values count as unsure and table layouts are read from the text. It took 11–88 s per page in testing.
 - **Conditions:** the state sets `cloud_ocr_consent: True` (medical documents also need `medical_cloud_consent: True`), and the engine's key is set in the environment or `.env`.
-- **Before sending:** image regions that show ID numbers, and any QR code, are painted black. The key goes in a request header, never in the URL. An identity card, insurance card or passbook whose ID number local OCR could not locate is not sent at all (nothing to black out).
+- **Before sending:** lines that show an identifier (the same rule as the vision model), any QR code and any face are painted black. The key goes in a request header, never in the URL. An identity card, insurance card or passbook whose ID number local OCR could not locate is not sent at all (nothing to black out).
 - **Results:**
   - Cloud values only replace weak local ones, never ID numbers, and are always sent to review.
   - The cloud text is stored separately (`document.cloud_pages`) and masked the same way.

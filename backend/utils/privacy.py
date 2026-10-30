@@ -65,6 +65,11 @@ POLICY_PATTERN = re.compile(r"(?i)\bpolicy\s*(?:no\.?|number|#)?\s*[:.\-]?\s*((?
 # capitals, "/" or "-" with at least 5 digits (HLT/2024/288382, MID64277000).
 LONG_NUMBER_PATTERN = re.compile(r"(?<![\w,./-])\d{9,18}(?![\w,./-])")
 CODE_PATTERN = re.compile(r"(?<![\w/-])(?=[A-Z0-9/-]*[A-Z/-])(?=(?:[A-Z/-]*\d){5})[A-Z0-9][A-Z0-9/-]{5,29}(?![\w/-])")
+# Aadhaar Virtual ID: 16 digits, often printed 4-4-4-4.
+VID_PATTERN = re.compile(r"(?<!\d)\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}(?!\d)")
+# Labels of numbers that identify a person but have no fixed shape of their own (pictures only:
+# the label's line is painted black so a number OCR missed on it goes too).
+ID_LABEL_PATTERN = re.compile(r"(?i)\b(?:VID|virtual\s*id|enrol?l?ment\s*(?:no\.?|number|id)|EID)\b")
 # Dates look like codes but are needed by the model: 23/12/2026, 2026-12-23, 28-Aug-2029.
 DATE_LIKE = re.compile(r"\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}[-/. ]?[A-Za-z]{3,9}[-/. ,]*\d{4}")
 
@@ -147,6 +152,7 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
         if value:
             # Any casing of a known value maps to one placeholder.
             safe = re.sub(re.escape(value), lambda _, label=label, value=value: placeholder(label, value), safe, flags=re.IGNORECASE)
+    safe = VID_PATTERN.sub(lambda m: placeholder("ID", m.group(0)), safe)  # before Aadhaar: 16 digits, not 12
     safe = AADHAAR_PATTERN.sub(replace_aadhaar, safe)
     safe = ACCOUNT_PATTERN.sub(replace_account, safe)
     safe = POLICY_PATTERN.sub(replace_policy, safe)
@@ -159,6 +165,13 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
     safe = LONG_NUMBER_PATTERN.sub(lambda m: placeholder("ID", m.group(0)), safe)
     safe = CODE_PATTERN.sub(replace_code, safe)
     return safe, mapping
+
+
+def shows_identifier(text: str) -> bool:
+    """True if this text (one OCR line) must not be seen by a cloud service: anything redact()
+    would hide (an ID number even if misread, a phone number, an e-mail, an ID-like code) or the
+    label of a Virtual ID / enrolment number. Used to paint lines black before a picture is sent."""
+    return bool(redact(text)[1]) or bool(ID_LABEL_PATTERN.search(text))
 
 
 def mask_identifier(field: str, value: str) -> str:

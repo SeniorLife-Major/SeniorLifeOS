@@ -72,7 +72,7 @@ SCORE_MEANING = {
     "benefits_pipeline": "applicants (page photos -> vault -> eligibility) given the right eligibility",
     "storage_api": "vault database + API checks passed (upload, review, renew, delete, manual entry, no leaks)",
     "main_api": "main app checks passed (health, demo scenarios, workflow endpoints, error format)",
-    "live_vision": "medical fields right when the Groq vision model reads the page (only with --live)",
+    "live_vision": "fields right before review when the Groq vision model reads the page, every type (only with --live)",
     "live_llm_classification": "pages typed right by the LLM (only with --live)",
 }
 
@@ -851,10 +851,15 @@ def section_live(manifest: list[dict], ocr: dict[str, list]) -> list[Section]:
         return [vision.skip("GROQ_API_KEY is not set"), classify.skip("GROQ_API_KEY is not set")]
     from backend.agents.llm_agents import choose_document_type
 
+    kept_local, by_type = 0, defaultdict(Counter)
     for entry in manifest:
-        if entry["type"] in ("lab_report", "prescription", "medical_bill") and entry["mime_type"] == "image/png":
+        if entry["mime_type"] == "image/png":  # every type is read by the vision model (Decision 14)
             result = run_graph(graph_state(entry, cloud_ocr_consent=True, medical_cloud_consent=True), ocr[entry["path"]])
             used = any(event.startswith("vision_extract:found") for event in result.get("events", []))
+            kept_local += "vision_extract:id_not_located" in result.get("events", [])
+            for key, truth in entry["fields"].items():
+                by_type[entry["type"]]["right"] += used and field_right(result, key, truth["value"], False)
+                by_type[entry["type"]]["total"] += 1
             for key, truth in entry["fields"].items():
                 vision.check(used and field_right(result, key, truth["value"], result.get("status") == "confirmed"),
                              f"{entry['path']}: {key} wrong with the vision model"
@@ -866,6 +871,9 @@ def section_live(manifest: list[dict], ocr: dict[str, list]) -> list[Section]:
             except Exception as exc:
                 got = f"error {type(exc).__name__}"
             classify.check(got == entry["type"], f"{entry['path']}: LLM said {got}")
+    vision.metrics = {"right_percent_by_type": {t: round(100 * c["right"] / c["total"], 1)
+                                                for t, c in sorted(by_type.items())},
+                      "id_cards_kept_local_id_not_located": kept_local}
     return [vision, classify]
 
 

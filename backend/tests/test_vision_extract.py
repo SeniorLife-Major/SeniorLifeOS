@@ -17,8 +17,10 @@ from backend.graphs.document_graph import build_document_graph
 from backend.tools import cloud_ocr
 from backend.tools.cloud_ocr import GROQ_CHAT_URL, GROQ_DEFAULT_MODEL, CloudOcrError
 from backend.tools.vision_extract import (
-    HEALTH_ID_MASK, extract_with_vision, fields_from_answer, health_id_boxes, prompt_for,
+    HEALTH_ID_MASK, LABELS, SHAPES, extract_with_vision, fields_from_answer, health_id_boxes, prompt_for,
 )
+from backend.tools.document_rules import REQUIRED_FIELDS
+from backend.utils.privacy import ID_FIELDS
 from test_cloud_ocr import FAKE_KEY, Busy, Recorder, groq_answer, page_with_qr
 from test_graph_ocr import AADHAAR, ocr_page, upload_state
 from test_ocr import UNIT, ensure_fixtures
@@ -50,6 +52,20 @@ PRESCRIPTION = {
 
 def answer(fields, before=""):
     return groq_answer(before + json.dumps(fields))
+
+
+class ShapeTests(unittest.TestCase):
+    def test_every_type_is_covered_and_no_id_number_is_ever_asked_for(self):
+        self.assertEqual(set(SHAPES), set(REQUIRED_FIELDS))
+        self.assertEqual(set(LABELS), set(SHAPES))
+        for document_type, shape in SHAPES.items():
+            with self.subTest(document_type=document_type):
+                self.assertFalse(set(shape) & set(ID_FIELDS))  # ID fields always come from the local reading
+                self.assertEqual(REQUIRED_FIELDS[document_type] - set(ID_FIELDS) - set(shape), set())
+
+    def test_an_id_number_the_model_gives_anyway_is_dropped(self):
+        found = fields_from_answer(json.dumps({"name": "Meera Rao", "aadhaar_number": AADHAAR}), "identity")
+        self.assertEqual(found, {"name": "Meera Rao"})
 
 
 class AnswerTests(unittest.TestCase):
@@ -138,7 +154,7 @@ class RequestTests(unittest.TestCase):
     def test_more_than_three_pages_or_another_type_sends_nothing(self):
         recorder = Recorder(answer(PRESCRIPTION))
         for pages, document_type in (([ocr_page([("x", 0.9)])] * 4, "prescription"),
-                                     ([ocr_page([("x", 0.9)])], "income_certificate")):
+                                     ([ocr_page([("x", 0.9)])], "passport")):  # not a type of ours
             with self.subTest(document_type=document_type), self.assertRaises(CloudOcrError):
                 extract_with_vision(str(UNIT / "sharp.png"), "image/png", pages, {}, document_type, FAKE_KEY,
                                     recorder.client())
@@ -217,10 +233,71 @@ class GraphVisionTests(unittest.TestCase):
                 self.assertFalse(any(event.startswith("vision_extract") for event in result["events"]))
                 self.assertEqual(result["extracted_fields"]["name"]["value"], "Meera Ra0")
 
-    def test_other_document_types_never_use_it(self, _):
-        recorder = Recorder(answer(PRESCRIPTION))
-        result = self.run_upload(recorder, doc_type="income_certificate", **self.CONSENT)
+    # Other types (full-test-review Decision 14): cloud consent alone is enough.
+    CERTIFICATE = [("INCOME CERTIFICATE", 0.99),
+                   ("This is to certify that Smt. Meera Rao, resident of Demo Nagar, has an", 0.98),
+                   ("annual income of Rs. 2,56,000/- from all sources.", 0.97), ("Date: 23/12/2025", 0.99),
+                   (f"Aadhaar: {AADHAAR}", 0.99)]
+    CERTIFICATE_ANSWER = {"name": "Meera Rao", "annual_income": "Rs. 2,56,000/-", "issue_date": "23/12/2025",
+                          "issuing_authority": None}
+
+    def test_an_unlabelled_certificate_is_read_by_the_model_with_cloud_consent_alone(self, _):
+        recorder = Recorder(answer(self.CERTIFICATE_ANSWER))
+        result = self.run_upload(recorder, pages=[ocr_page(self.CERTIFICATE)], doc_type="income_certificate",
+                                 cloud_ocr_consent=True)
+        self.assertEqual(len(recorder.requests), 1)
+        self.assertIn("vision_extract:found_3", result["events"])
+        self.assertFalse(any(event.startswith("cloud_ocr") for event in result["events"]))  # asked only once
+        self.assertTrue((recorder.sent_image()[160:190, 10:600] == 0).all())  # the Aadhaar line
+        self.assertEqual(result["normalized_fields"]["name"], "Meera Rao")
+        self.assertEqual(result["normalized_fields"]["annual_income"], 256000)
+        self.assertEqual(result["normalized_fields"]["issue_date"], "2025-12-23")
+        self.assertIn("annual_income: read by the AI vision model from the picture, please check",
+                      result["review_flags"])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["vision_not_on_page"], [])  # "Rs. 2,56,000/-" is the cleaned "₹2,56,000/-"
+
+    def test_a_model_value_that_is_not_in_the_local_text_is_flagged(self, _):
+        invented = {**self.CERTIFICATE_ANSWER, "annual_income": "Rs. 9,56,000/-"}
+        result = self.run_upload(Recorder(answer(invented)), pages=[ocr_page(self.CERTIFICATE)],
+                                 doc_type="income_certificate", cloud_ocr_consent=True)
+        self.assertEqual(result["vision_not_on_page"], ["annual_income"])
+        self.assertIn("annual_income: not found in the text read on this machine, please check carefully",
+                      result["review_flags"])
+        self.assertNotIn("name: not found in the text read on this machine, please check carefully",
+                         result["review_flags"])
+
+    def test_without_a_groq_key_other_types_keep_the_old_cloud_path(self, _):
+        recorder = Recorder(answer(self.CERTIFICATE_ANSWER))
+        result = self.run_upload(recorder, key=None, pages=[ocr_page(self.CERTIFICATE)],
+                                 doc_type="income_certificate", cloud_ocr_consent=True)
+        self.assertEqual(recorder.requests, [])
         self.assertFalse(any(event.startswith("vision_extract") for event in result["events"]))
+
+    def test_an_id_card_whose_number_was_not_found_is_never_sent(self, _):
+        card = [("Meera Rao", 0.99), ("DOB: 17/09/1950", 0.99), ("2377 72B3 5757", 0.4)]  # misread number
+        recorder = Recorder(answer({"name": "Meera Rao", "date_of_birth": "17/09/1950"}))
+        result = self.run_upload(recorder, pages=[ocr_page(card)], doc_type="identity", cloud_ocr_consent=True)
+        self.assertEqual(recorder.requests, [])
+        self.assertIn("vision_extract:id_not_located", result["events"])
+        self.assertIn("Vision reading skipped: the ID number on this document could not be found on the page to "
+                      "black it out", result["warnings"])
+
+    def test_an_id_card_is_sent_with_its_number_photo_area_and_qr_blacked_out(self, _):
+        card = [("Meera Rao", 0.99), ("DOB: 17/09/1950", 0.99), (AADHAAR, 0.99)]
+        recorder = Recorder(answer({"name": "Meera Rao", "date_of_birth": "17/09/1950", "aadhaar_number": AADHAAR}))
+        with patch("backend.tools.vision_extract.face_boxes", return_value=[[400, 0, 600, 70]]) as faces:
+            result = self.run_upload(recorder, pages=[ocr_page(card)], doc_type="identity", cloud_ocr_consent=True,
+                                     **self.OWNER_CONFIRMS)
+        faces.assert_called_once()
+        sent = recorder.sent_image()
+        self.assertTrue((sent[80:110, 10:600] == 0).all())  # the Aadhaar line
+        self.assertTrue((sent[0:70, 400:600] == 0).all())  # where the face was found
+        self.assertEqual(result["status"], "confirmed")
+        fields = result["vault_record"]["confirmed_fields"]
+        self.assertEqual(fields["name"]["value"], "Meera Rao")
+        self.assertTrue(fields["aadhaar_number"]["source_ref"].endswith("page:1:line:3"))  # local, not the model
+        self.assertNotIn(AADHAAR, json.dumps(result, default=str))
 
     def test_no_key_or_a_failure_keeps_the_local_reading_and_asks_once(self, _):
         cases = ((Recorder(answer(PRESCRIPTION)), None, "vision_extract:no_key",

@@ -22,6 +22,7 @@ import io
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -30,7 +31,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from ..utils.env import find_env_file, load_env_file
-from ..utils.privacy import mask_ids_in_text
+from ..utils.privacy import shows_identifier
 from ..utils.rate_limit import CLOUD_RATE_SETTING, DEFAULT_CLOUD_PER_MINUTE, SpacedRateLimiter, rate_limiter
 from .ocr import group_lines, page_images, page_quality
 
@@ -90,9 +91,11 @@ def engine_label(engine_id: str) -> str:
 
 
 def id_boxes(page: dict[str, Any], extra_boxes: list[list[int]] | None = None) -> list[list[int]]:
-    """Boxes of OCR lines that show an ID number, plus boxes of ID fields found locally."""
+    """Boxes of OCR lines that show an identifier, plus boxes of ID fields found locally. A line
+    counts if anything on it looks like an ID, even a number OCR misread (wrong check digit), so a
+    worn card's number is not sent just because it was read with one wrong digit."""
     boxes = [line["box"] for line in page.get("lines", [])
-             if line.get("box") and mask_ids_in_text(line["text"]) != line["text"]]
+             if line.get("box") and shows_identifier(line["text"])]
     return boxes + [box for box in (extra_boxes or []) if box]
 
 
@@ -113,6 +116,25 @@ def qr_boxes(image: np.ndarray) -> list[list[int]]:
             x1, y1 = quad.max(axis=0)
             margin = 0.1 * max(x1 - x0, y1 - y0)
             boxes.append([int(x0 - margin), int(y0 - margin), int(x1 + margin) + 1, int(y1 + margin) + 1])
+    return boxes
+
+
+FACE_MODEL = "haarcascade_frontalface_default.xml"  # ships with OpenCV
+_face_detector: cv2.CascadeClassifier | None = None
+
+
+def face_boxes(image: np.ndarray) -> list[list[int]]:
+    """Boxes of faces (an ID card photo), with a margin: no model needs a face to read a document.
+    OpenCV's frontal-face detector; a face it misses (turned away, very small) is not covered."""
+    global _face_detector
+    if _face_detector is None:
+        _face_detector = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / FACE_MODEL))
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+    side = max(24, min(gray.shape[:2]) // 25)
+    boxes = []
+    for x, y, w, h in _face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(side, side)):
+        margin = int(0.4 * max(w, h))  # hair, chin and ears too
+        boxes.append([int(x) - margin, int(y) - margin, int(x + w) + margin, int(y + h) + margin])
     return boxes
 
 
@@ -298,7 +320,8 @@ def read_document_in_cloud(path: str, mime_type: str, local_pages: list[dict[str
     for local, image in zip(local_pages, page_images(path, mime_type)):
         if local.get("engine") == "pdf_text":
             continue
-        safe = black_out(image, id_boxes(local, id_field_boxes.get(local["page"], [])) + qr_boxes(image))
+        safe = black_out(image, id_boxes(local, id_field_boxes.get(local["page"], [])) + qr_boxes(image)
+                         + face_boxes(image))
         if engine == "groq":
             lines = read_with_groq_vision(safe, api_key, client)
         else:

@@ -5,8 +5,9 @@ or from handwritten page fixtures (document.pages). Neither needs an API key. Th
 review node supports both a prefilled decision for one-call demos and a real
 LangGraph interrupt when built with a checkpointer.
 
-With consent, scanned medical documents are read by a vision model after local OCR
-(vision_extract, Decision #41). A document can also be typed in by its owner with no
+With consent, a scanned or photographed document of any type is read by a vision model after
+local OCR, with identifiers, QR codes and faces blacked out (vision_extract, Decision #41;
+medical documents also need medical consent). A document can also be typed in by its owner with no
 file (manual_fields -> take_manual_entry, Decision #42).
 """
 
@@ -29,7 +30,7 @@ from ..tools.cloud_ocr import ENGINES, CloudOcrError, cloud_engine, engine_key, 
 from ..tools.vision_extract import extract_with_vision
 from ..tools.file_safety import check_file as check_uploaded_file
 from ..tools.free_text import FREE_TEXT_FIELDS, comparable, free_text_problems
-from ..tools.ocr_postprocess import clean_page, lookalike_key, repair_value
+from ..tools.ocr_postprocess import clean_line, clean_page, lookalike_key, repair_value
 from ..utils.privacy import ID_FIELDS, keyed_hash, load_hash_key, mask_identifier, mask_ids_in_text
 from ..utils.checkpoints import is_encrypted
 from ..utils.tracing import install_safe_client
@@ -70,6 +71,7 @@ class DocumentState(TypedDict, total=False):
     cloud_ocr_used: bool
     cloud_disagreements: list[str]  # organization fields the cloud read differently (local value kept)
     local_disagreements: list[str]  # fields local OCR read differently from the vision model (vision value kept)
+    vision_not_on_page: list[str]  # vision values that are nowhere in the page text read on this machine
     manual_fields: dict[str, Any]  # typed in by the owner, no file (Decision #42); emptied once taken
 
     # Graph outputs / control
@@ -483,15 +485,34 @@ def llm_extract(state: DocumentState) -> dict[str, Any]:
 
 
 def vision_possible(state: DocumentState) -> bool:
-    """Read a medical document with the vision model (Decision #41)? Only an uploaded scan or
-    photo, only with both consents, and only once. A PDF whose text is stored in it is read
-    exactly on this machine and never sent."""
+    """Read the document with the vision model (Decision #41; every type since full-test-review
+    Decision 14)? Only an uploaded scan or photo, only with cloud consent (a medical document also
+    needs medical consent), and only once. A PDF whose text is stored in it is read exactly on this
+    machine and never sent. Other types also need the Groq key, so a setup with only a Google Vision
+    key keeps re-reading unsure fields with cloud OCR as before."""
     document = state["document"]
-    if state.get("document_type") not in MEDICAL_TYPES or not document.get("file_path"):
+    document_type = state.get("document_type")
+    if document_type not in REQUIRED_FIELDS or not document.get("file_path"):
         return False
-    if not (state.get("cloud_ocr_consent") and state.get("medical_cloud_consent")) or state.get("cloud_ocr_used"):
+    if not state.get("cloud_ocr_consent") or state.get("cloud_ocr_used"):
+        return False
+    if document_type in MEDICAL_TYPES and not state.get("medical_cloud_consent"):
+        return False
+    if document_type not in MEDICAL_TYPES and not engine_key("groq"):
         return False
     return not all(page.get("engine") == "pdf_text" for page in document.get("pages", []))
+
+
+def on_page(value: Any, pages: list[dict[str, Any]]) -> bool:
+    """Is this value written in the page text read on this machine (case and spacing ignored,
+    raw or cleaned text, across line breaks)? The value gets the same clean-up as the text, so
+    "Rs. 2,56,000" is found where the cleaned text says "₹2,56,000"."""
+    def plain(text: str) -> str:
+        return " ".join(text.split()).casefold()
+
+    wanted = {plain(str(value)), plain(clean_line(str(value))[0])}
+    texts = [plain(text) for page in pages for text in (page.get("text", ""), clean_page(page)["text"])]
+    return any(want and want in text for want in wanted for text in texts)
 
 
 def same_reading(key: str, first: Any, second: Any) -> bool:
@@ -510,10 +531,11 @@ def same_reading(key: str, first: Any, second: Any) -> bool:
 
 
 def vision_extract(state: DocumentState) -> dict[str, Any]:
-    """Read a prescription, lab report or medical bill with the Groq vision model, ID numbers and
-    QR codes blacked out first. Its values are used, and every one is reviewed by the owner;
-    where local OCR read the same field differently, the owner is told. If the model can't be
-    used, the local reading carries on as before."""
+    """Read the document with the Groq vision model, identifiers, QR codes and faces blacked out
+    first. Its values are used, and every one is reviewed by the owner; where local OCR read the
+    same field differently, or the value is nowhere in the local text, the owner is told. An ID
+    card whose number local OCR could not find is not sent (nothing to black out). If the model
+    can't be used, the local reading carries on as before."""
     done = {"cloud_ocr_used": True}  # one cloud reading per document
     document = state["document"]
     local = state.get("extracted_fields", {})
@@ -526,6 +548,9 @@ def vision_extract(state: DocumentState) -> dict[str, Any]:
                     "warnings": [*update["warnings"], "The page could not be read reliably on this machine"]}
         return {**update, "route": "continue"}
 
+    if id_not_located(state["document_type"], local):
+        return local_only("Vision reading skipped: the ID number on this document could not be found on the page "
+                          "to black it out", "vision_extract:id_not_located")
     key = engine_key("groq")
     if not key:
         return local_only(f"Vision reading skipped: {ENGINES['groq'][2]} is not set", "vision_extract:no_key")
@@ -540,9 +565,12 @@ def vision_extract(state: DocumentState) -> dict[str, Any]:
         return local_only(f"Vision reading unavailable ({exc})", "vision_extract:failed")
     fields = {name: dict(item) for name, item in local.items()}
     disagreements = []
-    for name, value in found.items():  # only this type's medical fields: never an ID field
+    not_on_page = []
+    for name, value in found.items():  # only this type's fields in SHAPES: never an ID field
         if name in fields and not same_reading(name, fields[name]["value"], value):
             disagreements.append(name)
+        elif name not in fields and not isinstance(value, list) and not on_page(value, document["pages"]):
+            not_on_page.append(name)  # nothing local to compare with, and not even in the local text
         if isinstance(value, list):
             value = [{**row, "source_ref": "vision_model", "confidence": 0.0, "box": None} for row in value]
         # Confidence 0.0: the model gives none, so every value goes to review.
@@ -554,6 +582,7 @@ def vision_extract(state: DocumentState) -> dict[str, Any]:
         **done,
         "extracted_fields": fields,
         "local_disagreements": sorted(disagreements),
+        "vision_not_on_page": sorted(not_on_page),
         "route": "continue",
         "events": add_event(state, f"vision_extract:found_{len(found)}"),
     }
@@ -605,6 +634,8 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
             flags.append(f"{key}: the cloud reading differs, please check")
         if key in state.get("local_disagreements", []):
             flags.append(f"{key}: the local reading differs, please check")
+        if key in state.get("vision_not_on_page", []):
+            flags.append(f"{key}: not found in the text read on this machine, please check carefully")
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
         if is_blank(normalized.get(key)):
             flags.append(f"{key}: missing or invalid")
