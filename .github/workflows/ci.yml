@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'k8s/**'
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 permissions:
@@ -23,6 +27,7 @@ jobs:
   # ============================================================================
   build:
     name: "1. Build Image"
+    if: "!startsWith(github.event.head_commit.message, 'deployed:') && !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]')"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -140,22 +145,30 @@ jobs:
         run: python ci/tag.py --push
 
   # ============================================================================
-  # Stage 6: Deploy
+  # Stage 6: Deploy (GitOps ArgoCD Manifest Update)
   # ============================================================================
   deploy:
-    name: "6. Deploy"
+    name: "6. GitOps ArgoCD Deploy"
     needs: [publish, release]
     runs-on: ubuntu-latest
     env:
       NEW_TAG: ${{ needs.tag.outputs.new_tag }}
     steps:
-      - name: Checkout Code
+      - name: Checkout Code with Full History
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Run Deploy Step
-        run: python ci/deploy.py
+      - name: Configure Git Bot
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run Deploy Step (Update k8s manifests & push)
+        run: python ci/deploy.py --push
