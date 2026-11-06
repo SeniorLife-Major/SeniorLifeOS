@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-IMAGE_NAME = os.environ.get("IMAGE_NAME", "seniorlife-backend")
+IMAGE_NAME = os.environ.get("IMAGE_NAME", "seniorlifeos")
 DOCKER_USERNAME = os.environ.get("DOCKER_USERNAME") or os.environ.get("DOCKERHUB_USERNAME", "")
 
 

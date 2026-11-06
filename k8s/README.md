@@ -1,61 +1,6 @@
-# SeniorLife OS — Kubernetes & ArgoCD GitOps Deployment
+# SeniorLife OS — Kubernetes Manifests & GitOps Deployment
 
-This directory contains individual, declarative Kubernetes manifests and ArgoCD configurations for deploying SeniorLife OS via GitOps.
-
----
-
-## Architecture Overview
-
-```
-                      +-----------------------------+
-                      |     GitHub CI Pipeline      |
-                      |  (Build, Test, GHCR Push)   |
-                      +--------------+--------------+
-                                     |
-                    Updates tag in k8s manifests
-                    Commits: deployed:<version> [skip ci]
-                                     |
-                                     v
-                      +-----------------------------+
-                      |   Git Repository (main)     |
-                      |          k8s/               |
-                      +--------------+--------------+
-                                     |
-                             ArgoCD watches k8s/
-                                     |
-                                     v
-                      +-----------------------------+
-                      |       ArgoCD Server         |
-                      |  (Auto-sync & Self-heal)    |
-                      +--------------+--------------+
-                                     |
-                        Applies desired state
-                                     |
-                                     v
-            +-------------------------------------------------+
-            |              Kubernetes Cluster                 |
-            |            Namespace: seniorlifeos              |
-            |                                                 |
-            |  +--------------------+   +------------------+  |
-            |  |    Ingress         |   | Document Vault   |  |
-            |  | (HTTP / Port 8000) |   | PVC (10Gi)       |  |
-            |  +---------+----------+   +--------+---------+  |
-            |            |                       |            |
-            |            v                       v            |
-            |  +-------------------------------------------+  |
-            |  | Deployment: seniorlife-backend            |  |
-            |  |   - Init: wait-for-postgres               |  |
-            |  |   - Init: Alembic database migration      |  |
-            |  |   - Container: FastAPI + LangGraph        |  |
-            |  +--------------------+----------------------+  |
-            |                       |                         |
-            |                       v                         |
-            |  +-------------------------------------------+  |
-            |  | Service & Deployment: seniorlife-postgres |  |
-            |  | Storage: postgres-data-pvc (10Gi)         |  |
-            |  +-------------------------------------------+  |
-            +-------------------------------------------------+
-```
+This directory contains the declarative Kubernetes manifests for SeniorLife OS.
 
 ---
 
@@ -76,47 +21,43 @@ Every resource is maintained in its own dedicated YAML file:
 | [`backend-service.yaml`](./backend-service.yaml) | `Service` | ClusterIP service exposing SeniorLife OS HTTP API on port 8000 |
 | [`ingress.yaml`](./ingress.yaml) | `Ingress` | Nginx Ingress routing traffic to `seniorlife-backend:8000` |
 | [`kustomization.yaml`](./kustomization.yaml) | `Kustomization` | Kustomize bundle combining all manifests and image overrides |
-| [`argocd-application.yaml`](./argocd-application.yaml) | `Application` | ArgoCD application definition with automated sync and self-healing |
-| [`argocd-cm.yaml`](./argocd-cm.yaml) | `ConfigMap` | ArgoCD configuration setting `timeout.reconciliation: "10s"` for fast polling |
-| [`argocd-repo-secret.yaml`](./argocd-repo-secret.yaml) | `Secret` | ArgoCD GitHub credentials template to prevent API rate limits |
 
 ---
 
-## Automated CI/CD & ArgoCD Workflow
+## Quick Setup: ArgoCD Web UI
 
-1. **Build & Test**: When a push occurs on `main`, GitHub Actions builds the image and runs the test suite.
-2. **Tag & Publish**: CI increments the semantic version tag (e.g. `v1.1.1`) and publishes the image to `ghcr.io/seniorlife-major/seniorlifeos:<version>`.
-3. **Manifest Update & Push**: `ci/deploy.py` updates the image tag in [`backend-deployment.yaml`](./backend-deployment.yaml) and [`kustomization.yaml`](./kustomization.yaml), and commits the change:
+1. **Install ArgoCD on your server / cluster:**
    ```bash
-   git commit -m "deployed:<version> [skip ci]"
-   git push origin main
+   kubectl create namespace argocd
+   kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+   # Retrieve initial admin password:
+   kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
    ```
-4. **CI Loop Prevention**:
-   - The commit message includes `[skip ci]`, causing GitHub Actions to skip triggering any workflows.
-   - The workflow configuration uses `paths-ignore: ['k8s/**', 'docs/**', '**.md']`, completely ignoring pushes touching only manifests.
-   - The workflow condition `if: "!startsWith(github.event.head_commit.message, 'deployed:')"` provides a third failsafe.
-5. **GitOps Sync**: ArgoCD detects the new commit in `k8s/`, reconciles the state, runs database migrations via the initContainer, and performs a zero-downtime rolling update.
+
+2. **Connect Repository in ArgoCD Web UI:**
+   * Go to **Settings** → **Repositories** → **Connect Repo**.
+   * Add your GitHub repository via HTTPS or SSH credentials.
+
+3. **Create Application in ArgoCD Web UI:**
+   * Click **New App**:
+     * **Application Name**: `seniorlifeos`
+     * **Project**: `default`
+     * **Sync Policy**: `Automatic` (enable `Prune Resources` & `Self-Heal`)
+     * **Repository URL**: `https://github.com/seniorlife-major/SeniorLifeOS`
+     * **Revision**: `main`
+     * **Path**: `k8s`
+     * **Cluster URL**: `https://kubernetes.default.svc`
+     * **Namespace**: `seniorlifeos` (enable `Auto-Create Namespace`)
+   * Click **Create**. ArgoCD will immediately pull and reconcile the `k8s/` manifests.
 
 ---
 
-## Quick Start & Verification
+## Local Verification / Dry-Run
 
-### 1. Register with ArgoCD
-Apply the ArgoCD Application manifest into your ArgoCD namespace:
-```bash
-kubectl apply -f k8s/argocd-application.yaml -n argocd
-```
-
-### 2. Manual Dry-Run / Client-Side Diff
 You can preview the generated manifests locally at any time:
 ```bash
 kubectl kustomize k8s/
 # or
 kubectl apply --dry-run=client -k k8s/
-```
-
-### 3. Check Application Status
-```bash
-kubectl get all -n seniorlifeos
-kubectl logs -n seniorlifeos -l app=seniorlife-backend -c backend -f
 ```
