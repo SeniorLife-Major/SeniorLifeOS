@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seniorlife-backend
+  namespace: seniorlifeos
+  labels:
+    app.kubernetes.io/name: seniorlifeos
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app: seniorlife-backend
+  template:
+    metadata:
+      labels:
+        app: seniorlife-backend
+        app.kubernetes.io/name: seniorlifeos
+        app.kubernetes.io/component: backend
+    spec:
+      terminationGracePeriodSeconds: 30
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL service at seniorlife-postgres:5432..."
+              until pg_isready -h seniorlife-postgres -p 5432 -U postgres; do
+                echo "PostgreSQL is not ready yet; waiting 2 seconds..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready and accepting connections."
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+        - name: run-db-migrations
+          image: ghcr.io/seniorlife-major/seniorlifeos:v1.0.6
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Applying Alembic database migrations..."
+              python -m alembic -c backend/alembic.ini upgrade head
+              echo "Database migrations applied successfully."
+          envFrom:
+            - configMapRef:
+                name: seniorlife-config
+            - secretRef:
+                name: seniorlife-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+      containers:
+        - name: backend
+          image: ghcr.io/seniorlife-major/seniorlifeos:v1.0.6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: seniorlife-config
+            - secretRef:
+                name: seniorlife-secrets
+          volumeMounts:
+            - name: document-vault
+              mountPath: /app/var/documents
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1500m
+              memory: 2Gi
+      volumes:
+        - name: document-vault
+          persistentVolumeClaim:
+            claimName: seniorlife-vault-pvc
