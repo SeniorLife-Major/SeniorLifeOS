@@ -9,7 +9,11 @@ metadata:
 spec:
   replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  minReadySeconds: 5
   selector:
     matchLabels:
       app: seniorlife-backend
@@ -20,6 +24,7 @@ spec:
         app.kubernetes.io/name: seniorlifeos
         app.kubernetes.io/component: backend
     spec:
+      terminationGracePeriodSeconds: 30
       initContainers:
         - name: wait-for-postgres
           image: postgres:16-alpine
