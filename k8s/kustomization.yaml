@@ -17,4 +17,4 @@ resources:
 
 images:
   - name: ghcr.io/seniorlife-major/seniorlifeos
-    newTag: v1.0.6
+    newTag: v1.1.1
