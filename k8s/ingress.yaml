@@ -9,8 +9,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: seniorlife.local
-      http:
+    - http:
         paths:
           - path: /
             pathType: Prefix
