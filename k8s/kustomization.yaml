@@ -18,4 +18,4 @@ resources:
 
 images:
   - name: ghcr.io/seniorlife-major/seniorlifeos
-    newTag: v1.1.1
+    newTag: v1.1.2
