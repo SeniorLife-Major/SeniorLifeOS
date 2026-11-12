@@ -112,6 +112,29 @@ class InvokeStructuredTests(unittest.TestCase):
             self.assertEqual(invoke_structured(Answer, "prompt").name, "x")
         self.assertEqual(calls, [None, "json_schema"])
 
+    def test_tool_called_by_a_wrong_name_is_retried_as_json(self):
+        from langchain_core.exceptions import OutputParserException
+        from pydantic import BaseModel
+
+        class Answer(BaseModel):
+            name: str | None = None
+
+        calls = []
+
+        def factory(schema, method=None):
+            calls.append(method)
+            agent = MagicMock()
+            if method is None:  # the exact error Groq's gpt-oss gave in the live health check
+                agent.invoke.side_effect = OutputParserException(
+                    "Unknown tool type: 'functions.Answer'. Available tools: Answer")
+            else:
+                agent.invoke.return_value = Answer(name="x")
+            return agent
+
+        with patch("backend.agents.llm_agents.structured_model", factory):
+            self.assertEqual(invoke_structured(Answer, "prompt").name, "x")
+        self.assertEqual(calls, [None, "json_schema"])
+
     def test_other_errors_are_not_retried(self):
         factory = MagicMock()
         factory.return_value.invoke.side_effect = RuntimeError("rate limited")
