@@ -28,16 +28,22 @@ def run_stage(name: str, script: str, *extra_args: str) -> None:
 
 
 def main() -> None:
+    push_mode = "--push" in sys.argv
+
     print("=" * 60)
     print("Starting SeniorLife OS CI/CD Pipeline")
+    print(f"  Push Mode: {push_mode}")
     print("=" * 60)
 
     run_stage("Stage 1: Build Image", "build.py")
     run_stage("Stage 2: Run Tests", "test.py")
     run_stage("Stage 3: Create Git Tag", "tag.py")
     run_stage("Stage 4: Publish to Container Registry", "publish.py")
-    run_stage("Stage 5: Push Git Tag", "tag.py", "--push")
-    run_stage("Stage 6: Deploy", "deploy.py")
+    if push_mode:
+        run_stage("Stage 5: Push Git Tag", "tag.py", "--push")
+        run_stage("Stage 6: GitOps Deploy", "deploy.py", "--push")
+    else:
+        run_stage("Stage 6: GitOps Deploy", "deploy.py")
 
     print("\n[PIPELINE COMPLETE] All stages executed successfully!\n")
 

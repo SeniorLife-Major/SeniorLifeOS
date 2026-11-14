@@ -1,8 +1,8 @@
-"""Stage 3: Publish to Container Registry (GitHub Packages / GHCR or Docker Hub).
+"""Stage 4: Multi-Arch Build & Publish to Container Registry (GHCR / Docker Hub).
 
-- Authenticates with the container registry (defaults to GitHub Packages ghcr.io)
-- Tags the built image with the version tag and 'latest'
-- Pushes both tags to the registry
+- Authenticates with the container registry (ghcr.io)
+- Builds multi-architecture Docker image (linux/amd64 and linux/arm64) using Docker Buildx
+- Pushes both versioned tag and 'latest' tag multi-platform manifests to the registry
 """
 
 from __future__ import annotations
@@ -13,8 +13,9 @@ import sys
 from pathlib import Path
 
 VERSION_FILE = Path(__file__).parent / ".version"
-IMAGE_NAME = os.environ.get("IMAGE_NAME", "seniorlife-backend").lower()
+IMAGE_NAME = os.environ.get("IMAGE_NAME", "seniorlifeos").lower()
 REGISTRY = os.environ.get("REGISTRY", "ghcr.io").lower()
+PLATFORMS = os.environ.get("DOCKER_PLATFORMS", "linux/amd64,linux/arm64")
 
 # Authentication: Works automatically with GITHUB_TOKEN on GitHub Actions
 REGISTRY_USER = (
@@ -64,7 +65,7 @@ def registry_login() -> None:
     print(f"Login to {REGISTRY} succeeded.\n")
 
 
-def publish_image(version: str) -> None:
+def publish_image(version: str, platforms: str = PLATFORMS) -> None:
     # GitHub Container Registry naming: ghcr.io/<owner>/<image_name> (must be lowercase)
     if "ghcr.io" in REGISTRY:
         docker_repo = f"ghcr.io/{REPO_OWNER}/{IMAGE_NAME}".lower()
@@ -74,27 +75,30 @@ def publish_image(version: str) -> None:
     versioned_tag = f"{docker_repo}:{version}"
     latest_tag = f"{docker_repo}:latest"
 
-    # Source local image from Stage 1
-    source_image = f"{IMAGE_NAME}:latest"
-
     print("=" * 60)
-    print(f"[CI STAGE 3: PUBLISH] Publishing to {REGISTRY}: {docker_repo}")
-    print(f"  - Version Tag: {versioned_tag}")
-    print(f"  - Latest Tag:  {latest_tag}")
+    print(f"[CI STAGE 4: PUBLISH] Multi-Arch Build & Publish to {REGISTRY}: {docker_repo}")
+    print(f"  - Target Platforms: {platforms}")
+    print(f"  - Version Tag:      {versioned_tag}")
+    print(f"  - Latest Tag:       {latest_tag}")
     print("=" * 60)
 
-    # Tag versioned and latest images
-    subprocess.run(["docker", "tag", source_image, versioned_tag], check=True)
-    subprocess.run(["docker", "tag", source_image, latest_tag], check=True)
-
-    # Push to Registry
-    print(f"Pushing {versioned_tag}...")
-    subprocess.run(["docker", "push", versioned_tag], check=True)
-
-    print(f"Pushing {latest_tag}...")
-    subprocess.run(["docker", "push", latest_tag], check=True)
-
-    print(f"\n[CI STAGE 3: SUCCESS] Successfully published to {REGISTRY}!\n")
+    # Use docker buildx to build multi-arch (linux/amd64 and linux/arm64) and push manifest in one step
+    cmd = [
+        "docker", "buildx", "build",
+        "--platform", platforms,
+        "--build-arg", f"APP_VERSION={version}",
+        "-t", versioned_tag,
+        "-t", latest_tag,
+        "--push",
+        ".",
+    ]
+    print(f"Running: {' '.join(cmd)}\n")
+    try:
+        subprocess.run(cmd, check=True)
+        print(f"\n[CI STAGE 4: SUCCESS] Successfully built and published multi-arch image ({platforms}) to {REGISTRY}!\n")
+    except subprocess.CalledProcessError as e:
+        print(f"\n[CI STAGE 4: FAILED] Multi-arch docker buildx failed with code {e.returncode}", file=sys.stderr)
+        raise
 
 
 def main() -> None:
@@ -103,7 +107,7 @@ def main() -> None:
         registry_login()
         publish_image(version)
     except Exception as e:
-        print(f"\n[CI STAGE 3: FAILED] Publish error: {e}", file=sys.stderr)
+        print(f"\n[CI STAGE 4: FAILED] Publish error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

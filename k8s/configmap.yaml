@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seniorlife-config
+  namespace: seniorlifeos
+  labels:
+    app.kubernetes.io/name: seniorlifeos
+    app.kubernetes.io/component: backend
+data:
+  APP_NAME: "SeniorLife OS"
+  APP_ENV: "production"
+  DEBUG: "false"
+  DEMO_MODE: "false"
+  SERVER_HOST: "0.0.0.0"
+  SERVER_PORT: "8000"
+  DATABASE_ECHO: "false"
+  DATABASE_POOL_SIZE: "10"
+  DATABASE_MAX_OVERFLOW: "20"
+  SENIORLIFE_STORAGE_DIR: "/app/var/documents"
+  SENIORLIFE_LLM_PROVIDER: "groq"
+  SENIORLIFE_LLM_MODEL: "openai/gpt-oss-20b"
+  SENIORLIFE_CLOUD_OCR: "google"
+  SENIORLIFE_VIRUS_SCANNER: "none"
+  ACTUATOR_ENABLED: "true"
+  LANGSMITH_TRACING: "false"
