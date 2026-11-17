@@ -10,6 +10,8 @@
                                 in the request looked up on Geoapify (tools/geocode.py)
                 -> ask_location missing, not found, or one name for far-apart places: one
                                 question (a place, the phone's location, or one of the options)
+                -> search_doctors  doctors of that specialty near the place, from the stored list
+                                (tools/doctor_search.py); none within 20 km: a general physician
         -> ask_clarification    unclear: one question, then the answer is checked from the start
         -> stop                 a task this graph doesn't handle yet
 
@@ -25,8 +27,10 @@ request is understood on this machine with a few words per specialty (tools/spec
 Where to look (step 2a): the model says whether the person means where they are now, a named
 place, or home (search_near). The phone's location is used only when they mean where they are
 now, or said nothing about where; without the model, only clear "near me" words count, and
-anything else is asked (a request may name a place this machine can't recognise). Finding,
-checking and ranking doctors there comes next; this graph ends with the place.
+anything else is asked (a request may name a place this machine can't recognise).
+
+Doctors near the place (step 2d) come from the stored list, never from the network at request
+time. Checking and ranking them comes next; this graph ends with the doctors found, nearest first.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from ..tools.doctor_search import RADII_KM, DoctorListError, find_nearby, load_doctors
 from ..tools.geocode import GeocodeError, device_location, find_place, search_near_from_text
 from ..tools.red_flags import emergency_message, emergency_numbers, find_red_flags
 from ..tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES, specialty_from_text
@@ -66,6 +71,15 @@ LOCATION_QUESTIONS = {
     "unavailable": "I can't look up places just now. Please share your current location.",
 }
 LOCATION_NOT_FOUND = "The place could not be found. Please start again with the area and the city."
+FAR = RADII_KM[-1]
+RELAXED_NOTES = {
+    "max_fee": f"No such doctor within your fee limit within {FAR} km in our list, so higher fees are shown.",
+    "doctor_gender": f"No doctor of the gender you asked for within {FAR} km in our list, so others are shown.",
+}
+GENERAL_PHYSICIAN_FIRST = ("No {label} within {km} km in our list. A general physician nearby can see you "
+                           "first and refer you to one.")
+NO_DOCTORS = "No doctor of this kind within {km} km in our list."
+SEARCH_UNAVAILABLE = "Doctor search is not available right now."
 
 
 class HealthState(TypedDict, total=False):
@@ -103,6 +117,10 @@ class HealthState(TypedDict, total=False):
     location_problem: str  # why the location question was asked
     location_query: str  # the place text looked up
     location_asked: bool
+    doctors: list[dict[str, Any]]  # nearest first, each with distance_km (step 2d)
+    search_radius_km: int
+    relaxed_filters: list[str]  # the person's wishes that had to be dropped: max_fee, doctor_gender
+    doctor_fallback: str | None  # general_physician when no doctor of the specialty was near
     events: list[str]
     warnings: list[str]
     errors: list[str]
@@ -362,7 +380,7 @@ def locate(state: HealthState) -> dict[str, Any]:
         problem = "where_or_here" if phone else "where"
 
     if place:
-        return {"search_location": place, "location_options": [], "status": "location_found", "route": "done",
+        return {"search_location": place, "location_options": [], "status": "location_found", "route": "search",
                 "warnings": warnings, "events": add_event(state, f"locate:{place['source']}")}
     if state.get("location_asked"):  # one question only
         return {"status": "location_not_found", "route": "stop", "warnings": [*warnings, LOCATION_NOT_FOUND],
@@ -389,6 +407,46 @@ def ask_location(state: HealthState) -> dict[str, Any]:
             "events": add_event(state, "ask_location:answered")}
 
 
+def search_doctors(state: HealthState) -> dict[str, Any]:
+    """Doctors of the specialty near the place, nearest first (step 2d). The person's wishes
+    (doctor's gender, highest fee) are kept while the search widens; dropped only if nobody is
+    found within 20 km, and then the answer says so. No doctor of the specialty within 20 km: the
+    nearest general physicians, who can see them first and refer them (Decision 9)."""
+    warnings = list(state.get("warnings", []))
+    specialty = state.get("specialty") if state.get("specialty") in SPECIALTIES else GENERAL_PHYSICIAN
+    preferences = state.get("preferences") or {}
+    try:
+        doctors = load_doctors()
+    except DoctorListError as exc:
+        return {"status": "search_unavailable", "doctors": [], "warnings": [*warnings, SEARCH_UNAVAILABLE],
+                "errors": [*state.get("errors", []), str(exc)], "route": "done",
+                "events": add_event(state, "search_doctors:no_list")}
+    wishes = {"gender": preferences.get("doctor_gender"), "max_fee": preferences.get("max_fee")}
+    found = find_nearby(doctors, specialty, state["search_location"], **wishes)
+    fallback = None
+    if not found["doctors"] and specialty != GENERAL_PHYSICIAN:
+        first = find_nearby(doctors, GENERAL_PHYSICIAN, state["search_location"], **wishes)
+        if first["doctors"]:
+            found, fallback = first, GENERAL_PHYSICIAN
+            warnings.append(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES[specialty], km=FAR))
+    if found["doctors"]:
+        warnings.extend(RELAXED_NOTES[name] for name in found["relaxed"])
+    else:
+        warnings.append(NO_DOCTORS.format(km=FAR))
+    count = len(found["doctors"])
+    return {
+        "doctors": found["doctors"],
+        "search_radius_km": found["radius_km"],
+        "relaxed_filters": found["relaxed"] if count else [],
+        "doctor_fallback": fallback,
+        "status": "doctors_found" if count else "no_doctors_nearby",
+        "warnings": warnings,
+        "route": "done",
+        "events": add_event(state, f"search_doctors:{count}:{found['radius_km']}km"
+                                   + (":general_physician" if fallback else "")),
+    }
+
+
 def route_step(state: HealthState) -> str:
     return state.get("route", "stop")
 
@@ -409,6 +467,7 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_node("map_specialty", map_specialty)
     graph.add_node("locate", locate)
     graph.add_node("ask_location", ask_location)
+    graph.add_node("search_doctors", search_doctors)
 
     graph.add_edge(START, "validate_request")
     graph.add_conditional_edges("validate_request", route_step, {"continue": "safety_check", "stop": END})
@@ -422,6 +481,8 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_conditional_edges("ask_clarification", route_step, {"again": "safety_check", "stop": END})
     graph.add_edge("emergency", END)
     graph.add_edge("map_specialty", "locate")
-    graph.add_conditional_edges("locate", route_step, {"done": END, "ask_location": "ask_location", "stop": END})
+    graph.add_conditional_edges("locate", route_step, {"search": "search_doctors", "ask_location": "ask_location",
+                                                       "stop": END})
+    graph.add_edge("search_doctors", END)
     graph.add_conditional_edges("ask_location", route_step, {"again": "locate", "stop": END})
     return graph.compile(checkpointer=checkpointer)

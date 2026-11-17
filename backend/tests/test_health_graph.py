@@ -13,10 +13,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from backend.graphs.health_graph import (
-    CLARIFYING_QUESTION, HERE_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS, MAX_QUERY_CHARS, CALL_QUESTION,
-    VAGUE_NEED, build_health_graph, map_specialty,
+    CLARIFYING_QUESTION, GENERAL_PHYSICIAN_FIRST, HERE_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS, MAX_QUERY_CHARS,
+    CALL_QUESTION, NO_DOCTORS, RELAXED_NOTES, SEARCH_UNAVAILABLE, VAGUE_NEED, build_health_graph, map_specialty,
 )
+from backend.tools.doctor_search import DoctorListError
 from backend.tools.geocode import ATTRIBUTION, GeocodeError
+from test_doctor_search import doctor
 from backend.tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES
 from backend.utils.checkpoints import make_checkpointer
 
@@ -30,15 +32,26 @@ def no_network(text, near=None):
     raise AssertionError(f"a test looked up {text!r} without a stand-in for the place search")
 
 
-# No test may reach Geoapify: a lookup without a FakePlaces stand-in fails loudly.
+# Made-up doctors around Andheri, Mumbai (none in Pune). The real list (var/providers) changes
+# with every import and is never read by these tests.
+FAKE_DOCTORS = [
+    doctor(1, 1.0, "cardiologist", "female", 1500), doctor(2, 2.0, "cardiologist", "male", 2000),
+    doctor(3, 3.0, "cardiologist", "male", 800), doctor(4, 1.5, "orthopedic", "female", 1000),
+    doctor(5, 2.5, "general_physician", "male", 500),
+]
+
+# No test may reach Geoapify (a lookup without a FakePlaces stand-in fails loudly) or the real list.
 _no_place_search = patch("backend.graphs.health_graph.find_place", no_network)
+_fake_list = patch("backend.graphs.health_graph.load_doctors", lambda: FAKE_DOCTORS)
 
 
 def setUpModule():
     _no_place_search.start()
+    _fake_list.start()
 
 
 def tearDownModule():
+    _fake_list.stop()
     _no_place_search.stop()
 
 
@@ -209,8 +222,12 @@ class UnderstandingTests(unittest.TestCase):
         result, _ = with_model("Mujhe dil ke doctor ko dikhana hai, Andheri mein, lady doctor, 800 tak",
                                reading(urgency="soon", preferences=prefs, search_near="named_place"),
                                places=FakePlaces({"Andheri": found(ANDHERI_WEST)}))
-        self.assertEqual(result["status"], "location_found")
         self.assertEqual(result["search_location"]["label"], ANDHERI_WEST["label"])
+        # No lady cardiologist within ₹800: the fee goes first, she stays a lady doctor, and it is said.
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:1"])
+        self.assertEqual(result["relaxed_filters"], ["max_fee"])
+        self.assertIn(RELAXED_NOTES["max_fee"], result["warnings"])
         self.assertEqual(result["reading_source"], "model")
         self.assertEqual(result["specialty"], "cardiologist")
         self.assertEqual(result["specialty_label"], SPECIALTIES["cardiologist"])
@@ -288,7 +305,7 @@ class LocationTests(unittest.TestCase):
         places = FakePlaces()
         result, _ = with_model("dil ka doctor mere paas", reading(search_near="current_location"), places,
                                current_location=IN_ANDHERI)
-        self.assertEqual(result["status"], "location_found")
+        self.assertEqual(result["status"], "doctors_found")
         self.assertEqual(result["search_location"], {**ROUNDED, "label": HERE_LABEL, "source": "phone"})
         self.assertEqual(places.calls, [])
         self.assertIn("locate:phone", result["events"])
@@ -333,7 +350,8 @@ class LocationTests(unittest.TestCase):
         places = FakePlaces({"Andheri": ambiguous, "Andheri, Mumbai": found(ANDHERI_WEST)})
         result, _ = with_model("Andheri mein heart doctor", named, places, location_answer="Mumbai")
         self.assertEqual([text for text, _ in places.calls], ["Andheri", "Andheri, Mumbai"])
-        self.assertEqual(result["status"], "location_found")
+        self.assertEqual(result["search_location"]["label"], ANDHERI_WEST["label"])
+        self.assertEqual(result["status"], "doctors_found")
 
     def test_each_kind_of_missing_place_gets_its_own_question(self):
         cases = [("not_said", {}, "where"), ("home", {}, "home"), ("current_location", {}, "current_location"),
@@ -397,6 +415,64 @@ class LocationTests(unittest.TestCase):
         self.assertIn("exactly as written", fake.prompts[0])
 
 
+class DoctorSearchTests(unittest.TestCase):
+    """Step 2d: doctors near the place, from the stored list (a made-up one here)."""
+
+    def test_doctors_of_the_specialty_near_the_place_nearest_first(self):
+        result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                               current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:1", "practo:2", "practo:3"])
+        self.assertEqual(result["search_radius_km"], 5)
+        self.assertTrue(all(d["specialty"] == "cardiologist" and "distance_km" in d for d in result["doctors"]))
+        self.assertEqual((result["relaxed_filters"], result["doctor_fallback"]), ([], None))
+        self.assertIn("search_doctors:3:5km", result["events"])
+
+    def test_without_the_model_near_me_words_still_find_doctors(self):
+        result = without_model("knee doctor near me", current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:4"])
+        self.assertEqual(result["search_radius_km"], 20)  # only one orthopedic: widened to the end
+
+    def test_no_specialist_near_gives_a_general_physician_first(self):
+        result, _ = with_model("eye doctor near me", reading(specialty="ophthalmologist",
+                                                             search_near="current_location"),
+                               FakePlaces(), current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual(result["doctor_fallback"], GENERAL_PHYSICIAN)
+        self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:5"])
+        self.assertIn(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES["ophthalmologist"], km=20), result["warnings"])
+        self.assertIn("search_doctors:1:20km:general_physician", result["events"])
+
+    def test_nobody_near_says_so(self):
+        result, _ = with_model("Pune mein heart doctor", reading(search_near="named_place",
+                                                                 preferences={"area": "Pune"}),
+                               FakePlaces({"Pune": found(PUNE)}))
+        self.assertEqual((result["status"], result["doctors"]), ("no_doctors_nearby", []))
+        self.assertIn(NO_DOCTORS.format(km=20), result["warnings"])
+        self.assertEqual(result["relaxed_filters"], [])
+
+    def test_without_the_list_the_search_is_unavailable(self):
+        def no_list():
+            raise DoctorListError("The doctor list is missing; build it with tools/provider_import.py")
+
+        with patch("backend.graphs.health_graph.load_doctors", no_list):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "search_unavailable")
+        self.assertIn(SEARCH_UNAVAILABLE, result["warnings"])
+
+    def test_the_list_is_read_only_once_a_place_is_found(self):
+        loader = MagicMock(return_value=FAKE_DOCTORS)
+        with patch("backend.graphs.health_graph.load_doctors", loader):
+            for query, extra in (("heart doctor", {}), ("chest pain, heart doctor near me",
+                                                         {"current_location": IN_ANDHERI})):
+                with self.subTest(query=query):
+                    result = without_model(query, **extra)
+                    self.assertIn(result["status"], ("needs_location", "emergency"))
+        loader.assert_not_called()
+
+
 class PauseAndValidationTests(unittest.TestCase):
     def test_real_pause_for_the_emergency_question_and_resume(self):
         graph = build_health_graph(checkpointer=make_checkpointer(TEST_CHECKPOINT_KEY))
@@ -409,7 +485,8 @@ class PauseAndValidationTests(unittest.TestCase):
             self.assertEqual(paused["__interrupt__"][0].value["question"], CALL_QUESTION)
             self.assertEqual(paused["__interrupt__"][0].value["numbers"][0]["number"], "112")
             result = graph.invoke(Command(resume={"call_emergency": False}), config)
-        self.assertEqual(result["status"], "location_found")  # nothing said about where: the phone's location
+        self.assertEqual(result["search_location"]["source"], "phone")  # nothing said about where
+        self.assertEqual(result["status"], "doctors_found")
         self.assertEqual(len(fake.prompts), 1)  # the model is not asked again on resume
 
     def test_real_pause_for_the_clarifying_question(self):
@@ -428,8 +505,8 @@ class PauseAndValidationTests(unittest.TestCase):
             self.assertEqual(paused["__interrupt__"][0].value, {"question": LOCATION_QUESTIONS["where"],
                                                                  "options": []})
             result = graph.invoke(Command(resume="Pune"), config)
-        self.assertEqual(result["status"], "location_found")
         self.assertEqual(result["search_location"]["label"], PUNE["label"])
+        self.assertEqual(result["status"], "no_doctors_nearby")  # the made-up list has nobody in Pune
 
     def test_plain_checkpointer_is_refused(self):
         with self.assertRaises(ValueError):
