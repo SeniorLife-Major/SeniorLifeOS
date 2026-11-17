@@ -197,10 +197,12 @@ def choose_scheme(need_text: str, candidates: list[dict]) -> SchemeChoice:
 SpecialtyChoice = Literal[tuple(SPECIALTIES) + ("unsure",)]
 SignChoice = Literal[FLAGS]
 HEALTH_INTENTS = ("find_doctor", "appointment", "medicine", "documents", "benefits", "other", "unclear")
+SEARCH_NEAR = ("current_location", "named_place", "home", "not_said")
 
 
 class HealthPreferences(BaseModel):
-    area: Optional[str] = Field(None, description="the place, area or city they want the doctor in, as written")
+    area: Optional[str] = Field(None, description="the place, area or city they want the doctor in, exactly as "
+                                                   "written, without adding a city or state they did not say")
     doctor_language: Optional[str] = Field(None, description="the language the doctor should speak, if said")
     doctor_gender: Literal["any", "female", "male"] = Field("any", description="only if they asked for one")
     max_fee: Optional[int] = Field(None, description="the most they want to pay for a visit, in rupees, if said")
@@ -217,6 +219,7 @@ class HealthRequestReading(BaseModel):
     specialty: SpecialtyChoice = Field("unsure", description="the kind of doctor for a find_doctor request")
     urgency: Literal["routine", "soon", "urgent"] = Field("routine", description="how soon they need the doctor")
     preferences: HealthPreferences = Field(default_factory=HealthPreferences)
+    search_near: Literal[SEARCH_NEAR] = Field("not_said", description="where to look for the doctor")
     emergency_question: Optional[str] = Field(None, description="only if the safety rule found signs and "
                                                                  "emergency_now is false: the question asking whether "
                                                                  "they want to call emergency services now")
@@ -245,7 +248,7 @@ def understand_health_request(text: str, red_flags: list[str],
         "Set emergency_now to true if the request describes a medical emergency happening now (such as chest "
         "pain, stroke signs like a drooping face, weak arm or slurred speech, severe breathlessness, heavy "
         "bleeding, fainting, a seizure, wanting to harm or kill oneself, a severe allergic reaction with a "
-        "swollen face, lips or throat, or a fever with confusion), also when the rule found none.Set it to false only if the request clearly "
+        "swollen face, lips or throat, or a fever with confusion), also when the rule found none. Set it to false only if the request clearly "
         "says the sign is not happening now (it was in the past, it is denied, or it is a general question). "
         "When unsure, set it to true. emergency_signs: which of these it describes as happening now: "
         f"{', '.join(FLAGS)}.\n"
@@ -258,7 +261,11 @@ def understand_health_request(text: str, red_flags: list[str],
         "you cannot tell.\n"
         "specialty: for find_doctor, the one kind of doctor that treats this need; general_physician when "
         "the need is vague or several different problems are mentioned; unsure if this is not a doctor "
-        "request.\n\n"
+        "request.\n"
+        "search_near: current_location if they want a doctor near where they are now (near me, nearby, here, "
+        "mere paas, yahan); named_place if they name a place, area or city to look in (also for someone else, "
+        "e.g. a parent in another city), and put that place in preferences.area exactly as written; home if "
+        "they want one near their home without naming the place; not_said if they say nothing about where.\n\n"
         f"REQUEST:\n{safe_text[:2000]}"
     )
     reading.emergency_reason = redact(reading.emergency_reason, known_values)[0]
