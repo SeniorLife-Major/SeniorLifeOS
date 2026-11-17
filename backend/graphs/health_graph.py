@@ -1,4 +1,4 @@
-"""Health request graph (plan §5, Module B, step 1): emergency check -> understand -> route.
+"""Health request graph (plan §5, Module B): emergency check -> understand -> route -> where.
 
     validate_request -> safety_check (fixed rules) -> understand_request (AI model, or local words)
         -> emergency            the rules found a red flag, or the model saw an emergency
@@ -6,6 +6,10 @@
                                 the person is asked (in the model's words) whether they want to
                                 call emergency services; only they can clear it
         -> map_specialty        find_doctor: the kind of doctor, from a fixed list
+            -> locate           where to look: the phone's location ("near me"), or a place named
+                                in the request looked up on Geoapify (tools/geocode.py)
+                -> ask_location missing, not found, or one name for far-apart places: one
+                                question (a place, the phone's location, or one of the options)
         -> ask_clarification    unclear: one question, then the answer is checked from the start
         -> stop                 a task this graph doesn't handle yet
 
@@ -18,7 +22,11 @@ A health request is medical data, so the model reads it only with use_llm and
 medical_cloud_consent, redacted first (as for medical documents, Decision #29). Without them the
 request is understood on this machine with a few words per specialty (tools/specialties.py).
 
-Finding, checking and ranking doctors is step 2; this graph ends with the specialty.
+Where to look (step 2a): the model says whether the person means where they are now, a named
+place, or home (search_near). The phone's location is used only when they mean where they are
+now, or said nothing about where; without the model, only clear "near me" words count, and
+anything else is asked (a request may name a place this machine can't recognise). Finding,
+checking and ranking doctors there comes next; this graph ends with the place.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from ..tools.geocode import GeocodeError, device_location, find_place, search_near_from_text
 from ..tools.red_flags import emergency_message, emergency_numbers, find_red_flags
 from ..tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES, specialty_from_text
 from ..utils.checkpoints import is_encrypted
@@ -46,6 +55,17 @@ NOT_HANDLED = {
     "benefits": "Benefits and schemes",
     "other": "This request",
 }
+HERE_LABEL = "your current location"
+LOCATION_QUESTIONS = {
+    "current_location": "Please share your current location, or tell me the area and city you are in.",
+    "home": "Which area is your home in? Please tell me the area and the city.",
+    "where": "Which area should I look for a doctor in? Please tell me the area and the city.",
+    "where_or_here": "Should I look near where you are now? Say \"near me\", or tell me the area and the city.",
+    "not_found": "I could not find that place. Please tell me the area and the city.",
+    "ambiguous": "I found more than one place with that name: {options}. Which one do you mean?",
+    "unavailable": "I can't look up places just now. Please share your current location.",
+}
+LOCATION_NOT_FOUND = "The place could not be found. Please start again with the area and the city."
 
 
 class HealthState(TypedDict, total=False):
@@ -58,6 +78,8 @@ class HealthState(TypedDict, total=False):
     use_interrupt: bool
     emergency_answer: dict[str, Any]  # {"call_emergency": bool}, the person's answer to the emergency question
     clarification_answer: str  # the person's answer to the clarifying question
+    current_location: dict[str, float]  # {"lat", "lon"} from the phone, shared with the person's permission
+    location_answer: Any  # the answer to the location question: a place in words, or {"lat", "lon"}
 
     # Outputs / control
     red_flags: list[str]  # found by the fixed rules
@@ -75,6 +97,12 @@ class HealthState(TypedDict, total=False):
     question: str
     emergency_question: str  # asked when the model doubts the rules: call emergency services now?
     clarified: bool
+    search_near: str  # current_location, named_place, home, not_said (model); unknown (local words)
+    search_location: dict[str, Any]  # where to look: lat, lon, label, source (phone, request, answer)
+    location_options: list[dict[str, Any]]  # far-apart places sharing the name asked about
+    location_problem: str  # why the location question was asked
+    location_query: str  # the place text looked up
+    location_asked: bool
     events: list[str]
     warnings: list[str]
     errors: list[str]
@@ -147,6 +175,7 @@ def understand_request(state: HealthState) -> dict[str, Any]:
             "specialty": None if reading.specialty == "unsure" else reading.specialty,
             "urgency": reading.urgency,
             "preferences": reading.preferences.model_dump(),
+            "search_near": reading.search_near,
             "reason": reading.reason,
             "question": reading.clarifying_question or CLARIFYING_QUESTION,
             "emergency_question": reading.emergency_question or CALL_QUESTION,
@@ -161,6 +190,7 @@ def understand_request(state: HealthState) -> dict[str, Any]:
             "specialty": specialty,
             "urgency": "routine",
             "preferences": {},
+            "search_near": search_near_from_text(query),
             "reason": "Read on this machine from the words used",
             "question": CLARIFYING_QUESTION,
             "emergency_question": CALL_QUESTION,
@@ -263,9 +293,100 @@ def map_specialty(state: HealthState) -> dict[str, Any]:
         "specialty_label": SPECIALTIES[specialty],
         "reason": reason,
         "status": "specialty_found",
-        "route": "done",
+        "route": "locate",
         "events": add_event(state, f"map_specialty:{specialty}"),
     }
+
+
+def _look_up(text: str, phone: dict[str, float] | None, warnings: list[str]):
+    """Look a place up: (place, problem, options). A service failure becomes a warning, and the
+    person is asked to share their location instead."""
+    try:
+        answer = find_place(text, near=phone)
+    except GeocodeError as exc:  # its message never holds the key (tools/geocode.py)
+        warnings.append(f"{exc}; the person is asked instead")
+        return None, "unavailable", []
+    if answer["status"] == "found":
+        return answer["place"], "", []
+    if answer["status"] == "ambiguous":
+        return None, "ambiguous", answer["options"]
+    return None, "not_found", []
+
+
+def _from_answer(state: HealthState, phone: dict[str, float] | None, warnings: list[str]):
+    """The answer to the location question: (place, problem, options, text looked up)."""
+    answer = state.get("location_answer")
+    if isinstance(answer, dict):  # the phone's location, shared after the question
+        shared = device_location(answer)
+        return ({**shared, "label": HERE_LABEL, "source": "phone"}, "", [], "") if shared else (None, "where", [], "")
+    text = answer.strip() if isinstance(answer, str) else ""
+    for option in state.get("location_options", []):
+        if text.casefold() == option["label"].casefold():  # one of the places offered
+            return {**option, "source": "answer"}, "", [], ""
+    if phone and search_near_from_text(text) == "current_location":  # "near me", "yahin"
+        return {**phone, "label": HERE_LABEL, "source": "phone"}, "", [], ""
+    if state.get("location_problem") == "ambiguous" and state.get("location_query"):
+        text = f"{state['location_query']}, {text}"  # "Andheri" + "Mumbai"
+    place, problem, options = _look_up(text, phone, warnings)
+    return ({**place, "source": "answer"} if place else None), problem, options, text
+
+
+def locate(state: HealthState) -> dict[str, Any]:
+    """Where to look for the doctor (step 2a).
+
+    - "near me" (or nothing said about where) and the phone's location is known: use it.
+    - a place named in the request: look it up; far-apart places with that name are asked about,
+      unless one is near the phone.
+    - otherwise, or if the lookup fails: ask one question (ask_location).
+    Without the model only "near me" words count: a request that may name a place is asked about,
+    never searched near the phone by guess."""
+    phone = device_location(state.get("current_location"))
+    near = state.get("search_near") or "unknown"
+    area = (state.get("preferences") or {}).get("area")
+    area = area.strip() if isinstance(area, str) else ""
+    warnings = list(state.get("warnings", []))
+    place, problem, options, looked_up = None, "", [], ""
+    if state.get("location_asked"):
+        place, problem, options, looked_up = _from_answer(state, phone, warnings)
+    elif near == "current_location" and phone:
+        place = {**phone, "label": HERE_LABEL, "source": "phone"}
+    elif area and near != "unknown":
+        looked_up = area
+        place, problem, options = _look_up(area, phone, warnings)
+        place = {**place, "source": "request"} if place else None
+    elif near == "not_said" and phone:
+        place = {**phone, "label": HERE_LABEL, "source": "phone"}
+    elif near in ("current_location", "home"):
+        problem = near
+    else:
+        problem = "where_or_here" if phone else "where"
+
+    if place:
+        return {"search_location": place, "location_options": [], "status": "location_found", "route": "done",
+                "warnings": warnings, "events": add_event(state, f"locate:{place['source']}")}
+    if state.get("location_asked"):  # one question only
+        return {"status": "location_not_found", "route": "stop", "warnings": [*warnings, LOCATION_NOT_FOUND],
+                "events": add_event(state, f"locate:{problem}:after_answer")}
+    question = LOCATION_QUESTIONS[problem]
+    if problem == "ambiguous":
+        question = question.format(options="; ".join(option["label"] for option in options))
+    return {"route": "ask_location", "question": question, "location_problem": problem, "location_query": looked_up,
+            "location_options": options, "warnings": warnings, "events": add_event(state, f"locate:{problem}")}
+
+
+def ask_location(state: HealthState) -> dict[str, Any]:
+    """Ask where to look, once. The answer can be a place in words, the phone's location
+    ({"lat", "lon"}), or one of the options offered."""
+    answer = state.get("location_answer")
+    question = state.get("question") or LOCATION_QUESTIONS["where"]
+    if not answer and state.get("use_interrupt"):
+        options = [option["label"] for option in state.get("location_options", [])]
+        answer = interrupt({"question": question, "options": options})
+    if not (isinstance(answer, dict) or (isinstance(answer, str) and answer.strip())):
+        return {"status": "needs_location", "question": question, "route": "stop",
+                "events": add_event(state, "ask_location:pending")}
+    return {"location_answer": answer, "location_asked": True, "route": "again",
+            "events": add_event(state, "ask_location:answered")}
 
 
 def route_step(state: HealthState) -> str:
@@ -286,6 +407,8 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_node("confirm_emergency", confirm_emergency)
     graph.add_node("ask_clarification", ask_clarification)
     graph.add_node("map_specialty", map_specialty)
+    graph.add_node("locate", locate)
+    graph.add_node("ask_location", ask_location)
 
     graph.add_edge(START, "validate_request")
     graph.add_conditional_edges("validate_request", route_step, {"continue": "safety_check", "stop": END})
@@ -298,5 +421,7 @@ def build_health_graph(checkpointer: Any = None):
     })
     graph.add_conditional_edges("ask_clarification", route_step, {"again": "safety_check", "stop": END})
     graph.add_edge("emergency", END)
-    graph.add_edge("map_specialty", END)
+    graph.add_edge("map_specialty", "locate")
+    graph.add_conditional_edges("locate", route_step, {"done": END, "ask_location": "ask_location", "stop": END})
+    graph.add_conditional_edges("ask_location", route_step, {"again": "locate", "stop": END})
     return graph.compile(checkpointer=checkpointer)

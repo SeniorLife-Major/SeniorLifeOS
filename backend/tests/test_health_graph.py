@@ -13,13 +13,59 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from backend.graphs.health_graph import (
-    CLARIFYING_QUESTION, MAX_QUERY_CHARS, CALL_QUESTION, VAGUE_NEED, build_health_graph, map_specialty,
+    CLARIFYING_QUESTION, HERE_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS, MAX_QUERY_CHARS, CALL_QUESTION,
+    VAGUE_NEED, build_health_graph, map_specialty,
 )
+from backend.tools.geocode import ATTRIBUTION, GeocodeError
 from backend.tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES
 from backend.utils.checkpoints import make_checkpointer
 
 TEST_CHECKPOINT_KEY = bytes(range(32))
 PHONE = "9876543210"
+IN_ANDHERI = {"lat": 19.12014, "lon": 72.84093}  # the phone's location, before rounding
+ROUNDED = {"lat": 19.12, "lon": 72.841}
+
+
+def no_network(text, near=None):
+    raise AssertionError(f"a test looked up {text!r} without a stand-in for the place search")
+
+
+# No test may reach Geoapify: a lookup without a FakePlaces stand-in fails loudly.
+_no_place_search = patch("backend.graphs.health_graph.find_place", no_network)
+
+
+def setUpModule():
+    _no_place_search.start()
+
+
+def tearDownModule():
+    _no_place_search.stop()
+
+
+def place(label, lat, lon):
+    return {"lat": lat, "lon": lon, "label": label, "attribution": ATTRIBUTION}
+
+
+ANDHERI_WEST = place("Andheri West, Mumbai, Maharashtra", 19.117, 72.834)
+ANDHERI_PUNJAB = place("Andheri, Punjab", 30.27, 75.813)
+PUNE = place("Pune, Maharashtra", 18.521, 73.855)
+
+
+class FakePlaces:
+    """Stands in for find_place(): answers set per place text (else not found); records lookups."""
+
+    def __init__(self, answers=None, error=None):
+        self.answers, self.error, self.calls = answers or {}, error, []
+
+    def __call__(self, text, near=None):
+        self.calls.append((text, near))
+        if self.error:
+            raise self.error
+        return self.answers.get(text, {"status": "not_found"})
+
+
+def found(where):
+    return {"status": "found", "place": where}
 
 
 class FakeStructuredModel:
@@ -53,12 +99,20 @@ def state(query, **extra):
     return {"actor_id": "senior-meera", "query": query, **extra}
 
 
-def with_model(query, answer, **extra):
-    """Run the graph with the model allowed (use_llm + medical consent) and a stand-in model."""
+def with_model(query, answer, places=None, **extra):
+    """Run the graph with the model allowed (use_llm + medical consent) and a stand-in model
+    (and, if given, a stand-in place search)."""
     fake = FakeStructuredModel(answer)
-    with patch("backend.agents.llm_agents.structured_model", fake):
+    with patch("backend.agents.llm_agents.structured_model", fake), \
+            patch("backend.graphs.health_graph.find_place", places or no_network):
         result = build_health_graph().invoke(state(query, use_llm=True, medical_cloud_consent=True, **extra))
     return result, fake
+
+
+def without_model(query, places=None, **extra):
+    """Run the graph on this machine only (no model), with a stand-in place search if given."""
+    with patch("backend.graphs.health_graph.find_place", places or no_network):
+        return build_health_graph().invoke(state(query, **extra))
 
 
 class EmergencyRuleTests(unittest.TestCase):
@@ -100,7 +154,7 @@ class EmergencyRuleTests(unittest.TestCase):
     def test_only_the_person_clears_it(self):
         query = "I had chest pain last year, need a heart doctor"
         cleared, _ = with_model(query, reading(), emergency_answer={"call_emergency": False})
-        self.assertEqual(cleared["status"], "specialty_found")
+        self.assertEqual(cleared["status"], "needs_location")  # went on to the doctor search: where to look
         self.assertEqual(cleared["specialty"], "cardiologist")
         self.assertEqual(cleared["emergency_source"], "person")
         for answer in ({"call_emergency": True}, {"call_emergency": "no"}, {"something": 1}, "no"):
@@ -153,8 +207,10 @@ class UnderstandingTests(unittest.TestCase):
         prefs = {"area": "Andheri", "doctor_language": "Marathi", "doctor_gender": "female", "max_fee": 800,
                  "teleconsult_ok": False}
         result, _ = with_model("Mujhe dil ke doctor ko dikhana hai, Andheri mein, lady doctor, 800 tak",
-                               reading(urgency="soon", preferences=prefs))
-        self.assertEqual(result["status"], "specialty_found")
+                               reading(urgency="soon", preferences=prefs, search_near="named_place"),
+                               places=FakePlaces({"Andheri": found(ANDHERI_WEST)}))
+        self.assertEqual(result["status"], "location_found")
+        self.assertEqual(result["search_location"]["label"], ANDHERI_WEST["label"])
         self.assertEqual(result["reading_source"], "model")
         self.assertEqual(result["specialty"], "cardiologist")
         self.assertEqual(result["specialty_label"], SPECIALTIES["cardiologist"])
@@ -215,7 +271,7 @@ class ClarificationTests(unittest.TestCase):
 
     def test_answer_is_added_and_read_again(self):
         result = build_health_graph().invoke(state("please help me", clarification_answer="my knee hurts"))
-        self.assertEqual(result["status"], "specialty_found")
+        self.assertEqual(result["status"], "needs_location")  # understood; next, where to look
         self.assertEqual(result["specialty"], "orthopedic")
         self.assertEqual(result["query"], "please help me\nmy knee hurts")
 
@@ -225,6 +281,122 @@ class ClarificationTests(unittest.TestCase):
         self.assertEqual(result["events"].count("ask_clarification:answered"), 1)
 
 
+class LocationTests(unittest.TestCase):
+    """Step 2a: the model says where to look; the phone's location is used only when it is meant."""
+
+    def test_near_me_uses_the_phone_location_and_looks_nothing_up(self):
+        places = FakePlaces()
+        result, _ = with_model("dil ka doctor mere paas", reading(search_near="current_location"), places,
+                               current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "location_found")
+        self.assertEqual(result["search_location"], {**ROUNDED, "label": HERE_LABEL, "source": "phone"})
+        self.assertEqual(places.calls, [])
+        self.assertIn("locate:phone", result["events"])
+
+    def test_nothing_said_about_where_uses_the_phone(self):
+        result, _ = with_model("need a heart doctor", reading(), FakePlaces(), current_location=IN_ANDHERI)
+        self.assertEqual(result["search_location"]["source"], "phone")
+
+    def test_a_named_place_is_looked_up_near_the_phone(self):
+        places = FakePlaces({"Andheri": found(ANDHERI_WEST)})
+        result, _ = with_model("Andheri mein heart doctor", reading(search_near="named_place",
+                                                                     preferences={"area": "Andheri"}),
+                               places, current_location=IN_ANDHERI)
+        self.assertEqual(places.calls, [("Andheri", ROUNDED)])  # the phone's point only steers the search
+        self.assertEqual(result["search_location"], {**ANDHERI_WEST, "source": "request"})
+        self.assertEqual(result["search_location"]["attribution"], ATTRIBUTION)
+
+    def test_a_place_for_someone_else_wins_over_the_phone(self):
+        result, _ = with_model("meri maa ke liye Pune mein eye doctor",
+                               reading(specialty="ophthalmologist", search_near="named_place",
+                                       preferences={"area": "Pune"}),
+                               FakePlaces({"Pune": found(PUNE)}), current_location=IN_ANDHERI)
+        self.assertEqual(result["search_location"]["label"], PUNE["label"])
+
+    def test_one_name_for_far_apart_places_is_asked_about(self):
+        ambiguous = {"status": "ambiguous", "options": [ANDHERI_PUNJAB, ANDHERI_WEST]}
+        named = reading(search_near="named_place", preferences={"area": "Andheri"})
+        places = FakePlaces({"Andheri": ambiguous})
+        result, _ = with_model("Andheri mein heart doctor", named, places)
+        self.assertEqual(result["status"], "needs_location")
+        self.assertEqual(result["question"], LOCATION_QUESTIONS["ambiguous"].format(
+            options="Andheri, Punjab; Andheri West, Mumbai, Maharashtra"))
+
+        # Picking an offered place uses it as it is: nothing is looked up again.
+        places = FakePlaces({"Andheri": ambiguous})
+        result, _ = with_model("Andheri mein heart doctor", named, places,
+                               location_answer="andheri west, mumbai, maharashtra")
+        self.assertEqual(result["search_location"], {**ANDHERI_WEST, "source": "answer"})
+        self.assertEqual(len(places.calls), 1)
+
+        # Any other answer narrows the first name down.
+        places = FakePlaces({"Andheri": ambiguous, "Andheri, Mumbai": found(ANDHERI_WEST)})
+        result, _ = with_model("Andheri mein heart doctor", named, places, location_answer="Mumbai")
+        self.assertEqual([text for text, _ in places.calls], ["Andheri", "Andheri, Mumbai"])
+        self.assertEqual(result["status"], "location_found")
+
+    def test_each_kind_of_missing_place_gets_its_own_question(self):
+        cases = [("not_said", {}, "where"), ("home", {}, "home"), ("current_location", {}, "current_location"),
+                 ("named_place", {}, "where")]  # named, but the model gave no place
+        for search_near, prefs, question in cases:
+            with self.subTest(search_near=search_near):
+                result, _ = with_model("need a heart doctor", reading(search_near=search_near, preferences=prefs),
+                                       FakePlaces())
+                self.assertEqual(result["status"], "needs_location")
+                self.assertEqual(result["question"], LOCATION_QUESTIONS[question])
+
+    def test_the_answer_can_be_a_place_or_the_phone_location(self):
+        result, _ = with_model("doctor near me", reading(search_near="current_location"),
+                               FakePlaces(), location_answer={"lat": 19.12014, "lon": 72.84093})
+        self.assertEqual(result["search_location"], {**ROUNDED, "label": HERE_LABEL, "source": "phone"})
+        places = FakePlaces({"Pune": found(PUNE)})
+        result, _ = with_model("need a heart doctor", reading(), places, location_answer="Pune")
+        self.assertEqual(result["search_location"], {**PUNE, "source": "answer"})
+
+    def test_only_one_location_question(self):
+        for answer in ("somewhere I can't name", {"lat": 51.5, "lon": -0.12}, {"lat": "x"}):  # London: not India
+            with self.subTest(answer=answer):
+                result, _ = with_model("need a heart doctor", reading(), FakePlaces(), location_answer=answer)
+                self.assertEqual(result["status"], "location_not_found")
+                self.assertIn(LOCATION_NOT_FOUND, result["warnings"])
+                self.assertEqual(result["events"].count("ask_location:answered"), 1)
+
+    def test_place_search_down_asks_for_the_phone_location(self):
+        places = FakePlaces(error=GeocodeError("Place search needs GEOAPIFY_API_KEY"))
+        result, _ = with_model("Andheri mein heart doctor",
+                               reading(search_near="named_place", preferences={"area": "Andheri"}), places)
+        self.assertEqual(result["status"], "needs_location")
+        self.assertEqual(result["question"], LOCATION_QUESTIONS["unavailable"])
+        self.assertIn("Place search needs GEOAPIFY_API_KEY; the person is asked instead", result["warnings"])
+        result, _ = with_model("Andheri mein heart doctor",
+                               reading(search_near="named_place", preferences={"area": "Andheri"}), places,
+                               location_answer={"lat": 19.12014, "lon": 72.84093})
+        self.assertEqual(result["search_location"]["source"], "phone")
+
+    def test_without_the_model_the_phone_is_used_only_for_near_me_words(self):
+        result = without_model("knee doctor near me", current_location=IN_ANDHERI)
+        self.assertEqual(result["search_location"]["source"], "phone")
+        # The request may name a place this machine can't recognise: asked, never guessed.
+        result = without_model("Pune mein ghutne ka doctor", current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "needs_location")
+        self.assertEqual(result["question"], LOCATION_QUESTIONS["where_or_here"])
+        result = without_model("Pune mein ghutne ka doctor", current_location=IN_ANDHERI, location_answer="yahin")
+        self.assertEqual(result["search_location"]["source"], "phone")
+        places = FakePlaces({"Pune": found(PUNE)})
+        result = without_model("ghutne ka doctor", places, current_location=IN_ANDHERI, location_answer="Pune")
+        self.assertEqual(result["search_location"]["label"], PUNE["label"])
+
+    def test_an_emergency_never_looks_for_a_place(self):
+        result = without_model("chest pain, need a doctor near me", current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "emergency")
+        self.assertFalse([event for event in result["events"] if event.startswith(("locate", "ask_location"))])
+
+    def test_the_model_is_told_how_to_read_where(self):
+        _, fake = with_model("need a heart doctor", reading(), FakePlaces(), current_location=IN_ANDHERI)
+        self.assertIn("search_near: current_location if they want a doctor near where they are now", fake.prompts[0])
+        self.assertIn("exactly as written", fake.prompts[0])
+
+
 class PauseAndValidationTests(unittest.TestCase):
     def test_real_pause_for_the_emergency_question_and_resume(self):
         graph = build_health_graph(checkpointer=make_checkpointer(TEST_CHECKPOINT_KEY))
@@ -232,11 +404,12 @@ class PauseAndValidationTests(unittest.TestCase):
         fake = FakeStructuredModel(reading())
         with patch("backend.agents.llm_agents.structured_model", fake):
             paused = graph.invoke(state("I had chest pain last year, need a heart doctor", use_llm=True,
-                                        medical_cloud_consent=True, use_interrupt=True), config)
+                                        medical_cloud_consent=True, use_interrupt=True,
+                                        current_location=IN_ANDHERI), config)
             self.assertEqual(paused["__interrupt__"][0].value["question"], CALL_QUESTION)
             self.assertEqual(paused["__interrupt__"][0].value["numbers"][0]["number"], "112")
             result = graph.invoke(Command(resume={"call_emergency": False}), config)
-        self.assertEqual(result["status"], "specialty_found")
+        self.assertEqual(result["status"], "location_found")  # nothing said about where: the phone's location
         self.assertEqual(len(fake.prompts), 1)  # the model is not asked again on resume
 
     def test_real_pause_for_the_clarifying_question(self):
@@ -246,6 +419,17 @@ class PauseAndValidationTests(unittest.TestCase):
         self.assertEqual(paused["__interrupt__"][0].value["question"], CLARIFYING_QUESTION)
         result = graph.invoke(Command(resume="eye checkup"), config)
         self.assertEqual(result["specialty"], "ophthalmologist")
+
+    def test_real_pause_for_the_location_question(self):
+        graph = build_health_graph(checkpointer=make_checkpointer(TEST_CHECKPOINT_KEY))
+        config = {"configurable": {"thread_id": "health-3"}}
+        with patch("backend.graphs.health_graph.find_place", FakePlaces({"Pune": found(PUNE)})):
+            paused = graph.invoke(state("knee doctor", use_interrupt=True), config)
+            self.assertEqual(paused["__interrupt__"][0].value, {"question": LOCATION_QUESTIONS["where"],
+                                                                 "options": []})
+            result = graph.invoke(Command(resume="Pune"), config)
+        self.assertEqual(result["status"], "location_found")
+        self.assertEqual(result["search_location"]["label"], PUNE["label"])
 
     def test_plain_checkpointer_is_refused(self):
         with self.assertRaises(ValueError):
