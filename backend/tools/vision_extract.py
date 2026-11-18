@@ -205,7 +205,11 @@ def extract_with_vision(path: str, mime_type: str, local_pages: list[dict[str, A
         _shrink(image).convert("RGB").save(buffer, format="JPEG", quality=90)
         picture = base64.b64encode(buffer.getvalue()).decode("ascii")
         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{picture}"}})
+    # JSON mode: Groq makes the reply one valid JSON object (the prompt gives its shape and must say
+    # "JSON"), or answers 400 instead. full-test-review 14d: same fields right as plain text, valid
+    # JSON every time. fields_from_answer still parses the reply as before.
     body = {"model": model or groq_model(), "temperature": 0, "max_completion_tokens": 4096,
+            "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": content}]}
     own_client = client is None
     client = client or httpx.Client(timeout=GROQ_TIMEOUT_SECONDS)

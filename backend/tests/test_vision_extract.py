@@ -127,6 +127,8 @@ class RequestTests(unittest.TestCase):
         self.assertNotIn(FAKE_KEY, request.content.decode())
         body = json.loads(request.content)
         self.assertEqual((body["model"], body["temperature"]), (GROQ_DEFAULT_MODEL, 0))
+        self.assertEqual(body["response_format"], {"type": "json_object"})  # Groq's JSON mode
+        self.assertIn("JSON", body["messages"][0]["content"][0]["text"])  # JSON mode needs the word in the prompt
         self.assertEqual(body["messages"][0]["content"][0]["text"], prompt_for("prescription"))
         sent = recorder.sent_image()
         self.assertTrue((sent[80:110, 10:600] < 40).all())   # the Aadhaar line
@@ -167,6 +169,18 @@ class RequestTests(unittest.TestCase):
                                 FAKE_KEY, recorder.client())
         self.assertEqual(str(caught.exception), "the vision model failed (HTTP 429)")
 
+
+    def test_a_reply_json_mode_refused_never_shows_what_the_model_wrote(self):
+        # In JSON mode Groq answers 400 json_validate_failed when the model's reply isn't valid JSON,
+        # and that answer repeats the reply, which may hold what was read on the page.
+        recorder = Recorder({"error": {"message": "Failed to generate JSON.", "type": "invalid_request_error",
+                                       "code": "json_validate_failed",
+                                       "failed_generation": f"Meera Rao, Aadhaar {AADHAAR}"}}, status=400)
+        with self.assertRaises(CloudOcrError) as caught:
+            extract_with_vision(str(UNIT / "sharp.png"), "image/png", [ocr_page([("x", 0.9)])], {}, "prescription",
+                                FAKE_KEY, recorder.client())
+        self.assertEqual(str(caught.exception), "the vision model failed (HTTP 400)")
+        self.assertEqual(len(recorder.requests), 1)  # not tried again
 
     def test_a_busy_model_is_waited_out_and_tried_again(self):
         recorder = Busy(answer(PRESCRIPTION), [{"retry-after": "3"}])
