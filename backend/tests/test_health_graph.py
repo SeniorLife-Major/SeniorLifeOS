@@ -14,11 +14,12 @@ from langgraph.types import Command
 
 from backend.graphs.health_graph import (
     CLARIFYING_QUESTION, GENERAL_PHYSICIAN_FIRST, HERE_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS, MAX_QUERY_CHARS,
-    CALL_QUESTION, NO_DOCTORS, RELAXED_NOTES, SEARCH_UNAVAILABLE, VAGUE_NEED, build_health_graph, map_specialty,
+    CALL_QUESTION, NO_DOCTORS, NO_TOP_CHOICE, NONE_VERIFIED, OLD_DETAILS, RELAXED_NOTES, SEARCH_UNAVAILABLE,
+    VAGUE_NEED, build_health_graph, map_specialty,
 )
 from backend.tools.doctor_search import DoctorListError
 from backend.tools.geocode import ATTRIBUTION, GeocodeError
-from test_doctor_search import doctor
+from test_doctor_search import REGISTERED, doctor
 from backend.tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES
 from backend.utils.checkpoints import make_checkpointer
 
@@ -40,17 +41,26 @@ FAKE_DOCTORS = [
     doctor(5, 2.5, "general_physician", "male", 500),
 ]
 
-# No test may reach Geoapify (a lookup without a FakePlaces stand-in fails loudly) or the real list.
+def already_fresh(place, specialty, doctors):
+    """Stands in for refresh_doctors(): the list already holds a recent search."""
+    return {"status": "fresh", "area": None, "results": 0, "cost_usd": 0.0}
+
+
+# No test may reach Geoapify (a lookup without a FakePlaces stand-in fails loudly), Apify or the
+# real list.
 _no_place_search = patch("backend.graphs.health_graph.find_place", no_network)
 _fake_list = patch("backend.graphs.health_graph.load_doctors", lambda: FAKE_DOCTORS)
+_no_fetch = patch("backend.graphs.health_graph.refresh_doctors", already_fresh)
 
 
 def setUpModule():
     _no_place_search.start()
     _fake_list.start()
+    _no_fetch.start()
 
 
 def tearDownModule():
+    _no_fetch.stop()
     _fake_list.stop()
     _no_place_search.stop()
 
@@ -418,11 +428,13 @@ class LocationTests(unittest.TestCase):
 class DoctorSearchTests(unittest.TestCase):
     """Step 2d: doctors near the place, from the stored list (a made-up one here)."""
 
-    def test_doctors_of_the_specialty_near_the_place_nearest_first(self):
+    def test_doctors_of_the_specialty_near_the_place_are_found(self):
         result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
                                current_location=IN_ANDHERI)
         self.assertEqual(result["status"], "doctors_found")
-        self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:1", "practo:2", "practo:3"])
+        # The search's nearest-first order is tested in test_doctor_search; the graph ends ranked (2f).
+        self.assertEqual([(d["doctor_id"], d["distance_km"]) for d in sorted(result["doctors"], key=lambda d: d["distance_km"])],
+                         [("practo:1", 1.0), ("practo:2", 2.0), ("practo:3", 3.0)])
         self.assertEqual(result["search_radius_km"], 5)
         self.assertTrue(all(d["specialty"] == "cardiologist" and "distance_km" in d for d in result["doctors"]))
         self.assertEqual((result["relaxed_filters"], result["doctor_fallback"]), ([], None))
@@ -443,6 +455,12 @@ class DoctorSearchTests(unittest.TestCase):
         self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:5"])
         self.assertIn(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES["ophthalmologist"], km=20), result["warnings"])
         self.assertIn("search_doctors:1:20km:general_physician", result["events"])
+        self.assertEqual((result["events"][-3:], result["doctors"][0]["registration_level"]),
+                         (["verify:1/1", "rank:1:1", "explain:1"], "practo_verified"))  # checked too
+        self.assertEqual([d["doctor_id"] for d in result["top_doctors"]], ["practo:5"])
+        self.assertEqual(result["answer"].splitlines()[0],
+                         f"{SPECIALTIES[GENERAL_PHYSICIAN]} near {HERE_LABEL}: 1 best match")  # who is shown
+        self.assertIn(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES["ophthalmologist"], km=20), result["answer"])
 
     def test_nobody_near_says_so(self):
         result, _ = with_model("Pune mein heart doctor", reading(search_near="named_place",
@@ -451,6 +469,7 @@ class DoctorSearchTests(unittest.TestCase):
         self.assertEqual((result["status"], result["doctors"]), ("no_doctors_nearby", []))
         self.assertIn(NO_DOCTORS.format(km=20), result["warnings"])
         self.assertEqual(result["relaxed_filters"], [])
+        self.assertFalse([event for event in result["events"] if event.startswith(("verify", "rank"))])  # nobody
 
     def test_without_the_list_the_search_is_unavailable(self):
         def no_list():
@@ -461,6 +480,173 @@ class DoctorSearchTests(unittest.TestCase):
                                    current_location=IN_ANDHERI)
         self.assertEqual(result["status"], "search_unavailable")
         self.assertIn(SEARCH_UNAVAILABLE, result["warnings"])
+        self.assertFalse([event for event in result["events"] if event.startswith(("verify", "rank"))])
+
+    def test_each_doctor_found_gets_their_registration_level_and_note(self):
+        only_listed = {**FAKE_DOCTORS[2], "registration": {**REGISTERED, "practo_verified": False}}
+        listed = [*FAKE_DOCTORS[:2], only_listed, *FAKE_DOCTORS[3:]]
+        with patch("backend.graphs.health_graph.load_doctors", lambda: listed):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual([(d["doctor_id"], d["registration_level"]) for d in result["doctors"]],
+                         [("practo:1", "practo_verified"), ("practo:2", "practo_verified"), ("practo:3", "listed")])
+        self.assertEqual(result["doctors"][0]["registration_note"],
+                         "Registration 2004, Maharashtra Medical Council, verified by Practo. "
+                         "Not checked by us on the NMC register.")
+        self.assertIn("not marked verified by Practo", result["doctors"][2]["registration_note"])
+        self.assertIn("verify:2/3", result["events"])
+        self.assertNotIn(NONE_VERIFIED, result["warnings"])
+
+    def test_when_no_doctor_found_is_verified_by_practo_the_answer_says_so(self):
+        listed = [{**d, "registration": {**REGISTERED, "practo_verified": False}} for d in FAKE_DOCTORS]
+        with patch("backend.graphs.health_graph.load_doctors", lambda: listed):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "doctors_found")  # still shown: each note says "not marked verified"
+        self.assertIn(NONE_VERIFIED, result["warnings"])
+        self.assertIn("verify:0/3", result["events"])
+        self.assertIn(NONE_VERIFIED, result["answer"])  # the person is told to check
+        self.assertIn(NO_TOP_CHOICE.format(percent=70), result["answer"])
+
+    def test_a_vague_need_is_said_in_the_reply_but_the_models_own_reason_never(self):
+        vague, _ = with_model("I need a doctor near me", reading(specialty="unsure", search_near="current_location"),
+                              FakePlaces(), current_location=IN_ANDHERI)
+        self.assertEqual(vague["specialty"], GENERAL_PHYSICIAN)
+        self.assertIn(VAGUE_NEED + ".", vague["answer"])
+        heart, _ = with_model("heart doctor near me", reading(search_near="current_location",
+                                                              reason="Model says: heart words were used"),
+                              FakePlaces(), current_location=IN_ANDHERI)
+        self.assertEqual(heart["reason"], "Model says: heart words were used")
+        self.assertNotIn("Model says", heart["answer"])
+        self.assertNotIn(VAGUE_NEED, heart["answer"])
+
+    def test_the_doctors_found_are_ranked_and_the_top_3_picked(self):
+        reviews = {"practo:1": {"recommend_percent": 75, "patient_stories": 40},
+                   "practo:2": {"recommend_percent": 99, "patient_stories": 400}}
+        reviewed = [{**d, "reviews": reviews.get(d["doctor_id"], {"recommend_percent": None, "patient_stories": 0})}
+                    for d in FAKE_DOCTORS]
+        with patch("backend.graphs.health_graph.load_doctors", lambda: reviewed):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        # 1 km, 75% of 40, ₹1,500 / 2 km, 99% of 400, ₹2,000 / 3 km, no reviews, ₹800:
+        # the reviews lift the second nearest to first.
+        self.assertEqual([d["doctor_id"] for d in result["top_doctors"]], ["practo:2", "practo:1", "practo:3"])
+        self.assertEqual(result["doctors"], result["top_doctors"])
+        self.assertIn("rank:3:3", result["events"])
+        first = result["top_doctors"][0]
+        self.assertEqual((first["held_back"], first["score_parts"]["fee"]["value"], first["registration_level"]),
+                         (None, 2000, "practo_verified"))
+        self.assertNotIn(NO_TOP_CHOICE.format(percent=70), result["warnings"])
+
+    def test_the_language_the_person_asked_for_counts_in_the_ranking(self):
+        speaks = [{**d, "languages": ["English", "Marathi"] if d["doctor_id"] == "practo:2" else ["English"]}
+                  for d in FAKE_DOCTORS]
+        with patch("backend.graphs.health_graph.load_doctors", lambda: speaks):
+            result, _ = with_model("Marathi bolne wala heart doctor near me",
+                                   reading(search_near="current_location", preferences={"doctor_language": "Marathi"}),
+                                   FakePlaces(), current_location=IN_ANDHERI)
+        self.assertEqual([d["doctor_id"] for d in result["top_doctors"]], ["practo:1", "practo:2", "practo:3"])
+        self.assertEqual(result["top_doctors"][1]["score_parts"]["language"]["value"],
+                         {"asked": "Marathi", "listed": True})
+
+    def test_when_nobody_qualifies_for_the_top_the_answer_says_so(self):
+        low = [{**d, "reviews": {"recommend_percent": 50, "patient_stories": 30}} for d in FAKE_DOCTORS]
+        with patch("backend.graphs.health_graph.load_doctors", lambda: low):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual((result["status"], result["top_doctors"], len(result["doctors"])), ("doctors_found", [], 3))
+        self.assertIn(NO_TOP_CHOICE.format(percent=70), result["warnings"])
+        self.assertEqual({d["held_back"] for d in result["doctors"]}, {"low_rating"})
+        self.assertEqual(result["events"][-2:], ["rank:3:0", "explain:3"])
+        self.assertIn("3 found, none a first choice", result["answer"])
+        self.assertIn(NO_TOP_CHOICE.format(percent=70), result["answer"])
+
+    def test_the_reply_explains_the_top_3_in_plain_words(self):
+        result, _ = with_model("heart doctor near me", reading(search_near="current_location", urgency="urgent"),
+                               FakePlaces(), current_location=IN_ANDHERI)
+        answer = result["answer"]
+        self.assertTrue(answer.startswith(f"{SPECIALTIES['cardiologist']} near {HERE_LABEL}: 3 best matches"))
+        for number, doctor in enumerate(result["top_doctors"], 1):
+            self.assertIn(f"{number}. {doctor['name']}", answer)
+            self.assertEqual(doctor["reasons"][-1], f"Fee ₹{doctor['fee']:,}")
+        self.assertIn("Call the clinic today. If it gets worse suddenly, call 108.", answer)  # the model read urgent
+        self.assertNotIn(ATTRIBUTION, answer)  # the phone's location: no place was looked up
+        self.assertEqual(result["events"][-1], "explain:3")
+        no_consent = without_model("heart doctor near me", FakePlaces(), current_location=IN_ANDHERI, use_llm=True)
+        self.assertIn("The AI model was not used: health requests need medical consent", no_consent["warnings"])
+        self.assertTrue(no_consent["answer"].startswith(f"{SPECIALTIES['cardiologist']} near {HERE_LABEL}: 3 best"))
+        self.assertNotIn("AI model", no_consent["answer"])  # technical warnings stay out of the reply
+
+    def test_a_looked_up_place_is_named_and_credited_and_dropped_wishes_are_said(self):
+        result, _ = with_model("heart doctor in Andheri West under 500 rupees",
+                               reading(search_near="named_place", preferences={"area": "Andheri West", "max_fee": 500}),
+                               FakePlaces({"Andheri West": found(ANDHERI_WEST)}))
+        answer = result["answer"]
+        self.assertIn(f" near {ANDHERI_WEST['label']}: ", answer)
+        self.assertIn(f"Place search: {ATTRIBUTION}", answer)
+        self.assertEqual(result["relaxed_filters"], ["max_fee"])  # the cheapest cardiologist asks ₹800
+        self.assertIn(RELAXED_NOTES["max_fee"], answer)
+
+    def test_details_checked_over_30_days_ago_come_with_a_note(self):
+        checked = {"practo:2": "2026-10-10", "practo:3": "2026-10-05"}
+        stale = [{**d, "stale": d["doctor_id"] in checked, "fetched_on": checked.get(d["doctor_id"], d["fetched_on"])}
+                 for d in FAKE_DOCTORS]
+        fresh = [{**d, "stale": False} for d in FAKE_DOCTORS]
+        for listed, notes in ((stale, [OLD_DETAILS.format(day="5 Oct 2026")]), (fresh, [])):  # the oldest date
+            with self.subTest(notes=notes), patch("backend.graphs.health_graph.load_doctors", lambda: listed):
+                result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                       current_location=IN_ANDHERI)
+                self.assertEqual(result["status"], "doctors_found")
+                self.assertEqual([w for w in result["warnings"] if "last checked" in w], notes)
+
+    def test_a_list_with_no_current_doctors_makes_the_search_unavailable(self):
+        def all_expired():
+            raise DoctorListError("The doctor list has no current doctors; refresh it with tools/provider_import.py")
+
+        with patch("backend.graphs.health_graph.load_doctors", all_expired):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "search_unavailable")  # not "no doctor nearby": that would be wrong
+        self.assertIn("no current doctors", result["errors"][-1])
+
+    def test_with_consent_a_missing_search_is_fetched_first_and_the_list_read_again(self):
+        no_cardiologists = [d for d in FAKE_DOCTORS if d["specialty"] != "cardiologist"]
+        loader = MagicMock(side_effect=[no_cardiologists, FAKE_DOCTORS])  # before and after the fetch
+        fetched = {"status": "fetched", "area": "Andheri West, Mumbai", "results": 3, "cost_usd": 0.0075}
+        refresh = MagicMock(return_value=fetched)
+        with patch("backend.graphs.health_graph.load_doctors", loader), \
+                patch("backend.graphs.health_graph.refresh_doctors", refresh):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        place, specialty, doctors = refresh.call_args.args
+        self.assertEqual((place, specialty, doctors),
+                         ({**ROUNDED, "label": HERE_LABEL, "source": "phone"}, "cardiologist", no_cardiologists))
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual(sorted(d["doctor_id"] for d in result["doctors"]), ["practo:1", "practo:2", "practo:3"])
+        self.assertEqual(result["doctor_refresh"], fetched)
+        self.assertIn("search_doctors:refresh:fetched", result["events"])
+
+    def test_without_consent_nothing_is_fetched(self):
+        refresh = MagicMock()
+        with patch("backend.graphs.health_graph.refresh_doctors", refresh):
+            result = without_model("heart doctor near me", current_location=IN_ANDHERI)
+        refresh.assert_not_called()
+        self.assertEqual((result["status"], result["doctor_refresh"]), ("doctors_found", {"status": "no_consent"}))
+
+    def test_a_fetch_can_start_the_list_and_a_failed_one_leaves_it_as_it_is(self):
+        missing = DoctorListError("The doctor list is missing; build it with tools/provider_import.py")
+        for status, lists, want in (("fetched", [missing, FAKE_DOCTORS], "doctors_found"),
+                                    ("failed", [missing], "search_unavailable"),
+                                    ("over_budget", [FAKE_DOCTORS], "doctors_found")):
+            loader = MagicMock(side_effect=lists)
+            with self.subTest(status=status), patch("backend.graphs.health_graph.load_doctors", loader), \
+                    patch("backend.graphs.health_graph.refresh_doctors",
+                          lambda *args, status=status: {"status": status, "area": None, "results": 0, "cost_usd": 0}):
+                result, _ = with_model("heart doctor near me", reading(search_near="current_location"),
+                                       FakePlaces(), current_location=IN_ANDHERI)
+                self.assertEqual(result["status"], want)
+                self.assertEqual(loader.call_count, len(lists))  # read again only after a fetch
 
     def test_the_list_is_read_only_once_a_place_is_found(self):
         loader = MagicMock(return_value=FAKE_DOCTORS)

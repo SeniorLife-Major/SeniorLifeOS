@@ -29,18 +29,32 @@ place, or home (search_near). The phone's location is used only when they mean w
 now, or said nothing about where; without the model, only clear "near me" words count, and
 anything else is asked (a request may name a place this machine can't recognise).
 
-Doctors near the place (step 2d) come from the stored list, never from the network at request
-time. Checking and ranking them comes next; this graph ends with the doctors found, nearest first.
+Doctors near the place (step 2d) come from the stored list. With medical consent, a search the
+list lacks or holds from more than 30 days ago is fetched from Practo first, unless the list
+already has 3 recent doctors of the specialty within 5 km (tools/doctor_refresh.py: Apify learns
+the specialty and the area, never the phone's location).
+Details fetched more than 30 days ago are still shown, with a note that they may have changed
+(Decision 12). Each doctor found then gets their registration level and a note (step 2e,
+tools/doctor_verify.py): verified by Practo, or only listed; not checked by us on the NMC
+register. Then a fixed formula orders them and picks the top 3 (step 2f, tools/doctor_rank.py):
+only doctors verified by Practo and not rated below 70% can be in the top 3. Last, the choice is
+put in plain words (step 2g, tools/doctor_explain.py): fixed sentences filled from the data, no
+model; the graph ends with the reasons on each doctor shown and the whole reply in answer.
 """
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from ..tools.doctor_explain import explain_doctors
+from ..tools.doctor_rank import LOW_RATING_PERCENT, TOP, rank_doctors
+from ..tools.doctor_refresh import refresh_doctors
 from ..tools.doctor_search import RADII_KM, DoctorListError, find_nearby, load_doctors
+from ..tools.doctor_verify import PRACTO_VERIFIED, registration_level, registration_note
 from ..tools.geocode import GeocodeError, device_location, find_place, search_near_from_text
 from ..tools.red_flags import emergency_message, emergency_numbers, find_red_flags
 from ..tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES, specialty_from_text
@@ -80,6 +94,11 @@ GENERAL_PHYSICIAN_FIRST = ("No {label} within {km} km in our list. A general phy
                            "first and refer you to one.")
 NO_DOCTORS = "No doctor of this kind within {km} km in our list."
 SEARCH_UNAVAILABLE = "Doctor search is not available right now."
+OLD_DETAILS = "These details were last checked on {day} and may have changed. Call the clinic before going."
+NONE_VERIFIED = ("None of these doctors' registrations is marked verified by Practo. Please check the "
+                 "doctor's registration before going.")
+NO_TOP_CHOICE = ("None of these doctors has both a registration verified by Practo and at least {percent}% of "
+                 "patients recommending them, so none is picked as a first choice.")
 
 
 class HealthState(TypedDict, total=False):
@@ -117,10 +136,14 @@ class HealthState(TypedDict, total=False):
     location_problem: str  # why the location question was asked
     location_query: str  # the place text looked up
     location_asked: bool
-    doctors: list[dict[str, Any]]  # nearest first, each with distance_km (step 2d)
+    doctors: list[dict[str, Any]]  # each with distance_km (2d), registration_level and _note (2e); after rank
+    #   the top first, then the rest best first, each with score, score_parts and held_back (2f)
+    top_doctors: list[dict[str, Any]]  # at most 3, best first (2f); those shown gain reasons, labels, flags (2g)
+    answer: str  # the whole reply in plain words (2g)
     search_radius_km: int
     relaxed_filters: list[str]  # the person's wishes that had to be dropped: max_fee, doctor_gender
     doctor_fallback: str | None  # general_physician when no doctor of the specialty was near
+    doctor_refresh: dict[str, Any]  # whether the area was fetched from Practo first: status, area, results, cost
     events: list[str]
     warnings: list[str]
     errors: list[str]
@@ -407,20 +430,41 @@ def ask_location(state: HealthState) -> dict[str, Any]:
             "events": add_event(state, "ask_location:answered")}
 
 
+def _day(iso: str) -> str:
+    """"2026-11-17" -> "17 Nov 2026"."""
+    day = date.fromisoformat(iso)
+    return f"{day.day} {day:%b %Y}"
+
+
+def _doctor_list() -> tuple[list[dict[str, Any]], DoctorListError | None]:
+    try:
+        return load_doctors(), None
+    except DoctorListError as exc:
+        return [], exc
+
+
 def search_doctors(state: HealthState) -> dict[str, Any]:
-    """Doctors of the specialty near the place, nearest first (step 2d). The person's wishes
+    """Doctors of the specialty near the place, nearest first (step 2d). With medical consent, a
+    search the stored list lacks or holds from more than 30 days ago is fetched first (Decision
+    13); without it, or if that fails, the stored list is used as it is. The person's wishes
     (doctor's gender, highest fee) are kept while the search widens; dropped only if nobody is
     found within 20 km, and then the answer says so. No doctor of the specialty within 20 km: the
-    nearest general physicians, who can see them first and refer them (Decision 9)."""
+    nearest general physicians, who can see them first and refer them (Decision 9). Details
+    checked more than 30 days ago are shown with a note that they may have changed (Decision 12)."""
     warnings = list(state.get("warnings", []))
     specialty = state.get("specialty") if state.get("specialty") in SPECIALTIES else GENERAL_PHYSICIAN
     preferences = state.get("preferences") or {}
-    try:
-        doctors = load_doctors()
-    except DoctorListError as exc:
+    doctors, list_error = _doctor_list()
+    refresh = {"status": "no_consent"}
+    if state.get("medical_cloud_consent"):  # Apify would learn the specialty and the area
+        refresh = refresh_doctors(state["search_location"], specialty, doctors)
+        if refresh["status"] == "fetched":
+            doctors, list_error = _doctor_list()
+    events = add_event(state, f"search_doctors:refresh:{refresh['status']}")
+    if list_error is not None:
         return {"status": "search_unavailable", "doctors": [], "warnings": [*warnings, SEARCH_UNAVAILABLE],
-                "errors": [*state.get("errors", []), str(exc)], "route": "done",
-                "events": add_event(state, "search_doctors:no_list")}
+                "errors": [*state.get("errors", []), str(list_error)], "route": "done", "doctor_refresh": refresh,
+                "events": [*events, "search_doctors:no_list"]}
     wishes = {"gender": preferences.get("doctor_gender"), "max_fee": preferences.get("max_fee")}
     found = find_nearby(doctors, specialty, state["search_location"], **wishes)
     fallback = None
@@ -433,18 +477,73 @@ def search_doctors(state: HealthState) -> dict[str, Any]:
         warnings.extend(RELAXED_NOTES[name] for name in found["relaxed"])
     else:
         warnings.append(NO_DOCTORS.format(km=FAR))
+    stale = sorted(doctor["fetched_on"] for doctor in found["doctors"] if doctor.get("stale"))
+    if stale:  # the oldest date shown
+        warnings.append(OLD_DETAILS.format(day=_day(stale[0])))
     count = len(found["doctors"])
     return {
         "doctors": found["doctors"],
         "search_radius_km": found["radius_km"],
         "relaxed_filters": found["relaxed"] if count else [],
         "doctor_fallback": fallback,
+        "doctor_refresh": refresh,
         "status": "doctors_found" if count else "no_doctors_nearby",
         "warnings": warnings,
-        "route": "done",
-        "events": add_event(state, f"search_doctors:{count}:{found['radius_km']}km"
-                                   + (":general_physician" if fallback else "")),
+        "route": "verify" if count else "done",
+        "events": [*events, f"search_doctors:{count}:{found['radius_km']}km"
+                   + (":general_physician" if fallback else "")],
     }
+
+
+def verify(state: HealthState) -> dict[str, Any]:
+    """Each doctor's registration as Practo lists it (step 2e, Decision 16): practo_verified or
+    listed, with a fixed note that says we did not check it on the NMC register ourselves. Doctors
+    with no registration never get here (tools/doctor_search.usable). Ranking (2f) is to keep
+    listed doctors out of the top 3."""
+    doctors = [{**doctor, "registration_level": registration_level(doctor),
+                "registration_note": registration_note(doctor)} for doctor in state["doctors"]]
+    verified = sum(doctor["registration_level"] == PRACTO_VERIFIED for doctor in doctors)
+    warnings = list(state.get("warnings", []))
+    if not verified:
+        warnings.append(NONE_VERIFIED)
+    return {"doctors": doctors, "warnings": warnings, "route": "done",
+            "events": add_event(state, f"verify:{verified}/{len(doctors)}")}
+
+
+def rank(state: HealthState) -> dict[str, Any]:
+    """The doctors in order and the top 3 (step 2f, Decision 17): a fixed formula, no model
+    (tools/doctor_rank.py), using the language the person asked for, if any. Only doctors whose
+    registration Practo verified and who are not rated below LOW_RATING_PERCENT can be in the top."""
+    preferences = state.get("preferences") or {}
+    doctors, top = rank_doctors(state["doctors"], state["search_radius_km"], preferences.get("doctor_language"))
+    warnings = list(state.get("warnings", []))
+    if not top:
+        warnings.append(NO_TOP_CHOICE.format(percent=LOW_RATING_PERCENT))
+    return {"doctors": doctors, "top_doctors": top, "warnings": warnings, "route": "done",
+            "events": add_event(state, f"rank:{len(doctors)}:{len(top)}")}
+
+
+def explain(state: HealthState) -> dict[str, Any]:
+    """The reply in plain words (step 2g, Decision 19): fixed sentences filled from the doctors'
+    data and the ranking, no model (tools/doctor_explain.py). The notes are the fixed ones the
+    person needs (a vague need, general physician first, wishes dropped, none verified, no first
+    choice), never the model's words or the technical warnings; old details are flagged on each
+    doctor shown instead."""
+    specialty = state.get("specialty") if state.get("specialty") in SPECIALTIES else GENERAL_PHYSICIAN
+    fallback = state.get("doctor_fallback") == GENERAL_PHYSICIAN
+    top = state.get("top_doctors") or []
+    notes = [VAGUE_NEED + "."] if state.get("reason") == VAGUE_NEED else []
+    if fallback:
+        notes.append(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES[specialty], km=FAR))
+    notes += [RELAXED_NOTES[name] for name in state.get("relaxed_filters", []) if name in RELAXED_NOTES]
+    if NONE_VERIFIED in state.get("warnings", []):
+        notes.append(NONE_VERIFIED)
+    if not top:
+        notes.append(NO_TOP_CHOICE.format(percent=LOW_RATING_PERCENT))
+    explained = explain_doctors(state["doctors"], top, SPECIALTIES[GENERAL_PHYSICIAN if fallback else specialty],
+                                state["search_location"], notes, state.get("urgency"))
+    shown = len(top) or min(TOP, len(state["doctors"]))
+    return {**explained, "route": "done", "events": add_event(state, f"explain:{shown}")}
 
 
 def route_step(state: HealthState) -> str:
@@ -468,6 +567,9 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_node("locate", locate)
     graph.add_node("ask_location", ask_location)
     graph.add_node("search_doctors", search_doctors)
+    graph.add_node("verify", verify)
+    graph.add_node("rank", rank)
+    graph.add_node("explain", explain)
 
     graph.add_edge(START, "validate_request")
     graph.add_conditional_edges("validate_request", route_step, {"continue": "safety_check", "stop": END})
@@ -483,6 +585,9 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_edge("map_specialty", "locate")
     graph.add_conditional_edges("locate", route_step, {"search": "search_doctors", "ask_location": "ask_location",
                                                        "stop": END})
-    graph.add_edge("search_doctors", END)
+    graph.add_conditional_edges("search_doctors", route_step, {"verify": "verify", "done": END})
+    graph.add_edge("verify", "rank")
+    graph.add_edge("rank", "explain")
+    graph.add_edge("explain", END)
     graph.add_conditional_edges("ask_location", route_step, {"again": "locate", "stop": END})
     return graph.compile(checkpointer=checkpointer)

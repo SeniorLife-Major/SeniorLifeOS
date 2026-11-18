@@ -8,8 +8,10 @@ apart from each other count as different places: if more than one is left, the p
 which one (unless one is near where the phone says they are).
 
 Privacy: Geoapify gets only the place text (identifiers removed), never the request, the need or a
-name. The phone's coordinates never leave the machine. Coordinates are kept to 3 decimals (about
-100 m).
+name. Coordinates are kept to 3 decimals (about 100 m). The phone's location goes to Geoapify
+only rounded to 2 decimals (about 1 km, doctor-search Decision 14): as a hint when a named place
+is looked up (answers near the person first), and in area_near, to name the area around the
+person when doctors must be fetched for it.
 
 Geoapify takes its key only in the URL (`apiKey=`), unlike the project's other services. So the
 key is hidden in httpx's request log lines, errors name only the error type, and the original
@@ -34,6 +36,8 @@ from ..utils.privacy import redact
 from ..utils.rate_limit import CLOUD_RATE_SETTING, DEFAULT_CLOUD_PER_MINUTE, rate_limiter
 
 GEOCODE_URL = "https://api.geoapify.com/v1/geocode/search"
+REVERSE_URL = "https://api.geoapify.com/v1/geocode/reverse"
+PLACES_URL = "https://api.geoapify.com/v2/places"
 KEY_NAME = "GEOAPIFY_API_KEY"
 SERVICE = "geoapify"
 ATTRIBUTION = "© OpenStreetMap contributors, powered by Geoapify"  # must be shown with the place
@@ -46,8 +50,16 @@ SAME_PLACE_KM = 25  # answers closer than this are the same place
 NEAR_PERSON_KM = 50  # a match this close to the phone's location is the one meant
 MAX_PLACE_CHARS = 200
 COORD_DECIMALS = 3  # about 100 m
+AREA_DECIMALS = 2  # about 1 km: how precisely the phone's location ever leaves the machine
+# The area around a point: the nearest suburb, town or village (seen live: "Andheri West",
+# "Koramangala" — the names Practo uses; reverse geocoding gave wards such as "K/W Ward").
+AREA_CATEGORIES = "populated_place.suburb,populated_place.town,populated_place.village"
+AREA_RADIUS_M = 3000
 INDIA_BOX = (6.0, 37.6, 68.0, 97.5)  # south, north, west, east: a rough box around India
 WIDE_AREA_TYPES = {"suburb", "district", "city", "county", "postcode", "state"}  # preferred as a label
+AREA_TYPES = {"suburb", "district"}  # the answer's own name is the neighbourhood
+WHOLE_CITY_TYPES = {"city", "county", "state", "country"}  # no neighbourhood
+MAX_NAME_CHARS = 80
 PLACEHOLDER = re.compile(r"\[[A-Z_]+_\d+\]")
 KEY_IN_URL = re.compile(r"(apiKey=)[^&\s\"']+")
 CACHE_SIZE = 256
@@ -145,9 +157,27 @@ def place_label(result: dict[str, Any]) -> str:
     return str(result.get("formatted") or "").removesuffix(", India")
 
 
+def _name(value: Any) -> str | None:
+    return value.strip()[:MAX_NAME_CHARS] if isinstance(value, str) and value.strip() else None
+
+
+def city_and_area(result: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The city and the neighbourhood of an answer (doctors are searched by these names); no
+    neighbourhood when the answer is a whole city or larger."""
+    kind = result.get("result_type")
+    if kind in WHOLE_CITY_TYPES:
+        city, name = _name(result.get("city")), _name(result.get("name"))
+        if kind == "city" and city and name and name.casefold() != city.casefold():
+            return city, name  # a "city" inside a city is a neighbourhood (seen live: Koregaon Park, Pune)
+        return city or name, None
+    area = _name(result.get("name")) if kind in AREA_TYPES else None
+    return _name(result.get("city")), area or _name(result.get("suburb")) or _name(result.get("district"))
+
+
 def _place(result: dict[str, Any]) -> dict[str, Any]:
+    city, area = city_and_area(result)
     return {"lat": round(float(result["lat"]), COORD_DECIMALS), "lon": round(float(result["lon"]), COORD_DECIMALS),
-            "label": place_label(result), "attribution": ATTRIBUTION}
+            "label": place_label(result), "city": city, "area": area, "attribution": ATTRIBUTION}
 
 
 def _confident(result: dict[str, Any]) -> bool:
@@ -182,7 +212,7 @@ def group_places(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return places
 
 
-def _get_with_retry(client: httpx.Client, params: dict[str, Any]) -> httpx.Response:
+def _get_with_retry(client: httpx.Client, params: dict[str, Any], url: str = GEOCODE_URL) -> httpx.Response:
     """GET, once more after a short wait if the service says it is busy (429 or 503). Every
     attempt waits its turn under the per-minute limit (daily credits are limited)."""
     try:
@@ -191,7 +221,7 @@ def _get_with_retry(client: httpx.Client, params: dict[str, Any]) -> httpx.Respo
         raise GeocodeError(str(exc)) from None
     for attempt in range(MAX_RETRIES + 1):
         limiter.acquire()
-        response = client.get(GEOCODE_URL, params=params)
+        response = client.get(url, params=params)
         if response.status_code not in BUSY_STATUSES or attempt == MAX_RETRIES:
             return response
         time.sleep(2.0 * (attempt + 1))
@@ -202,7 +232,7 @@ def find_place(text: str, near: dict[str, float] | None = None,
                client: httpx.Client | None = None) -> dict[str, Any]:
     """Look up a place in India by name.
 
-    Returns {"status": "found", "place": {lat, lon, label, attribution}},
+    Returns {"status": "found", "place": {lat, lon, label, city, area, attribution}},
     {"status": "ambiguous", "options": [place, ...]} (far-apart places share the name), or
     {"status": "not_found"}. near: the phone's location, if known: answers near it come first,
     and one within NEAR_PERSON_KM settles an ambiguous name.
@@ -221,8 +251,8 @@ def find_place(text: str, near: dict[str, float] | None = None,
         raise GeocodeError(f"Place search needs {KEY_NAME}")
     params: dict[str, Any] = {"text": place_text, "filter": "countrycode:in", "format": "json",
                               "limit": RESULTS_ASKED, "apiKey": key}
-    if near:
-        params["bias"] = f"proximity:{near['lon']},{near['lat']}"
+    if near:  # about 1 km is enough to rank nearby answers first
+        params["bias"] = f"proximity:{round(near['lon'], AREA_DECIMALS)},{round(near['lat'], AREA_DECIMALS)}"
     own_client = client is None
     client = client or httpx.Client(timeout=TIMEOUT_SECONDS)
     try:
@@ -251,6 +281,70 @@ def find_place(text: str, near: dict[str, float] | None = None,
         answer = {"status": "found", "place": places[0]}
     else:
         answer = {"status": "ambiguous", "options": places[:3]}
+    with _cache_lock:
+        if len(_cache) >= CACHE_SIZE:
+            _cache.pop(next(iter(_cache)))
+        _cache[cache_key] = answer
+    return copy.deepcopy(answer)
+
+
+def _get_json(client: httpx.Client, url: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One area lookup, as JSON. Errors name only their type or status (the URL holds the key)."""
+    try:
+        response = _get_with_retry(client, params, url)
+    except httpx.HTTPError as exc:
+        raise GeocodeError(f"Area lookup could not be reached ({type(exc).__name__})") from None
+    if response.status_code != 200:
+        raise GeocodeError(f"Area lookup failed (HTTP {response.status_code})")  # body not shown
+    try:
+        answer = response.json()
+    except ValueError:
+        raise GeocodeError("Area lookup sent an answer that could not be read") from None
+    if not isinstance(answer, dict):
+        raise GeocodeError("Area lookup sent an answer that could not be read")
+    return answer
+
+
+def _first(items: Any, field: str | None = None) -> dict[str, Any]:
+    first = items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else {}
+    inner = first.get(field) if field else first
+    return inner if isinstance(inner, dict) else {}
+
+
+def area_near(point: Any, client: httpx.Client | None = None) -> dict[str, str | None] | None:
+    """The city and neighbourhood around the phone's location, to fetch doctors there:
+    {"city", "area"} from the nearest suburb, town or village within AREA_RADIUS_M, else the city
+    alone ("area": None); None if not known. Only the point rounded to AREA_DECIMALS (about 1 km)
+    is sent. Raises GeocodeError if the service can't be used."""
+    here = device_location(point)
+    if here is None:
+        return None
+    lat, lon = round(here["lat"], AREA_DECIMALS), round(here["lon"], AREA_DECIMALS)
+    cache_key = ("area_near", lat, lon)
+    with _cache_lock:
+        if cache_key in _cache:
+            return copy.deepcopy(_cache[cache_key])
+    key = geoapify_key()
+    if not key:
+        raise GeocodeError(f"Area lookup needs {KEY_NAME}")
+    own_client = client is None
+    client = client or httpx.Client(timeout=TIMEOUT_SECONDS)
+    try:
+        places = _get_json(client, PLACES_URL, {"categories": AREA_CATEGORIES, "limit": 1, "apiKey": key,
+                                                "filter": f"circle:{lon},{lat},{AREA_RADIUS_M}",
+                                                "bias": f"proximity:{lon},{lat}"})
+        nearest = _first(places.get("features"), "properties")
+        city, area = _name(nearest.get("city")), _name(nearest.get("name"))
+        if not city:  # no suburb, town or village this near: the city alone
+            reverse = _get_json(client, REVERSE_URL, {"lat": lat, "lon": lon, "format": "json", "limit": 1,
+                                                      "apiKey": key})
+            city = _name(_first(reverse.get("results")).get("city"))
+    finally:
+        if own_client:
+            client.close()
+    answer = None
+    if city:
+        answer = {"city": city, "area": area if area and area.casefold() != city.casefold() else None}
     with _cache_lock:
         if len(_cache) >= CACHE_SIZE:
             _cache.pop(next(iter(_cache)))

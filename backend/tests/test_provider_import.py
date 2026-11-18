@@ -7,7 +7,10 @@ shape of the real 10-doctor trial (2026-11-17); the doctors are made up.
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,7 +18,8 @@ import httpx
 
 from backend.tools import provider_import
 from backend.tools.provider_import import (
-    KEY_NAME, PRACTO_SPECIALTIES, PRICE_PER_RESULT, ProviderImportError, doctor_records, import_doctors, main,
+    KEEP_DAYS, KEY_NAME, PRACTO_SPECIALTIES, PRICE_PER_RESULT, ProviderImportError, doctor_records, import_doctors,
+    main, remove_expired,
 )
 from backend.tools.specialties import SPECIALTIES
 
@@ -65,6 +69,23 @@ class Apify:
 
     def bodies(self):
         return [json.loads(request.content) for request in self.requests]
+
+
+class SlowApify(Apify):
+    """Apify taking a moment per search, counting how many searches run at the same time."""
+
+    def __init__(self, rows=None, fail=(), seconds=0.3):
+        super().__init__(rows, fail)
+        self.seconds, self.running, self.most_at_once, self.counting = seconds, 0, 0, threading.Lock()
+
+    def __call__(self, request):
+        with self.counting:
+            self.running += 1
+            self.most_at_once = max(self.most_at_once, self.running)
+        time.sleep(self.seconds)
+        with self.counting:
+            self.running -= 1
+        return super().__call__(request)
 
 
 class RecordTests(unittest.TestCase):
@@ -178,6 +199,60 @@ class ImportTests(unittest.TestCase):
         stored = json.loads(self.out.read_text(encoding="utf-8"))
         self.assertEqual({(d["doctor_id"], d["gender"]) for d in stored["doctors"]},
                          {("practo:1", "female"), ("practo:2", "male")})
+        self.assertEqual(report["searched"], ["cardiologist"])
+        self.assertEqual(stored["searches"], {"mumbai|andheri west|cardiologist": {
+            "city": "Mumbai", "locality": "Andheri West", "specialty": "cardiologist",
+            "fetched_on": provider_import.today_utc().isoformat(), "per_search": 3, "results": 2}})
+
+    def test_an_empty_search_is_remembered_and_a_failed_one_is_not(self):
+        self.run_import(Apify(), specialties=["dentist"])  # Practo had nobody: searched, nothing kept
+        stored = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual((stored["doctors"], list(stored["searches"])), ([], ["mumbai|andheri west|dentist"]))
+        report = self.run_import(Apify({("Cardiologist", "male"): [practo_row()]}, fail=[("Cardiologist", "female")]))
+        self.assertEqual(report["searched"], [])  # half a search is not a search
+        self.assertEqual(list(json.loads(self.out.read_text(encoding="utf-8"))["searches"]),
+                         ["mumbai|andheri west|dentist"])
+
+    def test_searches_can_run_at_the_same_time_and_report_in_order(self):
+        rows = {("Cardiologist", "female"): [practo_row(doctorId=1)], ("Cardiologist", "male"): [practo_row(doctorId=2)]}
+        one_by_one, together = SlowApify(rows), SlowApify(rows)
+        self.run_import(one_by_one)
+        self.assertEqual(one_by_one.most_at_once, 1)  # a manual import: one search at a time, as before
+        report = self.run_import(together, workers=2, specialties=["cardiologist", "dentist"],
+                                 max_spend=3 * 3 * PRICE_PER_RESULT)  # room for 3 of the 4 searches
+        self.assertEqual(together.most_at_once, 2)
+        self.assertEqual([(r["specialty"], r["gender"], r["results"]) for r in report["searches"]],
+                         [("cardiologist", "female", 1), ("cardiologist", "male", 1), ("dentist", "female", 0)])
+        self.assertEqual(report["skipped"], ["dentist/male"])  # the spending limit decided before any search
+
+    def test_the_run_time_limit_can_be_shortened(self):
+        apify = Apify()
+        self.run_import(apify, run_timeout=60)
+        self.assertEqual(apify.requests[0].url.params["timeout"], "60")
+
+    def test_a_save_made_during_the_import_is_kept(self):
+        # e.g. a request fetched another area while this import was running.
+        meanwhile = {"id": "practo:5:5:dentist", "doctor_id": "practo:5", "specialty": "dentist"}
+
+        class SavingMeanwhile(Apify):
+            def __call__(inner, request):
+                if not inner.requests:
+                    self.out.parent.mkdir(parents=True, exist_ok=True)
+                    self.out.write_text(json.dumps({"doctors": [meanwhile]}), encoding="utf-8")
+                return Apify.__call__(inner, request)
+
+        self.run_import(SavingMeanwhile({("Cardiologist", "female"): [practo_row()]}))
+        stored = {d["id"] for d in json.loads(self.out.read_text(encoding="utf-8"))["doctors"]}
+        self.assertEqual(stored, {"practo:5:5:dentist", "practo:1001:501:cardiologist", "practo:1001:502:cardiologist"})
+
+    def test_a_list_changing_while_it_is_written_is_read_again(self):
+        # The first write finds the file changed since it was read: read, merge and write again.
+        with patch.object(provider_import, "_write_list", side_effect=[False, True]) as writes:
+            self.run_import(Apify({("Cardiologist", "female"): [practo_row()]}))
+        self.assertEqual(writes.call_count, 2)
+        with patch.object(provider_import, "_write_list", return_value=False), \
+                self.assertRaisesRegex(ProviderImportError, "kept changing"):
+            self.run_import(Apify({("Cardiologist", "female"): [practo_row()]}))
 
     def test_the_spending_limit_stops_searches_before_their_worst_case(self):
         apify = Apify()
@@ -202,6 +277,35 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(stored["practo:9:9:dentist"], other)
         self.assertEqual(stored["practo:1001:501:cardiologist"]["name"], "Dr. Demo Kapoor")
         self.assertEqual(len(stored), 3)
+
+    def test_a_doctor_fetched_again_loses_the_clinics_they_left(self):
+        self.out.parent.mkdir(parents=True)
+        left = {"id": "practo:1001:499:cardiologist", "doctor_id": "practo:1001", "specialty": "cardiologist"}
+        stays = {"id": "practo:1001:501:cardiologist", "doctor_id": "practo:1001", "specialty": "cardiologist",
+                 "name": "old name"}
+        dentist = {"id": "practo:1001:499:dentist", "doctor_id": "practo:1001", "specialty": "dentist"}
+        other = {"id": "practo:7:499:cardiologist", "doctor_id": "practo:7", "specialty": "cardiologist"}
+        self.out.write_text(json.dumps({"doctors": [left, stays, dentist, other]}), encoding="utf-8")
+        self.run_import(Apify({("Cardiologist", "female"): [practo_row()]}))  # clinics 501 and 502 now
+        stored = {d["id"]: d for d in json.loads(self.out.read_text(encoding="utf-8"))["doctors"]}
+        self.assertEqual(sorted(stored), ["practo:1001:499:dentist", "practo:1001:501:cardiologist",
+                                          "practo:1001:502:cardiologist", "practo:7:499:cardiologist"])
+        self.assertEqual(stored["practo:1001:501:cardiologist"]["name"], "Dr. Demo Kapoor")  # replaced, not merged
+        # Not fetched again, so kept: another specialty of the same doctor, and other doctors.
+
+    def test_an_import_deletes_stored_records_older_than_90_days(self):
+        self.out.parent.mkdir(parents=True)
+        today = provider_import.today_utc()
+
+        def aged(number, days):
+            return {"id": f"practo:{number}:{number}:dentist", "doctor_id": f"practo:{number}",
+                    "fetched_on": (today - timedelta(days=days)).isoformat()}
+
+        self.out.write_text(json.dumps({"doctors": [aged(8, KEEP_DAYS), aged(9, KEEP_DAYS + 1)]}), encoding="utf-8")
+        self.run_import(Apify({("Cardiologist", "female"): [practo_row()]}))
+        stored = {d["id"] for d in json.loads(self.out.read_text(encoding="utf-8"))["doctors"]}
+        # This import's own records are kept whatever their date (the test row's date is fixed).
+        self.assertEqual(stored, {"practo:8:8:dentist", "practo:1001:501:cardiologist", "practo:1001:502:cardiologist"})
 
     def test_a_broken_list_stops_the_import_before_any_spending(self):
         self.out.parent.mkdir(parents=True)
@@ -243,6 +347,45 @@ class ImportTests(unittest.TestCase):
         for kwargs in ({"specialties": ["astrologer"]}, {"per_search": 0}, {"max_spend": 0}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ProviderImportError):
                 self.run_import(Apify(), **kwargs)
+
+
+class RemoveExpiredTests(unittest.TestCase):
+    TODAY = date(2026, 11, 17)
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.path = Path(folder.name) / "doctors.json"
+
+    def test_only_records_past_90_days_are_deleted_and_the_rest_is_kept(self):
+        records = [{"id": "a", "fetched_on": "2026-08-19"},  # 90 days old
+                   {"id": "b", "fetched_on": "2026-08-18"},  # 91
+                   {"id": "c"}]  # no date: age unknown
+        self.path.write_text(json.dumps({"source": "demo", "updated_at": "then", "doctors": records}),
+                             encoding="utf-8")
+        self.assertEqual(remove_expired(self.path, self.TODAY), 1)
+        stored = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(([d["id"] for d in stored["doctors"]], stored["source"], stored["updated_at"]),
+                         (["a", "c"], "demo", "then"))
+        self.assertEqual(remove_expired(self.path, self.TODAY), 0)
+
+    def test_nothing_is_written_if_the_list_changed_while_it_was_read(self):
+        old = {"id": "a", "fetched_on": "2026-01-01"}
+        self.path.write_text(json.dumps({"doctors": [old]}), encoding="utf-8")
+        saved_meanwhile = json.dumps({"doctors": [old, {"id": "b", "fetched_on": "2026-11-17"}]})
+        real_load = provider_import.load_list
+
+        def read_then_an_import_saves(path):
+            stored = real_load(path)
+            path.write_text(saved_meanwhile, encoding="utf-8")
+            return stored
+
+        with patch.object(provider_import, "load_list", read_then_an_import_saves):
+            self.assertEqual(remove_expired(self.path, self.TODAY), 0)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), saved_meanwhile)  # the import's list survives
+        self.assertEqual(remove_expired(self.path, self.TODAY), 1)  # the next try deletes the old one
+        self.assertEqual([d["id"] for d in json.loads(self.path.read_text(encoding="utf-8"))["doctors"]], ["b"])
+        self.assertEqual([p.name for p in self.path.parent.iterdir()], ["doctors.json"])  # no temporary file left
 
 
 if __name__ == "__main__":
