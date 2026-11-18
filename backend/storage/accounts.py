@@ -162,6 +162,14 @@ class AccountService:
             raise NotFoundException("There is no account for this id")
         return user_view(user)
 
+    def saved_choices(self, user_id: str) -> dict[str, Any]:
+        """For a request: the name (hidden from the model) and the saved consents. No account
+        (development, X-Actor-Id): no name, every consent off."""
+        with self.sessions() as session:
+            user, profile = session.get(User, user_id), session.get(Profile, user_id)
+        consents = profile_view(profile)["consents"] if profile else {name: False for name in CONSENTS}
+        return {"display_name": user.display_name if user else None, "consents": consents}
+
     def token_valid(self, user_id: str, token_version: int) -> bool:
         """The account still exists, is not switched off, and has not signed out since."""
         with self.sessions() as session:

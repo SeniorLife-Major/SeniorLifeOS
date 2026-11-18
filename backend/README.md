@@ -213,6 +213,22 @@ Uploads are kept in PostgreSQL plus an encrypted file folder, and paused reviews
 
 Every other call sends the token: `Authorization: Bearer <accessToken>`. A wrong password and an unknown login get the same answer.
 
+**Doctor search** (`api/health_requests.py`; needs `DATABASE_URL`, `SENIORLIFE_CHECKPOINT_KEY`, and `GEOAPIFY_API_KEY` to look places up; tables from `alembic upgrade head`):
+
+| Call | What it does |
+|---|---|
+| `POST /api/v1/health-requests` | `{"query": "mujhe dil ke doctor ko dikhana hai", "currentLocation": {"lat", "lon"}}` (location optional). The AI model reads it only with consent: the profile's `useLlm` and `medicalCloud`, unless the request sends `useLlm` / `medicalCloudConsent`. The account's name is hidden from the model |
+| `POST /api/v1/health-requests/{id}/answer` | the one question it asked: `{"callEmergency": false}`, `{"clarification": "knee pain"}`, or `{"location": "Andheri West, Mumbai"}` / `{"location": {"lat", "lon"}}`. Applied once (409 after); the wrong kind answers 422 with `details.waitingFor` |
+| `GET /api/v1/health-requests/{id}` | the request's latest result |
+| `GET /api/v1/health-requests?limit=20` | my requests from the last 30 days, newest first |
+| `GET /api/v1/health/specialties` | the kinds of doctor it knows |
+
+The result (`status`): `doctors_found` (`doctors` shown with reasons, `otherDoctors`, `answer` as plain text, `attribution` to show with a looked-up place), `no_doctors_nearby`, `emergency` (`emergency.numbers`, `message`), `needs_emergency_confirmation` / `needs_clarification` / `needs_location` (`question`, `options`), `location_not_found`, `not_available`, `not_understood`, `search_unavailable`, `failed`, `expired`. Person-facing notes are in `notes`.
+
+With `Accept: text/event-stream` the answer is server-sent events: `step` events (`{"step": "safety_check"}`, ...), then one `result` event (the same envelope as the JSON answer) or one `error` event. The search finishes and is saved even if the caller disconnects.
+
+Kept: the request text, name and phone location only in the encrypted checkpoint while a question waits; a question not answered in 24 hours expires and that checkpoint is deleted. What the person was shown (no request text, no coordinates of the person) is kept 30 days.
+
 **API** (`api/documents.py`; the caller is the signed-in person. In development, a call without a token may name the caller with the `X-Actor-Id` header instead; that header is refused when `APP_ENV=production`):
 
 | Call | What it does |

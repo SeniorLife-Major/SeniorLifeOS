@@ -200,6 +200,33 @@ class Profile(Base):
     user: Mapped[User] = relationship(back_populates="profile")
 
 
+class GraphRun(Base):
+    """One run of a graph other than the document graph: doctor search ("health") now, benefits
+    later (fastapi-backend Phase 2). Its id is the LangGraph thread id of the encrypted checkpoint,
+    which exists only while the run waits for the person's answer.
+    status: running, paused (waiting for an answer), ended, failed, expired (not answered in time).
+    outcome: the graph's own status (doctors_found, emergency, needs_location, ...).
+    result: what the person was shown, removed RESULT_DAYS after the run ends
+    (storage/health_service.py). Never the request text or the phone's location: those stay in
+    the encrypted checkpoint, deleted when the run ends."""
+
+    __tablename__ = "graph_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(128))
+    graph: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16))
+    outcome: Mapped[str | None] = mapped_column(String(48))
+    result: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = created()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_graph_runs_owner_graph_created", "owner_id", "graph", "created_at"),
+                      Index("ix_graph_runs_status_updated", "status", "updated_at"))
+
+
 class AuditEvent(Base):
     """Who did what to which document. detail never holds field values.
     No foreign key, so the history stays if a document is removed."""

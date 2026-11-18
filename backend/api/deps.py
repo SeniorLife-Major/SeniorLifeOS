@@ -1,5 +1,5 @@
 """Things several routers need (fastapi-backend session): is this a production server, the
-account service, and who is calling (current_actor)."""
+account and doctor search services, and who is calling (current_actor)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from backend.errors import AppException, UnauthorizedException
 from backend.errors.error_codes import ErrorCode
 
 __all__ = ["PRODUCTION", "is_production", "StorageUnavailable", "SignInUnavailable", "current_actor", "Actor",
-           "get_account_service", "account_lookup"]
+           "get_account_service", "get_health_service", "account_lookup"]
 
 logger = logging.getLogger(__name__)
 
@@ -37,42 +37,82 @@ class SignInUnavailable(AppException):
                          status_code=503)
 
 
-# ---- the account service ------------------------------------------------------------------
+# ---- services made here: accounts, doctor search ------------------------------------------
+# They share one connection pool (DATABASE_URL). The document service still makes its own.
 
-_accounts: Any = None
-_accounts_lock = threading.Lock()
+_lock = threading.RLock()  # re-entrant: building one service builds the shared sessions first
+_made: dict[str, Any] = {}
+
+
+def shared(name: str, build: Callable[[], Any]) -> Any:
+    """The one instance of name, made on first use. A failed build is tried again next time."""
+    with _lock:
+        if name not in _made:
+            _made[name] = build()
+        return _made[name]
+
+
+def database_sessions() -> Any:
+    def build() -> Any:
+        from backend.storage.db import make_engine, make_sessions
+        from backend.storage.settings import StorageSettingError, database_url
+
+        pool = get_config().database
+        try:
+            url = database_url()
+        except StorageSettingError as exc:
+            raise StorageUnavailable(str(exc)) from None  # names the setting, never its value
+        return make_sessions(make_engine(url, pool_size=pool.pool_size, max_overflow=pool.max_overflow,
+                                         echo=pool.echo))
+
+    return shared("sessions", build)
+
+
+def needs_table(sessions: Any, table: str, what: str) -> None:
+    from sqlalchemy import inspect
+
+    try:
+        present = inspect(sessions.kw["bind"]).has_table(table)
+    except Exception as exc:
+        logger.error("%s storage could not start: %s", what.capitalize(), type(exc).__name__)
+        raise StorageUnavailable(f"The {what} database can't be reached") from None
+    if not present:
+        raise StorageUnavailable(f"The {what} tables are missing; run: alembic -c backend/alembic.ini upgrade head")
 
 
 def get_account_service() -> Any:
-    """The shared AccountService, made on first use from DATABASE_URL."""
-    global _accounts
-    with _accounts_lock:
-        if _accounts is None:
-            _accounts = build_account_service()
-        return _accounts
+    """The shared AccountService."""
+    return shared("accounts", build_account_service)
 
 
 def build_account_service() -> Any:
-    from sqlalchemy import inspect
-
     from backend.storage.accounts import AccountService
-    from backend.storage.db import make_engine, make_sessions
-    from backend.storage.settings import StorageSettingError, database_url
 
-    pool = get_config().database
+    sessions = database_sessions()
+    needs_table(sessions, "users", "account")
+    return AccountService(sessions)
+
+
+def get_health_service() -> Any:
+    """The shared HealthService (doctor search); also needs SENIORLIFE_CHECKPOINT_KEY."""
+    return shared("health", build_health_service)
+
+
+def build_health_service() -> Any:
+    from backend.storage.health_service import HealthService
+    from backend.storage.settings import database_url, with_driver
+    from backend.utils.checkpoints import CheckpointKeyError, make_postgres_checkpointer
+
+    sessions = database_sessions()
+    needs_table(sessions, "graph_runs", "doctor search")
     try:
-        engine = make_engine(database_url(), pool_size=pool.pool_size, max_overflow=pool.max_overflow, echo=pool.echo)
-        if not inspect(engine).has_table("users"):
-            engine.dispose()
-            raise StorageUnavailable("The account tables are missing; run: alembic -c backend/alembic.ini upgrade head")
-    except StorageSettingError as exc:
+        checkpointer = make_postgres_checkpointer(with_driver(database_url(), ""))
+    except CheckpointKeyError as exc:
         raise StorageUnavailable(str(exc)) from None  # names the setting, never its value
-    except StorageUnavailable:
-        raise
     except Exception as exc:
-        logger.error("Account storage could not start: %s", type(exc).__name__)
-        raise StorageUnavailable("The account database can't be reached") from None
-    return AccountService(make_sessions(engine))
+        logger.error("Doctor search storage could not start: %s", type(exc).__name__)
+        raise StorageUnavailable("The doctor search database can't be reached") from None
+    return HealthService(sessions, checkpointer)
 
 
 def account_lookup() -> Callable[[], Any]:
