@@ -168,18 +168,21 @@ class HealthService:
     # ---- asking ------------------------------------------------------------------------------
 
     def start(self, owner_id: str, query: str, *, current_location: dict[str, float] | None = None,
-              use_llm: bool = False, medical_cloud_consent: bool = False,
-              owner_name: str | None = None) -> Iterator[tuple[str, dict[str, Any]]]:
-        """owner_name is hidden from the model's prompt; current_location is the phone's (lat, lon)."""
+              home_location: dict[str, float] | None = None, use_llm: bool = False,
+              medical_cloud_consent: bool = False, owner_name: str | None = None) -> Iterator[tuple[str, dict[str, Any]]]:
+        """owner_name is hidden from the model's prompt; current_location is the phone's (lat, lon);
+        home_location the home saved in the profile, used only when the person means home."""
         self.purge_expired()
         run_id = str(uuid4())
         with self.sessions.begin() as session:
             session.add(GraphRun(id=run_id, owner_id=owner_id, graph=GRAPH, status="running", result={}))
             audit(session, owner_id, "health.request_started", None, run_id=run_id, use_llm=use_llm,
-                  medical_cloud=medical_cloud_consent, location_shared=current_location is not None)
+                  medical_cloud=medical_cloud_consent, location_shared=current_location is not None,
+                  home_saved=home_location is not None)
         state = {"actor_id": owner_id, "query": query, "use_interrupt": True, "use_llm": use_llm,
                  "medical_cloud_consent": medical_cloud_consent,
                  **({"current_location": current_location} if current_location else {}),
+                 **({"home_location": home_location} if home_location else {}),
                  **({"owner_name": owner_name} if owner_name else {})}
         return self._steps(owner_id, run_id, state)
 

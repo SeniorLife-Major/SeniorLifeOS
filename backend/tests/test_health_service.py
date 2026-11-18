@@ -93,6 +93,18 @@ class AskingTests(HealthCase):
         with self.sessions() as session:
             return [(event.action, event.detail) for event in session.execute(select(AuditEvent)).scalars()]
 
+    def test_near_my_home_uses_the_saved_home_without_keeping_it(self):
+        home = {"lat": 19.136, "lon": 72.829}
+        _, result = final(self.health.start(OWNER, "heart doctor near my home", home_location=home))
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual(result["search_location"], {"label": "your home", "source": "home"})
+        self.assertIn("near your home", result["answer"])
+        stored = self.stored_text()
+        for value in ("19.136", "72.829"):
+            self.assertNotIn(value, stored)
+        _, asked = final(self.health.start(OWNER, "heart doctor near my home"))  # nothing saved
+        self.assertEqual(asked["status"], "needs_location")
+
     def test_an_emergency_by_the_rules_ends_at_once(self):
         _, result = final(self.health.start(OWNER, "I have chest pain right now and can't breathe"))
         self.assertEqual(result["status"], "emergency")

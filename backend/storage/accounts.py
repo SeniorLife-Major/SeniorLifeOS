@@ -163,12 +163,16 @@ class AccountService:
         return user_view(user)
 
     def saved_choices(self, user_id: str) -> dict[str, Any]:
-        """For a request: the name (hidden from the model) and the saved consents. No account
-        (development, X-Actor-Id): no name, every consent off."""
+        """For a request: the name (hidden from the model), the saved consents and the home
+        ({"lat", "lon"}, or None). No account (development, X-Actor-Id): no name, every consent
+        off, no home."""
         with self.sessions() as session:
             user, profile = session.get(User, user_id), session.get(Profile, user_id)
-        consents = profile_view(profile)["consents"] if profile else {name: False for name in CONSENTS}
-        return {"display_name": user.display_name if user else None, "consents": consents}
+        saved = profile_view(profile) if profile else None
+        consents = saved["consents"] if saved else {name: False for name in CONSENTS}
+        home = saved["home_location"] if saved else None
+        return {"display_name": user.display_name if user else None, "consents": consents,
+                "home": {"lat": home["lat"], "lon": home["lon"]} if home else None}
 
     def token_valid(self, user_id: str, token_version: int) -> bool:
         """The account still exists, is not switched off, and has not signed out since."""

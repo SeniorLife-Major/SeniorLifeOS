@@ -13,7 +13,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from backend.graphs.health_graph import (
-    CLARIFYING_QUESTION, GENERAL_PHYSICIAN_FIRST, HERE_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS, MAX_QUERY_CHARS,
+    CLARIFYING_QUESTION, GENERAL_PHYSICIAN_FIRST, HERE_LABEL, HOME_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS,
+    MAX_QUERY_CHARS,
     CALL_QUESTION, NO_DOCTORS, NO_TOP_CHOICE, NONE_VERIFIED, OLD_DETAILS, RELAXED_NOTES, SEARCH_UNAVAILABLE,
     VAGUE_NEED, build_health_graph, map_specialty,
 )
@@ -423,6 +424,60 @@ class LocationTests(unittest.TestCase):
         _, fake = with_model("need a heart doctor", reading(), FakePlaces(), current_location=IN_ANDHERI)
         self.assertIn("search_near: current_location if they want a doctor near where they are now", fake.prompts[0])
         self.assertIn("exactly as written", fake.prompts[0])
+
+
+HOME = {"lat": 19.1361234, "lon": 72.8294567}  # the profile's home (already rounded there)
+HOME_ROUNDED = {"lat": 19.136, "lon": 72.829}
+
+
+class HomeTests(unittest.TestCase):
+    """The home saved in the profile (fastapi-backend): used when the person means home, never
+    guessed when they said nothing about where."""
+
+    def at_home(self, result):
+        self.assertEqual(result["search_location"], {**HOME_ROUNDED, "label": HOME_LABEL, "source": "home"})
+        self.assertIn("locate:home", result["events"])
+
+    def test_near_my_home_uses_the_saved_home_and_looks_nothing_up(self):
+        places = FakePlaces()
+        result, _ = with_model("ghar ke paas dil ka doctor", reading(search_near="home"), places,
+                               home_location=HOME, current_location=IN_ANDHERI)  # home wins over the phone
+        self.at_home(result)
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual(places.calls, [])
+        self.at_home(without_model("heart doctor near my home", home_location=HOME))
+
+    def test_near_me_still_uses_the_phone(self):
+        result, _ = with_model("dil ka doctor mere paas", reading(search_near="current_location"), FakePlaces(),
+                               home_location=HOME, current_location=IN_ANDHERI)
+        self.assertEqual(result["search_location"]["source"], "phone")
+
+    def test_without_a_saved_home_it_asks_as_before(self):
+        for home in (None, {"lat": 51.5, "lon": -0.12}, {"lat": "x"}, "Andheri"):  # none, not India, malformed
+            with self.subTest(home=home):
+                result, _ = with_model("ghar ke paas dil ka doctor", reading(search_near="home"), FakePlaces(),
+                                       **({"home_location": home} if home is not None else {}))
+                self.assertEqual(result["question"], LOCATION_QUESTIONS["home"])
+
+    def test_nothing_said_about_where_is_asked_with_home_offered(self):
+        result, _ = with_model("need a heart doctor", reading(), FakePlaces(), home_location=HOME)
+        self.assertEqual(result["status"], "needs_location")  # not guessed
+        self.assertEqual(result["question"], LOCATION_QUESTIONS["where_or_home"])
+        self.assertIn('Say "home"', result["question"])
+        result = without_model("Pune mein ghutne ka doctor", home_location=HOME, current_location=IN_ANDHERI)
+        self.assertEqual(result["question"], LOCATION_QUESTIONS["where_here_or_home"])
+        self.assertIn('"near me" or "home"', result["question"])
+
+    def test_answering_home(self):
+        for answer in ("home", "My Home", "near my home", "ghar", "ghar ke paas", "घर", "घर के पास"):
+            with self.subTest(answer=answer):
+                result, _ = with_model("need a heart doctor", reading(), FakePlaces(), home_location=HOME,
+                                       location_answer=answer)
+                self.at_home(result)
+        places = FakePlaces()  # no saved home: "home" is not a place it can look up
+        result, _ = with_model("need a heart doctor", reading(), places, location_answer="home")
+        self.assertEqual(result["status"], "location_not_found")
+        self.assertEqual(places.calls, [("home", None)])
 
 
 class DoctorSearchTests(unittest.TestCase):

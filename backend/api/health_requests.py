@@ -3,7 +3,8 @@ question it may ask, and see the result again for 30 days (storage/health_servic
 
 The AI model reads the request only with the person's consent (use_llm and medical cloud): the
 saved profile choices, unless the request says otherwise. The person's name is hidden from the
-model. The phone's location is used for this search only and never stored.
+model. The phone's location is used for this search only and never stored. The home saved in the
+profile is used when the person means home ("ghar ke paas"); the result calls it "your home".
 
 With "Accept: text/event-stream" the answer comes as server-sent events: one "step" event per
 step finished ({"step": "safety_check"}, ...), then one "result" event (the same envelope as the
@@ -232,6 +233,7 @@ def create_health_request(body: HealthRequestCreate, request: Request, response:
     events = health.start(
         actor, body.query,
         current_location=body.current_location.model_dump() if body.current_location else None,
+        home_location=saved["home"],
         use_llm=consents["use_llm"] if body.use_llm is None else body.use_llm,
         medical_cloud_consent=consents["medical_cloud"] if body.medical_cloud_consent is None
         else body.medical_cloud_consent,

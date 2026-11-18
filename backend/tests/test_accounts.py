@@ -175,6 +175,19 @@ class ProfileTests(AccountCase):
                 self.accounts.update_profile(self.user_id, changes)
         self.assertEqual(self.accounts.profile(self.user_id)["language"], "en")
 
+    def test_saved_choices_for_a_request(self):
+        self.assertEqual(self.accounts.saved_choices(self.user_id), {
+            "display_name": "Meera Rao", "home": None,
+            "consents": {"use_llm": False, "medical_cloud": False, "cloud_ocr": False}})
+        self.accounts.update_profile(self.user_id, {"consents": {"medical_cloud": True},
+                                                    "home": {"label": "Andheri West", "lat": 19.136, "lon": 72.829}})
+        saved = self.accounts.saved_choices(self.user_id)
+        self.assertEqual(saved["home"], {"lat": 19.136, "lon": 72.829})  # never the label: it isn't needed
+        self.assertTrue(saved["consents"]["medical_cloud"])
+        self.assertEqual(self.accounts.saved_choices("senior-without-account"), {
+            "display_name": None, "home": None,
+            "consents": {"use_llm": False, "medical_cloud": False, "cloud_ocr": False}})
+
     def test_no_account(self):
         for call in (lambda: self.accounts.profile("no-such-user"),
                      lambda: self.accounts.update_profile("no-such-user", {"language": "hi"})):

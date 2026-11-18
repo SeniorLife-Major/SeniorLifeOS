@@ -27,7 +27,9 @@ request is understood on this machine with a few words per specialty (tools/spec
 Where to look (step 2a): the model says whether the person means where they are now, a named
 place, or home (search_near). The phone's location is used only when they mean where they are
 now, or said nothing about where; without the model, only clear "near me" words count, and
-anything else is asked (a request may name a place this machine can't recognise).
+anything else is asked (a request may name a place this machine can't recognise). The home saved
+in the profile (home_location) is used only when they mean home ("ghar ke paas", or "home" as the
+answer to the location question); it is offered in the question, never guessed.
 
 Doctors near the place (step 2d) come from the stored list. With medical consent, a search the
 list lacks or holds from more than 30 days ago is fetched from Practo first, unless the list
@@ -44,6 +46,7 @@ model; the graph ends with the reasons on each doctor shown and the whole reply 
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, TypedDict
 
@@ -75,11 +78,19 @@ NOT_HANDLED = {
     "other": "This request",
 }
 HERE_LABEL = "your current location"
+HOME_LABEL = "your home"  # never the address: the label is shown and kept with the result
+# An answer to the location question that just means home, when a home is saved. "near my home"
+# and "ghar ke paas" are caught by search_near_from_text.
+HOME_ANSWER = re.compile(r"(?:(?:near|at|around|close\s+to)\s+)?(?:my\s+|our\s+|the\s+)?(?:home|house)|ghar|घर",
+                         re.IGNORECASE)
 LOCATION_QUESTIONS = {
     "current_location": "Please share your current location, or tell me the area and city you are in.",
     "home": "Which area is your home in? Please tell me the area and the city.",
     "where": "Which area should I look for a doctor in? Please tell me the area and the city.",
     "where_or_here": "Should I look near where you are now? Say \"near me\", or tell me the area and the city.",
+    "where_or_home": "Should I look near your home? Say \"home\", or tell me the area and the city.",
+    "where_here_or_home": ("Should I look near where you are now, or near your home? Say \"near me\" or \"home\", "
+                           "or tell me the area and the city."),
     "not_found": "I could not find that place. Please tell me the area and the city.",
     "ambiguous": "I found more than one place with that name: {options}. Which one do you mean?",
     "unavailable": "I can't look up places just now. Please share your current location.",
@@ -112,6 +123,7 @@ class HealthState(TypedDict, total=False):
     emergency_answer: dict[str, Any]  # {"call_emergency": bool}, the person's answer to the emergency question
     clarification_answer: str  # the person's answer to the clarifying question
     current_location: dict[str, float]  # {"lat", "lon"} from the phone, shared with the person's permission
+    home_location: dict[str, float]  # {"lat", "lon"} the home saved in the person's profile
     location_answer: Any  # the answer to the location question: a place in words, or {"lat", "lon"}
 
     # Outputs / control
@@ -354,7 +366,8 @@ def _look_up(text: str, phone: dict[str, float] | None, warnings: list[str]):
     return None, "not_found", []
 
 
-def _from_answer(state: HealthState, phone: dict[str, float] | None, warnings: list[str]):
+def _from_answer(state: HealthState, phone: dict[str, float] | None, home: dict[str, float] | None,
+                 warnings: list[str]):
     """The answer to the location question: (place, problem, options, text looked up)."""
     answer = state.get("location_answer")
     if isinstance(answer, dict):  # the phone's location, shared after the question
@@ -366,6 +379,8 @@ def _from_answer(state: HealthState, phone: dict[str, float] | None, warnings: l
             return {**option, "source": "answer"}, "", [], ""
     if phone and search_near_from_text(text) == "current_location":  # "near me", "yahin"
         return {**phone, "label": HERE_LABEL, "source": "phone"}, "", [], ""
+    if home and (HOME_ANSWER.fullmatch(text.strip(" .!?।")) or search_near_from_text(text) == "home"):
+        return {**home, "label": HOME_LABEL, "source": "home"}, "", [], ""
     if state.get("location_problem") == "ambiguous" and state.get("location_query"):
         text = f"{state['location_query']}, {text}"  # "Andheri" + "Mumbai"
     place, problem, options = _look_up(text, phone, warnings)
@@ -376,21 +391,26 @@ def locate(state: HealthState) -> dict[str, Any]:
     """Where to look for the doctor (step 2a).
 
     - "near me" (or nothing said about where) and the phone's location is known: use it.
+    - "near my home" and a home is saved in the profile: use it.
     - a place named in the request: look it up; far-apart places with that name are asked about,
       unless one is near the phone.
-    - otherwise, or if the lookup fails: ask one question (ask_location).
-    Without the model only "near me" words count: a request that may name a place is asked about,
-    never searched near the phone by guess."""
+    - otherwise, or if the lookup fails: ask one question (ask_location), offering "near me"
+      and "home" when those are known.
+    Without the model only "near me" / "near my home" words count: a request that may name a place
+    is asked about, never searched near the phone or home by guess."""
     phone = device_location(state.get("current_location"))
+    home = device_location(state.get("home_location"))  # checked and rounded like the phone's
     near = state.get("search_near") or "unknown"
     area = (state.get("preferences") or {}).get("area")
     area = area.strip() if isinstance(area, str) else ""
     warnings = list(state.get("warnings", []))
     place, problem, options, looked_up = None, "", [], ""
     if state.get("location_asked"):
-        place, problem, options, looked_up = _from_answer(state, phone, warnings)
+        place, problem, options, looked_up = _from_answer(state, phone, home, warnings)
     elif near == "current_location" and phone:
         place = {**phone, "label": HERE_LABEL, "source": "phone"}
+    elif near == "home" and home:
+        place = {**home, "label": HOME_LABEL, "source": "home"}
     elif area and near != "unknown":
         looked_up = area
         place, problem, options = _look_up(area, phone, warnings)
@@ -399,8 +419,10 @@ def locate(state: HealthState) -> dict[str, Any]:
         place = {**phone, "label": HERE_LABEL, "source": "phone"}
     elif near in ("current_location", "home"):
         problem = near
+    elif phone:
+        problem = "where_here_or_home" if home else "where_or_here"
     else:
-        problem = "where_or_here" if phone else "where"
+        problem = "where_or_home" if home else "where"
 
     if place:
         return {"search_location": place, "location_options": [], "status": "location_found", "route": "search",

@@ -217,7 +217,7 @@ Every other call sends the token: `Authorization: Bearer <accessToken>`. A wrong
 
 | Call | What it does |
 |---|---|
-| `POST /api/v1/health-requests` | `{"query": "mujhe dil ke doctor ko dikhana hai", "currentLocation": {"lat", "lon"}}` (location optional). The AI model reads it only with consent: the profile's `useLlm` and `medicalCloud`, unless the request sends `useLlm` / `medicalCloudConsent`. The account's name is hidden from the model |
+| `POST /api/v1/health-requests` | `{"query": "mujhe dil ke doctor ko dikhana hai", "currentLocation": {"lat", "lon"}}` (location optional). The AI model reads it only with consent: the profile's `useLlm` and `medicalCloud`, unless the request sends `useLlm` / `medicalCloudConsent`. The account's name is hidden from the model. "Near my home" / "ghar ke paas" (or answering "home") uses the profile's home, shown as "your home"; it is never guessed when nothing was said about where |
 | `POST /api/v1/health-requests/{id}/answer` | the one question it asked: `{"callEmergency": false}`, `{"clarification": "knee pain"}`, or `{"location": "Andheri West, Mumbai"}` / `{"location": {"lat", "lon"}}`. Applied once (409 after); the wrong kind answers 422 with `details.waitingFor` |
 | `GET /api/v1/health-requests/{id}` | the request's latest result |
 | `GET /api/v1/health-requests?limit=20` | my requests from the last 30 days, newest first |

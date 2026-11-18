@@ -101,6 +101,19 @@ class AskTests(HealthApiCase):
             self.ask({"query": "heart doctor near me", "currentLocation": HERE, "useLlm": False})
             self.assertEqual(len(fake.prompts), 1)  # this request said no
 
+    def test_near_my_home_uses_the_home_saved_in_the_profile(self):
+        asked = self.ask({"query": "heart doctor near my home"}).json()["data"]
+        self.assertEqual(asked["status"], "needs_location")  # no home saved yet: asked
+        self.client.patch("/api/v1/me/profile", json={"homeLocation": {"lat": 19.1361, "lon": 72.8294}},
+                          headers=self.headers)
+        data = self.ask({"query": "heart doctor near my home", "currentLocation": HERE}).json()["data"]
+        self.assertEqual(data["status"], "doctors_found")
+        self.assertEqual(data["searchLocation"], {"label": "your home", "source": "home"})
+        where = self.ask({"query": "heart doctor"}).json()["data"]  # nothing said about where: asked, home offered
+        self.assertIn('"home"', where["question"])
+        answered = self.answer(where["requestId"], {"location": "ghar"}).json()["data"]
+        self.assertEqual(answered["searchLocation"], {"label": "your home", "source": "home"})
+
     def test_bad_requests(self):
         for body in ({"query": ""}, {"query": "x" * 2001}, {}, {"query": "knee", "currentLocation": {"lat": 200, "lon": 1}},
                      {"query": "knee", "useLlm": "yes"}, {"query": "knee", "currentLocation": {"lat": 19.1}}):
