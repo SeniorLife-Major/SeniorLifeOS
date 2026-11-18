@@ -146,7 +146,9 @@ class DocumentPage(Base):
 
 class WorkflowRun(Base):
     """One run of the document graph. Its id is the LangGraph thread id of the encrypted
-    checkpoint. status: running, paused (waiting for the owner), ended, failed."""
+    checkpoint. status: queued (a background upload waiting for a reader), running, paused
+    (waiting for the owner), ended, failed. updated_at changes whenever the status does, so a
+    run left "queued" or "running" by a server that stopped can be found."""
 
     __tablename__ = "workflow_runs"
 
@@ -155,7 +157,11 @@ class WorkflowRun(Base):
     version_id: Mapped[int] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"))
     status: Mapped[str] = mapped_column(String(16))
     started_at: Mapped[datetime] = created()
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_workflow_runs_status_updated", "status", "updated_at"),)
 
 
 class User(Base):

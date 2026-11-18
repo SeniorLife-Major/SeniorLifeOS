@@ -11,6 +11,10 @@ Upload sends the file as the raw request body (no multipart form, so no extra pa
          -H "X-Actor-Id: senior-meera" -H "Content-Type: image/png" --data-binary @card.png
 
 Or the owner types the details in, with no file (POST /api/v1/documents/manual, JSON body).
+
+Reading takes a while (OCR). With background=true an upload answers 202 at once, with the
+document "processing"; the app then asks GET /api/v1/documents/{id} until it is read. Without
+it, the call waits and answers 201 with the outcome, as before.
 """
 
 from __future__ import annotations
@@ -176,10 +180,22 @@ def envelope(data: Any, response: Response) -> ApiResponse[Any]:
     return ApiResponse.of(data=data, version=get_config().app.version)
 
 
+def accepted_or_created(result: dict[str, Any], background: bool, response: Response) -> ApiResponse[Any]:
+    """201 with the outcome; 202 when it is still being read in the background."""
+    if background:
+        response.status_code = status.HTTP_202_ACCEPTED
+    return envelope(DocumentDto.model_validate(result), response)
+
+
+BACKGROUND_RESPONSES: dict[int | str, dict[str, Any]] = {
+    202: {"description": "background=true: accepted, still \"processing\"; follow it with GET /api/v1/documents/{id}"},
+    503: {"description": "background=true and too many documents are being read on this server (READER_BUSY)"}}
+
+
 # ---- routes -------------------------------------------------------------------------------
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[DocumentDto],
-             summary="Upload a document (raw body) and read it")
+             summary="Upload a document (raw body) and read it", responses=BACKGROUND_RESPONSES)
 def upload_document(
     request: Request,
     response: Response,
@@ -192,12 +208,13 @@ def upload_document(
     cloud_ocr_consent: Annotated[bool, Query(alias="cloudOcrConsent")] = False,
     medical_cloud_consent: Annotated[bool, Query(alias="medicalCloudConsent")] = False,
     use_llm: Annotated[bool, Query(alias="useLlm")] = False,
+    background: bool = False,
 ) -> ApiResponse[DocumentDto]:
     mime_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     result = service.upload(actor, filename, mime_type, data, claimed_type=claimed_type, owner_name=owner_name,
                             cloud_ocr_consent=cloud_ocr_consent, medical_cloud_consent=medical_cloud_consent,
-                            use_llm=use_llm)
-    return envelope(DocumentDto.model_validate(result), response)
+                            use_llm=use_llm, background=background)
+    return accepted_or_created(result, background, response)
 
 
 @router.post("/manual", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[DocumentDto],
@@ -209,7 +226,8 @@ def create_manual_document(body: ManualEntryRequest, response: Response, actor: 
 
 
 @router.post("/{document_id}/versions", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[DocumentDto],
-             summary="Replace a confirmed document with a newer copy (raw body), e.g. a renewed certificate")
+             summary="Replace a confirmed document with a newer copy (raw body), e.g. a renewed certificate",
+             responses=BACKGROUND_RESPONSES)
 def replace_document(
     document_id: str,
     request: Request,
@@ -222,12 +240,14 @@ def replace_document(
     cloud_ocr_consent: Annotated[bool, Query(alias="cloudOcrConsent")] = False,
     medical_cloud_consent: Annotated[bool, Query(alias="medicalCloudConsent")] = False,
     use_llm: Annotated[bool, Query(alias="useLlm")] = False,
+    background: bool = False,
 ) -> ApiResponse[DocumentDto]:
     mime_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     result = service.replace_upload(actor, document_id, filename, mime_type, data, owner_name=owner_name,
                                     cloud_ocr_consent=cloud_ocr_consent,
-                                    medical_cloud_consent=medical_cloud_consent, use_llm=use_llm)
-    return envelope(DocumentDto.model_validate(result), response)
+                                    medical_cloud_consent=medical_cloud_consent, use_llm=use_llm,
+                                    background=background)
+    return accepted_or_created(result, background, response)
 
 
 @router.post("/{document_id}/versions/manual", status_code=status.HTTP_201_CREATED,

@@ -16,19 +16,28 @@ A confirmed document can be renewed with a newer version, uploaded or typed in (
 #43). The older version stays in use until the newer one is confirmed; then the older one
 is marked "replaced" and its fields, page text, ID hashes and file are removed. The owner
 can delete a document with everything stored for it.
+
+An upload can also be read in the background (background=True, fastapi-backend Phase 3): the
+call returns at once with the document "processing", and BACKGROUND_WORKERS threads read the
+waiting uploads in turn (at most BACKGROUND_SLOTS per server, read or waiting; more are refused
+with "busy"). The outcome is the same as a normal upload's, seen with get(). A run left
+"queued" or "running" by a server that stopped is tidied by fail_stuck_runs.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
 
 from langgraph.types import Command
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -62,6 +71,15 @@ logger = logging.getLogger(__name__)
 SUFFIXES = {"application/pdf": ".pdf", "image/png": ".png", "image/jpeg": ".jpg"}
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 IN_PROGRESS = ("processing", "needs_review")
+ACTIVE_RUNS = ("queued", "running")
+BACKGROUND_WORKERS = 2  # uploads read at the same time in the background, per server
+BACKGROUND_SLOTS = 6  # background uploads being read or waiting, per server
+# A run "queued" or "running" this long was left by a server that stopped. A reading never takes
+# this long: a PDF has at most 20 pages, every outside call has a timeout, and a waiting upload
+# has at most BACKGROUND_SLOTS - 1 ahead of it.
+STUCK_MINUTES = 30
+TIDY_EVERY_SECONDS = 60  # how often a server looks for such runs (on a document call)
+INTERRUPTED = "Reading this document was interrupted; please add it again"
 
 
 def run_config(run_id: str) -> dict[str, Any]:
@@ -93,6 +111,12 @@ class WorkflowFailed(AppException):
         super().__init__(message=message, error_code=ErrorCode.WORKFLOW_EXECUTION_FAILED, status_code=500)
 
 
+class ReaderBusy(AppException):
+    def __init__(self) -> None:
+        super().__init__(message="Many documents are being read right now; please try again in a few minutes",
+                         error_code="READER_BUSY", status_code=503)
+
+
 class DocumentService:
     def __init__(self, sessions: sessionmaker, files: EncryptedFileStore, checkpointer: Any):
         self.sessions = sessions
@@ -102,35 +126,71 @@ class DocumentService:
         # Typed-in documents never pause (typing in is the owner's confirmation), so nothing is
         # checkpointed: the typed values exist only in memory for one call.
         self.manual_graph = build_document_graph()
+        self.background = ThreadPoolExecutor(BACKGROUND_WORKERS, thread_name_prefix="document-reader")
+        self._slots = threading.BoundedSemaphore(BACKGROUND_SLOTS)
+        self._tidied_at: float | None = None  # never yet: the first document call after start tidies
 
     # ---- upload --------------------------------------------------------------------------
 
     def upload(self, owner_id: str, filename: str, mime_type: str, data: bytes, *,
                claimed_type: str | None = None, owner_name: str | None = None,
                cloud_ocr_consent: bool = False, medical_cloud_consent: bool = False,
-               use_llm: bool = False) -> dict[str, Any]:
+               use_llm: bool = False, background: bool = False) -> dict[str, Any]:
+        """background=True: returns at once with the document "processing" (see the module notes)."""
         if claimed_type is not None and claimed_type not in REQUIRED_FIELDS:
             raise ValidationException("Unknown document type")
         return self._read_new_version(owner_id, None, filename, mime_type, data, claimed_type, owner_name,
                                       {"cloud_ocr_consent": cloud_ocr_consent,
-                                       "medical_cloud_consent": medical_cloud_consent, "use_llm": use_llm})
+                                       "medical_cloud_consent": medical_cloud_consent, "use_llm": use_llm},
+                                      background)
 
     def replace_upload(self, owner_id: str, document_id: str, filename: str, mime_type: str, data: bytes, *,
                        owner_name: str | None = None, cloud_ocr_consent: bool = False,
-                       medical_cloud_consent: bool = False, use_llm: bool = False) -> dict[str, Any]:
+                       medical_cloud_consent: bool = False, use_llm: bool = False,
+                       background: bool = False) -> dict[str, Any]:
         """A newer copy (e.g. a renewed certificate) of a confirmed document, read and reviewed
         like an upload. The document type stays the same."""
         return self._read_new_version(owner_id, document_id, filename, mime_type, data, None, owner_name,
                                       {"cloud_ocr_consent": cloud_ocr_consent,
-                                       "medical_cloud_consent": medical_cloud_consent, "use_llm": use_llm})
+                                       "medical_cloud_consent": medical_cloud_consent, "use_llm": use_llm},
+                                      background)
 
     def _read_new_version(self, owner_id: str, document_id: str | None, filename: str, mime_type: str,
                           data: bytes, claimed_type: str | None, owner_name: str | None,
-                          options: dict[str, bool]) -> dict[str, Any]:
+                          options: dict[str, bool], background: bool) -> dict[str, Any]:
         if mime_type not in ALLOWED_MIME_TYPES:
             raise ValidationException("Only PDF, PNG and JPEG files can be uploaded")
         if not 0 < len(data) <= MAX_UPLOAD_BYTES:
             raise ValidationException("File must be between 1 byte and 5 MB")
+        self._tidy()
+        if background and not self._slots.acquire(blocking=False):
+            raise ReaderBusy()  # before anything is stored
+        try:
+            document_id, run_id, storage_key, state = self._add_version(
+                owner_id, document_id, filename, mime_type, data, claimed_type, owner_name, options,
+                "queued" if background else "running")
+        except BaseException:
+            if background:
+                self._slots.release()
+            raise
+        suffix = SUFFIXES[mime_type]
+        if not background:
+            return self._read(owner_id, document_id, run_id, storage_key, suffix, state)
+        try:
+            started = self.get(owner_id, document_id)  # before a reader can change it: always "processing"
+            self.background.submit(self._read_in_background, owner_id, document_id, run_id, storage_key, suffix,
+                                   state)
+        except Exception as exc:  # the database, or the reader pool (the server is shutting down)
+            self._slots.release()
+            self._record_failure(owner_id, document_id, run_id, exc)
+            raise WorkflowFailed("The document could not be processed") from None
+        return started
+
+    def _add_version(self, owner_id: str, document_id: str | None, filename: str, mime_type: str, data: bytes,
+                     claimed_type: str | None, owner_name: str | None, options: dict[str, bool],
+                     run_status: str) -> tuple[str, str, str, dict[str, Any]]:
+        """Stores the file and records the new version ("processing") and its run (run_status).
+        Returns (document id, run id, storage key, the graph's input)."""
         if document_id is not None:
             with self.sessions() as session:
                 self._replaceable(session, owner_id, document_id)  # checked before the file is stored
@@ -153,7 +213,7 @@ class DocumentService:
                                           storage_key=stored.storage_key)
                 session.add(version)
                 session.flush()
-                session.add(WorkflowRun(id=run_id, document_id=document_id, version_id=version.id, status="running"))
+                session.add(WorkflowRun(id=run_id, document_id=document_id, version_id=version.id, status=run_status))
                 audit(session, owner_id, action, document_id, version=number, mime_type=mime_type,
                       size_bytes=stored.size_bytes, sha256=stored.sha256)
                 hashes = vault_identifier_hashes(session, owner_id, exclude_document=document_id)
@@ -175,12 +235,32 @@ class DocumentService:
             "vault_organization_names": names,
             **({"claimed_type": claimed_type} if claimed_type else {}),
         }
+        return document_id, run_id, stored.storage_key, state
+
+    def _read(self, owner_id: str, document_id: str, run_id: str, storage_key: str, suffix: str,
+              state: dict[str, Any]) -> dict[str, Any]:
         try:
-            result = self._run_upload(stored.storage_key, SUFFIXES[mime_type], state, run_id)
+            result = self._run_upload(storage_key, suffix, state, run_id)
         except Exception as exc:
             self._record_failure(owner_id, document_id, run_id, exc)
             raise WorkflowFailed("The document could not be processed") from None
         return self._save_outcome(owner_id, document_id, run_id, result)
+
+    def _read_in_background(self, owner_id: str, document_id: str, run_id: str, storage_key: str, suffix: str,
+                            state: dict[str, Any]) -> None:
+        """In a reader thread, when its turn comes. Nothing is raised (no one is waiting): the
+        outcome, or the failure, is saved on the document."""
+        try:
+            with self.sessions.begin() as session:
+                started = claim_run(session, run_id, ("queued",))  # updated_at: when reading started
+            if started:  # else deleted, or given up (fail_stuck_runs), while it waited
+                self._read(owner_id, document_id, run_id, storage_key, suffix, state)
+        except WorkflowFailed:
+            pass  # already recorded on the document
+        except Exception as exc:
+            logger.error("A background reading could not be finished: %s", type(exc).__name__)
+        finally:
+            self._slots.release()
 
     def _replaceable(self, session: Any, owner_id: str, document_id: str) -> Document:
         """The owner's confirmed document, with no newer version being read or reviewed."""
@@ -318,8 +398,9 @@ class DocumentService:
         except Exception as exc:
             logger.error("Review of a document failed: %s", type(exc).__name__)
             with self.sessions.begin() as session:
-                run = session.get(WorkflowRun, run_id)
-                run.status = "paused"  # the owner can try again
+                run = session.get(WorkflowRun, run_id, with_for_update=True)
+                if run is not None and run.status == "running":  # not given up meanwhile (fail_stuck_runs)
+                    run.status = "paused"  # the owner can try again
             raise WorkflowFailed("The review could not be applied; please try again") from None
         return self._save_outcome(owner_id, document_id, run_id, result)
 
@@ -349,7 +430,9 @@ class DocumentService:
     def delete(self, owner_id: str, document_id: str) -> None:
         """Remove the document and everything stored for it: all versions, fields, page text,
         ID hashes, runs, paused checkpoints and files. The audit trail keeps that it was
-        deleted (audit events hold no values)."""
+        deleted (audit events hold no values). A background upload still waiting for its turn
+        can be deleted; one being read can't."""
+        self._tidy()
         with self.sessions.begin() as session:
             document = owned_document(session, owner_id, document_id)
             if document is None:
@@ -357,8 +440,10 @@ class DocumentService:
             runs = session.execute(select(WorkflowRun.id, WorkflowRun.status)
                                    .where(WorkflowRun.document_id == document_id)).all()
             for run_id, run_status in runs:
-                # A paused review is taken first, so a review sent at the same moment can't resume it.
-                if run_status == "running" or (run_status == "paused" and not claim_run(session, run_id, ("paused",))):
+                # A paused review (or a waiting upload) is taken first, so a review sent (or a reader
+                # starting) at the same moment can't resume it.
+                if run_status == "running" or (run_status in ("paused", "queued")
+                                               and not claim_run(session, run_id, (run_status,))):
                     raise ConflictException("This document is being read right now; try again in a moment")
             files = [version.storage_key for version in document.versions if version.storage_key]
             versions = len(document.versions)
@@ -381,6 +466,7 @@ class DocumentService:
     # ---- reading -------------------------------------------------------------------------
 
     def get(self, owner_id: str, document_id: str) -> dict[str, Any]:
+        self._tidy()  # a background upload is followed with get: one left by a stopped server ends
         with self.sessions() as session:
             document = owned_document(session, owner_id, document_id)
         if document is None:
@@ -424,6 +510,64 @@ class DocumentService:
 
     # ---- saving the outcome --------------------------------------------------------------
 
+    # ---- runs left behind ----------------------------------------------------------------
+
+    def fail_stuck_runs(self) -> int:
+        """Runs "queued" or "running" for STUCK_MINUTES: the server reading them stopped (a
+        restart, a crash, a replica removed), so the owner would otherwise see "processing" for
+        ever and could not delete the document. No reading takes that long, so with several
+        servers one still reading is never touched.
+        - a first reading or a renewal: failed, its file and checkpoint removed; the owner can
+          add it again. A renewal's older version stays in use.
+        - a review being applied: waiting for review again (its checkpoint is kept).
+        Returns how many runs were tidied."""
+        failed: list[str] = []
+        files: list[str] = []
+        with self.sessions.begin() as session:
+            stuck = session.scalars(
+                select(WorkflowRun)
+                .where(WorkflowRun.status.in_(ACTIVE_RUNS),
+                       WorkflowRun.updated_at < func.now() - timedelta(minutes=STUCK_MINUTES))
+                .with_for_update(skip_locked=True)).all()  # a run being saved right now is left alone
+            for run in stuck:
+                version = session.get(DocumentVersion, run.version_id)
+                document = version.document
+                if version.status == "needs_review":
+                    run.status = "paused"
+                    audit(session, document.owner_id, "document.review_interrupted", document.id, run_id=run.id,
+                          version=version.version)
+                    continue
+                run.status, run.ended_at = "failed", now()
+                version.status, version.errors = "failed_tool", [INTERRUPTED]
+                if version.storage_key:
+                    files.append(version.storage_key)
+                    version.storage_key = None
+                document.status = current_version(document).status
+                audit(session, document.owner_id, "document.failed", document.id, run_id=run.id,
+                      version=version.version, error="Interrupted")
+                failed.append(run.id)
+        for run_id in failed:
+            try:
+                forget_run(self.checkpointer, run_id)
+            except Exception as exc:  # an encrypted checkpoint left behind is logged
+                logger.error("A stopped run's checkpoint could not be removed: %s", type(exc).__name__)
+        self._delete_files(files)
+        if stuck:
+            logger.warning("Document runs left by a stopped server were tidied: %d", len(stuck))
+        return len(stuck)
+
+    def _tidy(self) -> None:
+        """fail_stuck_runs, at most once every TIDY_EVERY_SECONDS per server, before a document
+        call; the first call after the server starts always does it."""
+        if self._tidied_at is not None and time.monotonic() - self._tidied_at < TIDY_EVERY_SECONDS:
+            return
+        self._tidied_at = time.monotonic()
+        try:
+            self.fail_stuck_runs()
+        except Exception as exc:  # never stops the call itself; tried again next time
+            self._tidied_at = None
+            logger.error("Runs left by a stopped server could not be tidied: %s", type(exc).__name__)
+
     def _supersede(self, session: Any, document: Document, newer: DocumentVersion) -> list[str]:
         """Older confirmed versions become "replaced": their fields, page text, ID hashes and
         file are removed. Returns the files to delete once the transaction is saved."""
@@ -447,9 +591,11 @@ class DocumentService:
         waiting = status == "needs_review"  # paused at review, or a refused decision to correct
         removed_files: list[str] = []
         with self.sessions.begin() as session:
+            run = session.get(WorkflowRun, run_id, with_for_update=True)
+            if run is None or run.status != "running":  # given up (fail_stuck_runs) or deleted while read
+                return self._dropped(session, actor_id, document_id, run_id, run)
             document = owned_document(session, actor_id, document_id)
             version = document.versions[-1]
-            run = session.get(WorkflowRun, run_id)
             version.status = status
             version.document_type = result.get("document_type") or version.document_type
             version.review_flags = list(result.get("review_flags", []))
@@ -476,19 +622,33 @@ class DocumentService:
         self._delete_files(removed_files)
         return self.get(actor_id, document_id)
 
+    def _dropped(self, session: Any, owner_id: str, document_id: str, run_id: str,
+                 run: WorkflowRun | None) -> dict[str, Any]:
+        """A reading that ended after its run was given up (fail_stuck_runs) or its document
+        deleted: the result is not saved. A review given up is waiting for the owner again, so
+        its checkpoint stays; any other checkpoint the late reading wrote is removed."""
+        logger.warning("A reading ended after it was given up; its result was not saved")
+        if run is None or run.status != "paused":
+            forget_run(self.checkpointer, run_id)
+        document = owned_document(session, owner_id, document_id)
+        if document is None:
+            raise DocumentNotFoundException(document_id)
+        return view(document)
+
     def _record_failure(self, actor_id: str, document_id: str, run_id: str, exc: Exception) -> None:
         logger.error("Processing a document failed: %s", type(exc).__name__)  # never the message: it may hold values
         removed_file = None
         with self.sessions.begin() as session:
-            document = owned_document(session, actor_id, document_id)
-            version = document.versions[-1]
-            version.status = "failed_tool"
-            version.errors = ["Processing failed"]
-            document.status = current_version(document).status
-            run = session.get(WorkflowRun, run_id)
-            run.status, run.ended_at = "failed", now()
-            removed_file, version.storage_key = version.storage_key, None
-            audit(session, actor_id, "document.failed", document_id, run_id=run_id, error=type(exc).__name__)
+            run = session.get(WorkflowRun, run_id, with_for_update=True)
+            if run is not None and run.status in ACTIVE_RUNS:  # not given up or deleted meanwhile
+                document = owned_document(session, actor_id, document_id)
+                version = document.versions[-1]
+                version.status = "failed_tool"
+                version.errors = ["Processing failed"]
+                document.status = current_version(document).status
+                run.status, run.ended_at = "failed", now()
+                removed_file, version.storage_key = version.storage_key, None
+                audit(session, actor_id, "document.failed", document_id, run_id=run_id, error=type(exc).__name__)
         try:
             forget_run(self.checkpointer, run_id)
         finally:

@@ -233,7 +233,7 @@ Kept: the request text, name and phone location only in the encrypted checkpoint
 
 | Call | What it does |
 |---|---|
-| `POST /api/v1/documents?filename=card.png&claimedType=identity` | upload; the file is the raw body, its type the `Content-Type` (PDF, PNG, JPEG, at most 5 MB). Options: `ownerName`, `cloudOcrConsent`, `medicalCloudConsent`, `useLlm` |
+| `POST /api/v1/documents?filename=card.png&claimedType=identity` | upload; the file is the raw body, its type the `Content-Type` (PDF, PNG, JPEG, at most 5 MB). Options: `ownerName`, `cloudOcrConsent`, `medicalCloudConsent`, `useLlm`, `background`. Without `background` the call waits for the reading and answers 201 with the outcome. With `background=true` it answers 202 at once with `status: "processing"`; follow it with `GET /api/v1/documents/{id}` until the status changes (`needs_review`, `confirmed`, or a failure). Each server reads 2 at a time and holds at most 6 (read or waiting); more answer 503 `READER_BUSY`, try again in a few minutes. A reading cut off by a server stopping shows as failed ("interrupted") within about 30 minutes; add the document again. Needs the `0006` migration |
 | `GET /api/v1/documents?type=identity` | my documents (no field values) |
 | `GET /api/v1/documents/{id}` | one document with its confirmed fields (ID numbers masked) |
 | `GET /api/v1/documents/{id}/file` | the original file I uploaded (the version in use, or `?version=N`, e.g. a renewal waiting for review), shown in the browser; not cached. A typed-in version has no file, and a replaced or refused version's file is no longer kept (404) |

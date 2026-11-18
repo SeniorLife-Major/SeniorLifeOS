@@ -16,7 +16,9 @@ from sqlalchemy import select
 from backend.api import documents
 from backend.errors import register_global_error_handlers
 from backend.graphs.document_graph import MAX_UPLOAD_BYTES
+from backend.storage.db import make_sessions
 from backend.storage.models import AuditEvent, DocumentVersion
+from backend.storage.service import DocumentService, ReaderBusy
 from test_graph_ocr import AADHAAR
 from test_ocr import UNIT
 from test_privacy import FAKE_HASH_KEY, hash_key_env
@@ -162,6 +164,20 @@ class RouteTests(ApiCase):
         self.assertEqual(body["data"]["fields"]["aadhaar_number"]["value"], "XXXX XXXX 7973")
         self.assertEqual(response.headers["cache-control"], "no-store")
 
+    def test_background_upload_answers_202(self):
+        url = "/api/v1/documents?filename=card.png"
+        headers = {**self.headers, "Content-Type": "image/png"}
+        self.assertEqual(self.client.post(url, content=b"\x89PNG", headers=headers).status_code, 201)
+        response = self.client.post(url + "&background=true", content=b"\x89PNG", headers=headers)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual([call[2]["background"] for call in self.service.calls], [False, True])
+        busy = FakeService()
+        busy.upload = lambda *args, **kwargs: (_ for _ in ()).throw(ReaderBusy())
+        self.app.dependency_overrides[documents.get_document_service] = lambda: busy
+        refused = self.client.post(url + "&background=true", content=b"\x89PNG", headers=headers)
+        self.assertEqual(refused.status_code, 503)
+        self.assertEqual(refused.json()["error"]["code"], "READER_BUSY")
+
     def test_upload_needs_a_filename(self):
         response = self.client.post("/api/v1/documents", content=b"x",
                                     headers={**self.headers, "Content-Type": "image/png"})
@@ -236,6 +252,20 @@ class EndToEndTests(DatabaseCase, ApiCase):
         again = self.client.post(f"/api/v1/documents/{document_id}/review", headers={"X-Actor-Id": OWNER},
                                  json={"action": "reject"})
         self.assertEqual(again.status_code, 409)
+
+    def test_background_upload_then_follow_it(self):
+        reader = DocumentService(make_sessions(self.engine), self.files, self.checkpointer)
+        self.addCleanup(reader.background.shutdown)
+        self.app.dependency_overrides[documents.get_document_service] = lambda: reader
+        with self.ocr(UNSURE_IDENTITY):
+            accepted = self.client.post("/api/v1/documents?filename=card.png&claimedType=identity&background=true",
+                                        content=self.png, headers={"X-Actor-Id": OWNER, "Content-Type": "image/png"})
+            self.assertEqual(accepted.status_code, 202, accepted.text)
+            self.assertEqual(accepted.json()["data"]["status"], "processing")
+            reader.background.shutdown(wait=True)
+        document_id = accepted.json()["data"]["documentId"]
+        read = self.client.get(f"/api/v1/documents/{document_id}", headers={"X-Actor-Id": OWNER})
+        self.assertEqual(read.json()["data"]["status"], "needs_review")
 
     def test_listing_is_per_owner(self):
         self.post_upload(IDENTITY)
