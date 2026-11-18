@@ -6,19 +6,25 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.tools import doctor_search
-from backend.tools.doctor_search import MAX_CANDIDATES, DoctorListError, find_nearby, load_doctors
+from backend.tools.doctor_search import (
+    FRESH_DAYS, KEEP_DAYS, MAX_CANDIDATES, DoctorListError, find_nearby, load_doctors,
+)
 
 ANDHERI = {"lat": 19.12, "lon": 72.84}
 KM_NORTH = 1 / 111.2  # degrees of latitude in one km
+TODAY = date(2026, 11, 17)  # the list's "today" in these tests: they never depend on the real date
 
 
-def doctor(number, km, specialty="cardiologist", gender="female", fee=1000, clinic=1):
-    """A made-up doctor's clinic, km north of ANDHERI."""
+def doctor(number, km, specialty="cardiologist", gender="female", fee=1000, clinic=1, days_old=0):
+    """A made-up doctor's clinic, km north of ANDHERI, fetched days_old days before TODAY."""
     return {"id": f"practo:{number}:{clinic}:{specialty}", "doctor_id": f"practo:{number}", "name": f"Dr. Demo {number}",
             "gender": gender, "specialty": specialty, "fee": fee,
+            "fetched_on": (TODAY - timedelta(days=days_old)).isoformat(),
             "clinic": {"name": f"Demo Clinic {clinic}", "lat": round(ANDHERI["lat"] + km * KM_NORTH, 5),
                        "lon": ANDHERI["lon"]}}
 
@@ -96,32 +102,89 @@ class LoadDoctorsTests(unittest.TestCase):
     def write(self, doctors):
         self.path.write_text(json.dumps({"doctors": doctors}), encoding="utf-8")
 
+    def stored_ids(self):
+        return [d["doctor_id"] for d in json.loads(self.path.read_text(encoding="utf-8"))["doctors"]]
+
+    def load(self):
+        return load_doctors(self.path, today=TODAY)
+
     def test_records_the_search_cannot_use_are_left_out(self):
         good = doctor(1, 1)
         bad = [doctor(2, 1, specialty="astrologer"), doctor(3, 1, gender="other"), doctor(4, 1, fee="1500"),
                {**doctor(5, 1), "clinic": {"lat": 51.5, "lon": -0.12}}, {**doctor(6, 1), "clinic": None},
                {**doctor(7, 1), "doctor_id": 7}, "not a record", doctor(8, 1, fee=True)]
         self.write([good, *bad])
-        self.assertEqual(load_doctors(self.path), [good])
+        self.assertEqual(self.load(), [{**good, "stale": False}])
 
     def test_a_missing_or_broken_list_is_an_error(self):
         with self.assertRaisesRegex(DoctorListError, "missing"):
-            load_doctors(self.path)
+            self.load()
         for content in ("not json", '{"doctors": "x"}', "[]"):
             with self.subTest(content=content):
                 self.path.write_text(content, encoding="utf-8")
                 doctor_search._cache.clear()
                 with self.assertRaisesRegex(DoctorListError, "can't be read"):
-                    load_doctors(self.path)
+                    self.load()
 
     def test_the_list_is_read_again_only_when_it_changes(self):
         self.write([doctor(1, 1)])
-        first = load_doctors(self.path)
-        self.assertIs(load_doctors(self.path), first)  # unchanged: not read again
+        first = self.load()
+        self.assertIs(self.load(), first)  # unchanged: not read again
         self.write([doctor(1, 1), doctor(2, 1)])
         stamp = time.time() + 5
         os.utime(self.path, (stamp, stamp))
-        self.assertEqual(len(load_doctors(self.path)), 2)
+        self.assertEqual(len(self.load()), 2)
+
+    def test_details_older_than_30_days_are_marked_and_past_90_days_left_out(self):
+        ages = {1: 0, 2: FRESH_DAYS, 3: FRESH_DAYS + 1, 4: KEEP_DAYS, 5: KEEP_DAYS + 1,
+                6: -1, 7: -2}  # 6: a day ahead (Apify's clock); 7: two days ahead, a bad date
+        self.write([doctor(n, 1, days_old=age) for n, age in ages.items()]
+                   + [{**doctor(8, 1), "fetched_on": None}, {**doctor(9, 1), "fetched_on": "17/11/2026"}])
+        self.assertEqual([(d["doctor_id"], d["stale"]) for d in self.load()],
+                         [("practo:1", False), ("practo:2", False), ("practo:3", True), ("practo:4", True),
+                          ("practo:6", False)])
+
+    def test_records_past_90_days_are_deleted_from_the_file(self):
+        undated = {**doctor(3, 1), "fetched_on": None}
+        self.write([doctor(1, 1, days_old=KEEP_DAYS), doctor(2, 1, days_old=KEEP_DAYS + 1), undated])
+        self.assertEqual([d["doctor_id"] for d in self.load()], ["practo:1"])
+        self.assertEqual(self.stored_ids(), ["practo:1", "practo:3"])  # undated: age unknown, not deleted
+        self.assertEqual([d["doctor_id"] for d in self.load()], ["practo:1"])
+
+    def test_the_next_day_can_make_details_stale(self):
+        self.write([doctor(1, 1, days_old=FRESH_DAYS)])
+        self.assertFalse(self.load()[0]["stale"])
+        self.assertTrue(load_doctors(self.path, today=TODAY + timedelta(days=1))[0]["stale"])
+
+    def test_a_list_with_no_current_doctors_is_an_error(self):
+        for doctors in ([], [doctor(1, 1, days_old=KEEP_DAYS + 1)]):
+            with self.subTest(doctors=len(doctors)):
+                self.write(doctors)
+                doctor_search._cache.clear()
+                with self.assertRaisesRegex(DoctorListError, "no current doctors"):
+                    self.load()
+        self.assertEqual(self.stored_ids(), [])  # the expired one was deleted too
+
+    def test_a_clinic_placed_far_from_its_city_is_left_out(self):
+        def in_city(record, city, lat=None, lon=None):
+            clinic = {**record["clinic"], "city": city, **({"lat": lat, "lon": lon} if lat else {})}
+            return {**record, "clinic": clinic}
+
+        mumbai = [in_city(doctor(n, km), "Mumbai") for n, km in ((1, 1), (2, 5), (3, 12))]
+        # Seen live: a "Chembur, Mumbai" clinic with coordinates in Bengaluru.
+        misplaced = in_city(doctor(4, 1), "Mumbai", 12.91544, 77.61584)
+        lone = [in_city(doctor(5, 1), "Nashik", 20.0, 73.79), in_city(doctor(6, 1), "Nashik", 12.9, 77.6)]
+        self.write([*mumbai, misplaced, *lone])
+        self.assertEqual([d["doctor_id"] for d in self.load()],
+                         ["practo:1", "practo:2", "practo:3", "practo:5", "practo:6"])  # 2 Nashik clinics: not checked
+
+    def test_a_failed_delete_still_finds_doctors_and_is_tried_again(self):
+        self.write([doctor(1, 1), doctor(2, 1, days_old=KEEP_DAYS + 1)])
+        with patch.object(doctor_search, "remove_expired", side_effect=OSError("read-only")):
+            self.assertEqual([d["doctor_id"] for d in self.load()], ["practo:1"])
+        self.assertEqual(self.stored_ids(), ["practo:1", "practo:2"])
+        self.load()  # the next read tries again
+        self.assertEqual(self.stored_ids(), ["practo:1"])
 
 
 if __name__ == "__main__":

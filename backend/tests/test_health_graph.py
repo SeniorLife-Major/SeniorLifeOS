@@ -14,7 +14,8 @@ from langgraph.types import Command
 
 from backend.graphs.health_graph import (
     CLARIFYING_QUESTION, GENERAL_PHYSICIAN_FIRST, HERE_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS, MAX_QUERY_CHARS,
-    CALL_QUESTION, NO_DOCTORS, RELAXED_NOTES, SEARCH_UNAVAILABLE, VAGUE_NEED, build_health_graph, map_specialty,
+    CALL_QUESTION, NO_DOCTORS, OLD_DETAILS, RELAXED_NOTES, SEARCH_UNAVAILABLE, VAGUE_NEED, build_health_graph,
+    map_specialty,
 )
 from backend.tools.doctor_search import DoctorListError
 from backend.tools.geocode import ATTRIBUTION, GeocodeError
@@ -40,17 +41,26 @@ FAKE_DOCTORS = [
     doctor(5, 2.5, "general_physician", "male", 500),
 ]
 
-# No test may reach Geoapify (a lookup without a FakePlaces stand-in fails loudly) or the real list.
+def already_fresh(place, specialty, doctors):
+    """Stands in for refresh_doctors(): the list already holds a recent search."""
+    return {"status": "fresh", "area": None, "results": 0, "cost_usd": 0.0}
+
+
+# No test may reach Geoapify (a lookup without a FakePlaces stand-in fails loudly), Apify or the
+# real list.
 _no_place_search = patch("backend.graphs.health_graph.find_place", no_network)
 _fake_list = patch("backend.graphs.health_graph.load_doctors", lambda: FAKE_DOCTORS)
+_no_fetch = patch("backend.graphs.health_graph.refresh_doctors", already_fresh)
 
 
 def setUpModule():
     _no_place_search.start()
     _fake_list.start()
+    _no_fetch.start()
 
 
 def tearDownModule():
+    _no_fetch.stop()
     _fake_list.stop()
     _no_place_search.stop()
 
@@ -461,6 +471,66 @@ class DoctorSearchTests(unittest.TestCase):
                                    current_location=IN_ANDHERI)
         self.assertEqual(result["status"], "search_unavailable")
         self.assertIn(SEARCH_UNAVAILABLE, result["warnings"])
+
+    def test_details_checked_over_30_days_ago_come_with_a_note(self):
+        checked = {"practo:2": "2026-10-10", "practo:3": "2026-10-05"}
+        stale = [{**d, "stale": d["doctor_id"] in checked, "fetched_on": checked.get(d["doctor_id"], d["fetched_on"])}
+                 for d in FAKE_DOCTORS]
+        fresh = [{**d, "stale": False} for d in FAKE_DOCTORS]
+        for listed, notes in ((stale, [OLD_DETAILS.format(day="5 Oct 2026")]), (fresh, [])):  # the oldest date
+            with self.subTest(notes=notes), patch("backend.graphs.health_graph.load_doctors", lambda: listed):
+                result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                       current_location=IN_ANDHERI)
+                self.assertEqual(result["status"], "doctors_found")
+                self.assertEqual([w for w in result["warnings"] if "last checked" in w], notes)
+
+    def test_a_list_with_no_current_doctors_makes_the_search_unavailable(self):
+        def all_expired():
+            raise DoctorListError("The doctor list has no current doctors; refresh it with tools/provider_import.py")
+
+        with patch("backend.graphs.health_graph.load_doctors", all_expired):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "search_unavailable")  # not "no doctor nearby": that would be wrong
+        self.assertIn("no current doctors", result["errors"][-1])
+
+    def test_with_consent_a_missing_search_is_fetched_first_and_the_list_read_again(self):
+        no_cardiologists = [d for d in FAKE_DOCTORS if d["specialty"] != "cardiologist"]
+        loader = MagicMock(side_effect=[no_cardiologists, FAKE_DOCTORS])  # before and after the fetch
+        fetched = {"status": "fetched", "area": "Andheri West, Mumbai", "results": 3, "cost_usd": 0.0075}
+        refresh = MagicMock(return_value=fetched)
+        with patch("backend.graphs.health_graph.load_doctors", loader), \
+                patch("backend.graphs.health_graph.refresh_doctors", refresh):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        place, specialty, doctors = refresh.call_args.args
+        self.assertEqual((place, specialty, doctors),
+                         ({**ROUNDED, "label": HERE_LABEL, "source": "phone"}, "cardiologist", no_cardiologists))
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:1", "practo:2", "practo:3"])
+        self.assertEqual(result["doctor_refresh"], fetched)
+        self.assertIn("search_doctors:refresh:fetched", result["events"])
+
+    def test_without_consent_nothing_is_fetched(self):
+        refresh = MagicMock()
+        with patch("backend.graphs.health_graph.refresh_doctors", refresh):
+            result = without_model("heart doctor near me", current_location=IN_ANDHERI)
+        refresh.assert_not_called()
+        self.assertEqual((result["status"], result["doctor_refresh"]), ("doctors_found", {"status": "no_consent"}))
+
+    def test_a_fetch_can_start_the_list_and_a_failed_one_leaves_it_as_it_is(self):
+        missing = DoctorListError("The doctor list is missing; build it with tools/provider_import.py")
+        for status, lists, want in (("fetched", [missing, FAKE_DOCTORS], "doctors_found"),
+                                    ("failed", [missing], "search_unavailable"),
+                                    ("over_budget", [FAKE_DOCTORS], "doctors_found")):
+            loader = MagicMock(side_effect=lists)
+            with self.subTest(status=status), patch("backend.graphs.health_graph.load_doctors", loader), \
+                    patch("backend.graphs.health_graph.refresh_doctors",
+                          lambda *args, status=status: {"status": status, "area": None, "results": 0, "cost_usd": 0}):
+                result, _ = with_model("heart doctor near me", reading(search_near="current_location"),
+                                       FakePlaces(), current_location=IN_ANDHERI)
+                self.assertEqual(result["status"], want)
+                self.assertEqual(loader.call_count, len(lists))  # read again only after a fetch
 
     def test_the_list_is_read_only_once_a_place_is_found(self):
         loader = MagicMock(return_value=FAKE_DOCTORS)

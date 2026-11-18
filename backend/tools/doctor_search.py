@@ -11,6 +11,14 @@ Search rules (doctor-search Step2-Plan 2d, accepted in Decision 9):
   asked for (it can't be shown to be within it);
 - if nobody is found within 20 km, the fee limit is dropped first, then the gender, and the
   answer says which (relaxed). A lady doctor is often asked for comfort, so it is kept longest.
+
+How old (Decision 12): a record fetched up to FRESH_DAYS ago is used as it is; up to KEEP_DAYS
+ago it is still shown, marked stale (the answer says the details may have changed); older, it
+is never shown and is deleted from the file. A record without a valid date is never shown.
+
+Wrong places (Decision 14): a clinic more than CITY_SPREAD_KM from the middle of the other clinics
+Practo puts in the same city has wrong coordinates (seen live: a "Chembur, Mumbai" clinic placed
+in Bengaluru) and is never shown.
 """
 
 from __future__ import annotations
@@ -18,11 +26,15 @@ from __future__ import annotations
 import json
 import math
 import threading
+from datetime import date
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 from .geocode import distance_km, in_india
-from .provider_import import DEFAULT_LIST
+from .provider_import import (
+    DEFAULT_LIST, KEEP_DAYS, ProviderImportError, expired, fetched_date, remove_expired, today_utc,
+)
 from .specialties import SPECIALTIES
 
 RADII_KM = (5, 10, 20)
@@ -30,6 +42,10 @@ MIN_DOCTORS = 3
 MAX_CANDIDATES = 20  # kept for ranking and "show more"
 GENDERS = ("female", "male")
 DOCTOR_LIST = DEFAULT_LIST
+FRESH_DAYS = 30  # older records are shown marked stale (Decision 12)
+CLOCK_SLACK_DAYS = 1  # Apify's date may be a day ahead of this machine's
+CITY_SPREAD_KM = 50  # farther from the middle of its city's clinics: wrong coordinates
+MIN_CITY_CLINICS = 3  # a city with fewer clinics can't be checked
 
 
 class DoctorListError(RuntimeError):
@@ -54,14 +70,40 @@ def usable(record: Any) -> bool:
     return in_india(lat, lon) and (fee is None or (isinstance(fee, int) and not isinstance(fee, bool) and fee >= 0))
 
 
-def load_doctors(path: Path | None = None) -> list[dict[str, Any]]:
-    """The usable records of the stored list; read again only when the file changes."""
+def _city(record: dict[str, Any]) -> str | None:
+    city = record["clinic"].get("city")
+    return city.strip().casefold() if isinstance(city, str) and city.strip() else None
+
+
+def well_placed(doctors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The records whose clinic lies within CITY_SPREAD_KM of the middle (median) of the clinics
+    Practo puts in the same city. A city with fewer than MIN_CITY_CLINICS clinics is not checked."""
+    points: dict[str, set[tuple[float, float]]] = {}
+    for record in doctors:
+        if _city(record):
+            points.setdefault(_city(record), set()).add((record["clinic"]["lat"], record["clinic"]["lon"]))
+    middles = {city: {"lat": median(lat for lat, _ in found), "lon": median(lon for _, lon in found)}
+               for city, found in points.items() if len(found) >= MIN_CITY_CLINICS}
+    return [record for record in doctors
+            if _city(record) not in middles or distance_km(record["clinic"], middles[_city(record)]) <= CITY_SPREAD_KM]
+
+
+def _age_days(record: dict[str, Any], today: date) -> int | None:
+    fetched = fetched_date(record)
+    return (today - fetched).days if fetched else None
+
+
+def load_doctors(path: Path | None = None, today: date | None = None) -> list[dict[str, Any]]:
+    """The usable records of the stored list fetched at most KEEP_DAYS ago, each with stale
+    (older than FRESH_DAYS). Older records are deleted from the file. Read again only when the
+    file or the day changes."""
     path = Path(path or DOCTOR_LIST)
+    today = today or today_utc()
     try:
         stat = path.stat()
     except OSError:
         raise DoctorListError("The doctor list is missing; build it with tools/provider_import.py") from None
-    stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+    stamp = (str(path), stat.st_mtime_ns, stat.st_size, today)
     with _cache_lock:
         if _cache.get("stamp") == stamp:
             return _cache["doctors"]
@@ -72,9 +114,24 @@ def load_doctors(path: Path | None = None) -> list[dict[str, Any]]:
             raise TypeError
     except (OSError, ValueError, KeyError, TypeError):
         raise DoctorListError("The doctor list can't be read") from None
-    doctors = [record for record in records if usable(record)]
-    with _cache_lock:
-        _cache.update(stamp=stamp, doctors=doctors)
+    doctors = []
+    for record in records:
+        age = _age_days(record, today) if usable(record) else None
+        if age is not None and -CLOCK_SLACK_DAYS <= age <= KEEP_DAYS:
+            doctors.append({**record, "stale": age > FRESH_DAYS})
+    doctors = well_placed(doctors)
+    keep_in_memory = True
+    if any(expired(record, today) for record in records):
+        keep_in_memory = False  # the file is about to change: read it again next time
+        try:
+            remove_expired(path, today)
+        except (OSError, ProviderImportError):
+            pass  # not deleted this time; never shown, and deleted on a later read or import
+    if not doctors:
+        raise DoctorListError("The doctor list has no current doctors; refresh it with tools/provider_import.py")
+    if keep_in_memory:
+        with _cache_lock:
+            _cache.update(stamp=stamp, doctors=doctors)
     return doctors
 
 

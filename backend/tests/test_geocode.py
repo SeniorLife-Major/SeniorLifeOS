@@ -77,7 +77,8 @@ class FindPlaceTests(GeocodeTestCase):
         recorder = Recorder(PUNE)
         answer = self.find("Pune", recorder)
         self.assertEqual(answer, {"status": "found", "place": {
-            "lat": 18.521, "lon": 73.855, "label": "Pune, Maharashtra", "attribution": ATTRIBUTION}})
+            "lat": 18.521, "lon": 73.855, "label": "Pune, Maharashtra", "city": "Pune", "area": None,
+            "attribution": ATTRIBUTION}})
         params = recorder.params()
         self.assertEqual(params["text"], "Pune")
         self.assertEqual(params["filter"], "countrycode:in")
@@ -104,12 +105,29 @@ class FindPlaceTests(GeocodeTestCase):
                          ["Rampur, Uttar Pradesh", "Rampur, Shahdol, Madhya Pradesh"])
         self.assertEqual(answer["options"][1]["lat"], 23.224)  # the best-ranked of the two
 
+    def test_each_place_says_its_city_and_neighbourhood(self):
+        # The names doctors are searched by (doctor_refresh): none for a whole city.
+        cases = [(result("Andheri West", 19.1172, 72.834, "suburb", city="Mumbai"), ("Mumbai", "Andheri West")),
+                 (result("Demo Hospital", 19.12, 72.84, "amenity", city="Mumbai", suburb="Juhu"), ("Mumbai", "Juhu")),
+                 (result("Pune", 18.52, 73.85, "city", city="Pune"), ("Pune", None)),
+                 (result("Pune", 18.52, 73.85, "city"), ("Pune", None)),  # the city's own name
+                 # Live, 2026-11-18: Geoapify calls Koregaon Park a "city", inside the city of Pune.
+                 (result("Koregaon Park", 18.536, 73.893, "city", city="Pune", suburb="Ghorpuri"),
+                  ("Pune", "Koregaon Park")),
+                 (result("Pune City Subdistrict", 18.52, 73.85, "county", city="Pune"), ("Pune", None)),
+                 (result("Demo Road", 19.12, 72.84, "street"), (None, None))]
+        for answer, names in cases:
+            with self.subTest(name=answer["name"]):
+                self.assertEqual(geocode.city_and_area(answer), names)
+        options = self.find("Andheri", Recorder(ANDHERI))["options"]
+        self.assertEqual([(o["city"], o["area"]) for o in options], [("Andheri", None), ("Mumbai", "Andheri West")])
+
     def test_a_match_near_the_phone_settles_the_name(self):
         recorder = Recorder(ANDHERI)
         answer = self.find("Andheri", recorder, near=MUMBAI_PHONE)
         self.assertEqual(answer["status"], "found")
         self.assertEqual(answer["place"]["label"], "Andheri West, Mumbai, Maharashtra")
-        self.assertEqual(recorder.params()["bias"], "proximity:72.841,19.12")  # the phone's point, rounded
+        self.assertEqual(recorder.params()["bias"], "proximity:72.84,19.12")  # the phone's point, to ~1 km
 
     def test_a_far_named_place_is_kept_even_with_the_phone_elsewhere(self):
         # Asking from Mumbai for a doctor in Pune (say, for a parent there).
@@ -185,6 +203,81 @@ class FailureTests(GeocodeTestCase):
         joined = "\n".join(logs.output)
         self.assertIn("apiKey=[hidden]", joined)
         self.assertNotIn(FAKE_KEY, joined)
+
+
+class AreaService:
+    """MockTransport handler for the area lookup: nearby places, and the reverse lookup."""
+
+    def __init__(self, nearby=(), cities=(), status=200):
+        self.nearby, self.cities, self.status, self.requests = list(nearby), list(cities), status, []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if self.status != 200:
+            return httpx.Response(self.status, json={"message": f"bad key {FAKE_KEY}"})
+        if request.url.path == "/v2/places":
+            return httpx.Response(200, json={"type": "FeatureCollection",
+                                             "features": [{"properties": p} for p in self.nearby]})
+        return httpx.Response(200, json={"results": [{"city": city} for city in self.cities]})
+
+    def client(self):
+        return REAL_CLIENT(transport=httpx.MockTransport(self))
+
+
+class AreaNearTests(GeocodeTestCase):
+    def area(self, service, point=MUMBAI_PHONE):
+        return geocode.area_near(point, client=service.client())
+
+    def test_the_nearest_suburb_names_the_area_and_only_a_rough_point_is_sent(self):
+        service = AreaService(nearby=[{"name": "Andheri West", "city": "Mumbai"}])
+        self.assertEqual(self.area(service), {"city": "Mumbai", "area": "Andheri West"})
+        self.assertEqual(len(service.requests), 1)
+        params = dict(service.requests[0].url.params)
+        self.assertEqual((params["filter"], params["bias"]), ("circle:72.84,19.12,3000", "proximity:72.84,19.12"))
+        self.assertEqual(params["categories"], geocode.AREA_CATEGORIES)
+        for precise in ("19.1201", "72.8409", "72.841", "19.120"):  # the phone's point, never closer than ~1 km
+            self.assertNotIn(precise, str(service.requests[0].url))
+
+    def test_with_no_suburb_near_the_city_alone(self):
+        service = AreaService(nearby=[], cities=["Pune"])
+        self.assertEqual(self.area(service, {"lat": 18.5404, "lon": 73.8912}), {"city": "Pune", "area": None})
+        self.assertEqual([r.url.path for r in service.requests], ["/v2/places", "/v1/geocode/reverse"])
+        self.assertEqual(dict(service.requests[1].url.params)["lat"], "18.54")
+
+    def test_a_town_that_is_its_own_city_has_no_neighbourhood(self):
+        service = AreaService(nearby=[{"name": "Nashik", "city": "Nashik"}])
+        self.assertEqual(self.area(service, {"lat": 20.0, "lon": 73.79}), {"city": "Nashik", "area": None})
+
+    def test_unknown_or_outside_india_is_none(self):
+        service = AreaService()
+        self.assertIsNone(self.area(service, {"lat": 51.5, "lon": -0.12}))  # London: nothing sent
+        self.assertEqual(service.requests, [])
+        self.assertIsNone(self.area(service))  # nothing near, no city either
+        self.assertEqual(len(service.requests), 2)
+
+    def test_the_same_rough_point_is_looked_up_once(self):
+        service = AreaService(nearby=[{"name": "Andheri West", "city": "Mumbai"}])
+        self.area(service)
+        self.assertEqual(self.area(service, {"lat": 19.1238, "lon": 72.8371}),  # rounds to the same point
+                         {"city": "Mumbai", "area": "Andheri West"})
+        self.assertEqual(len(service.requests), 1)
+
+    def test_errors_never_show_the_key(self):
+        with self.assertRaisesRegex(GeocodeError, r"Area lookup failed \(HTTP 401\)") as caught:
+            self.area(AreaService(status=401))
+        FailureTests.assert_no_key_in(self, caught.exception)
+
+        def refuse(request):
+            raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+
+        geocode._cache.clear()
+        with self.assertRaisesRegex(GeocodeError, r"could not be reached \(ConnectError\)") as caught:
+            geocode.area_near(MUMBAI_PHONE, client=REAL_CLIENT(transport=httpx.MockTransport(refuse)))
+        FailureTests.assert_no_key_in(self, caught.exception)
+        with patch.dict(os.environ):
+            os.environ.pop(KEY_NAME, None)
+            with self.assertRaisesRegex(GeocodeError, KEY_NAME):
+                self.area(AreaService())
 
 
 class LocationWordsTests(unittest.TestCase):
