@@ -31,7 +31,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any
 from uuid import uuid4
@@ -52,6 +52,7 @@ from ..graphs.document_graph import (
     missing_optional,
     missing_required,
 )
+from ..tools.document_rules import DOCUMENT_TYPES, PROOFS, match_proofs, match_requirements
 from ..utils.checkpoints import forget_run
 from ..utils.privacy import mask_ids_in_text
 from .files import EncryptedFileStore, StoredFileError
@@ -98,6 +99,14 @@ def safe_filename(name: str) -> str:
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+INDIA = timezone(timedelta(hours=5, minutes=30))  # no daylight saving, so this is exact
+
+
+def india_today() -> date:
+    """Today's date in India, whatever the server's own time zone."""
+    return datetime.now(INDIA).date()
 
 
 def current_version(document: Document) -> DocumentVersion | None:
@@ -478,6 +487,27 @@ class DocumentService:
             return [view(document, with_fields=False) for document in owned_documents(session, owner_id,
                                                                                            document_type)]
 
+    def match(self, owner_id: str, requirements: list[str], proofs: list[str],
+              as_of: date | None = None) -> dict[str, Any]:
+        """Which of the owner's documents meet a list of needs (e.g. a scheme's), by the shared
+        rules in tools/document_rules (fastapi-backend Phase 3): for each document type, and for
+        each proof (e.g. proof_of_age, which some types can give), the best document and whether
+        it is usable, unconfirmed (being read or waiting for review), expired on as_of (default:
+        today in India) or missing. Reads only."""
+        requirements, proofs = list(dict.fromkeys(requirements)), list(dict.fromkeys(proofs))  # once each
+        if not requirements and not proofs:
+            raise ValidationException("Name at least one document type or proof")
+        if any(name not in DOCUMENT_TYPES for name in requirements):
+            raise ValidationException("Unknown document type; known: " + ", ".join(DOCUMENT_TYPES))
+        if any(name not in PROOFS for name in proofs):
+            raise ValidationException("Unknown proof; known: " + ", ".join(PROOFS))
+        day = as_of or india_today()
+        with self.sessions() as session:
+            records = [record for document in owned_documents(session, owner_id)
+                       if (record := vault_record(document)) is not None]
+        return {"as_of": day, "matches": match_requirements(requirements, records, owner_id, day.isoformat()),
+                "proofs": match_proofs(proofs, records, owner_id, day.isoformat())}
+
     def file(self, owner_id: str, document_id: str, version: int | None = None) -> dict[str, Any]:
         """The original file of a version (default: the one in use), for the owner to look at,
         e.g. next to the values during review: {"data", "mime_type", "filename", "version"}.
@@ -654,6 +684,33 @@ class DocumentService:
         finally:
             if removed_file:
                 self.files.delete(removed_file)
+
+
+COUNTED_FOR_MATCH = ("confirmed", "processing", "needs_review")
+
+
+def vault_record(document: Document) -> dict[str, Any] | None:
+    """The document as the graphs see it (the "vault record" document_graph publishes), rebuilt
+    from the database: the version in use, its confirmed fields (already masked) and dates.
+    Only documents that are, or may still become, usable count: confirmed, being read, or
+    waiting for review. A rejected or failed one, or one of unknown type, is None (the owner
+    has to add it again), so it is reported missing, not "unconfirmed"."""
+    version = current_version(document)
+    if version is None or version.status not in COUNTED_FOR_MATCH or not document.document_type:
+        return None
+    confirmed = version.status == "confirmed"
+    return {
+        "document_id": document.id,
+        "owner_id": document.owner_id,
+        "type": document.document_type,
+        "status": version.status,
+        "confirmed_fields": {field.name: {"value": field.value, "source_ref": field.source_ref,
+                                          "reviewed_by": field.reviewed_by,
+                                          "corrected_by_user": field.corrected_by_user}
+                             for field in version.fields} if confirmed else {},
+        "issue_date": version.issue_date.isoformat() if version.issue_date else None,
+        "expiry_date": version.expiry_date.isoformat() if version.expiry_date else None,
+    }
 
 
 def view(document: Document, with_fields: bool = True) -> dict[str, Any]:

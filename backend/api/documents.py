@@ -98,6 +98,36 @@ class ReviewDto(CamelModel):
     errors: list[str] = []
 
 
+MatchStatus = Literal["usable", "unconfirmed", "expired", "missing"]
+
+
+class MatchRequest(CamelModel):
+    """The document types and proofs a scheme (or an office visit) asks for; e.g.
+    {"requirements": ["income_certificate"], "proofs": ["proof_of_age"], "asOf": "2026-12-01"}."""
+    requirements: list[str] = Field(default=[], max_length=20)
+    proofs: list[str] = Field(default=[], max_length=20)
+    as_of: date | None = None  # the day they must be valid on; default today (India)
+
+
+class RequirementMatchDto(CamelModel):
+    required_type: str
+    document_id: str | None = None  # the best document of that type, if any
+    status: MatchStatus
+
+
+class ProofMatchDto(CamelModel):
+    proof: str
+    document_type: str | None = None  # the type that gives the proof
+    document_id: str | None = None
+    status: MatchStatus
+
+
+class MatchDto(CamelModel):
+    as_of: date
+    matches: list[RequirementMatchDto]
+    proofs: list[ProofMatchDto]
+
+
 class ReviewRequest(CamelModel):
     action: Literal["confirm", "reject"]
     edits: dict[str, Any] = {}
@@ -223,6 +253,15 @@ def create_manual_document(body: ManualEntryRequest, response: Response, actor: 
                            service: Service) -> ApiResponse[DocumentDto]:
     result = service.create_manual(actor, body.document_type, body.fields, owner_name=body.owner_name)
     return envelope(DocumentDto.model_validate(result), response)
+
+
+@router.post("/match", response_model=ApiResponse[MatchDto],
+             summary="Which of my documents meet a list of needs (usable, unconfirmed, expired, missing)")
+def match_documents(body: MatchRequest, response: Response, actor: Actor, service: Service) -> ApiResponse[MatchDto]:
+    """usable: confirmed with every required field, not expired on asOf. unconfirmed: still being
+    read or waiting for my review. A rejected or failed document counts as missing."""
+    result = service.match(actor, body.requirements, body.proofs, body.as_of)
+    return envelope(MatchDto.model_validate(result), response)
 
 
 @router.post("/{document_id}/versions", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[DocumentDto],
