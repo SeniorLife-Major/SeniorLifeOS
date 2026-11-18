@@ -104,11 +104,9 @@ def register_global_error_handlers(app: FastAPI) -> None:
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("Unhandled internal exception on uri=%s: %s", request.url.path, exc)
         config = get_config()
-        message = (
-            f"Internal server error: {str(exc)}"
-            if config.app.debug
-            else "An unexpected internal server error occurred. Please try again later."
-        )
+        # Never the exception's text, not even with debug on: it can hold personal values (a SQL
+        # row, a field value). The developer reads it in the log above (fastapi-backend Decision 4).
+        message = "An unexpected internal server error occurred. Please try again later."
         response_data = ApiErrorResponse.of(
             code=ErrorCode.INTERNAL_SERVER_ERROR.value,
             message=message,

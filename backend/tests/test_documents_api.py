@@ -50,7 +50,8 @@ class ApiCase(unittest.TestCase):
     environment = "development"
 
     def setUp(self):
-        for target in ("backend.api.documents.get_config", "backend.errors.global_error_handler.get_config"):
+        for target in ("backend.api.documents.get_config", "backend.api.deps.get_config",
+                       "backend.errors.global_error_handler.get_config"):
             patcher = patch(target, return_value=config(self.environment))
             patcher.start()
             self.addCleanup(patcher.stop)

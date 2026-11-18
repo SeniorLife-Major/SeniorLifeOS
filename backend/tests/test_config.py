@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from backend.core import config as config_module
 from backend.core.config import load_config
 
 
@@ -16,6 +17,10 @@ class ConfigTests(unittest.TestCase):
         patcher = patch("backend.utils.env.find_env_file", return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # load_config(path) replaces the app's cached config; put the app's own back afterwards, so
+        # later tests (and request-time checks such as main.raw_workflows_allowed) never see these.
+        saved = config_module._cached_config
+        self.addCleanup(setattr, config_module, "_cached_config", saved)
 
     def test_env_file_is_loaded_from_the_path_find_env_file_gives(self):
         # Shows the patch above hits the right place: a stand-in .env given through it is used.
@@ -30,6 +35,24 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(load_config(path).llm.groq.api_key, "from-stand-in-env-file")
             with patch.dict(os.environ, {}, clear=True):
                 self.assertEqual(load_config(path).llm.groq.api_key, "fallback")
+
+    def test_cors_origins_come_from_the_setting(self):
+        config_yaml = "cors:\n  allowed_origins: \"${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}\"\n"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "test_application.yml"
+            path.write_text(config_yaml, encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(load_config(path).cors.allowed_origins,
+                                 ["http://localhost:3000", "http://localhost:5173"])
+            with patch.dict(os.environ, {"CORS_ALLOWED_ORIGINS": " https://app.example.org/ ,https://family.example.org,"},
+                            clear=True):
+                self.assertEqual(load_config(path).cors.allowed_origins,
+                                 ["https://app.example.org", "https://family.example.org"])
+
+    def test_the_real_application_yml_has_local_cors_defaults(self):
+        with patch.dict(os.environ, {}, clear=True):
+            origins = load_config(Path(__file__).resolve().parents[1] / "config" / "application.yml").cors.allowed_origins
+        self.assertEqual(origins, ["http://localhost:3000", "http://localhost:5173"])
 
     def test_loads_yaml_with_fallback_defaults(self):
         config_yaml = """

@@ -171,8 +171,10 @@ curl -I http://localhost/
 Interactive Swagger documentation:
 - Open `https://<SERVER_IP>/docs` in your browser.
 
-Spring Boot Actuator health endpoint:
-- Open `https://<SERVER_IP>/actuator/health`
+Health endpoint:
+- Open `https://<SERVER_IP>/api/v1/health`
+- `/actuator` is never on in production (`APP_ENV=production`), even with `ACTUATOR_ENABLED=true`: it has
+  no sign-in and shows environment values and request URLs. Use it on a local development server only.
 
 ---
 

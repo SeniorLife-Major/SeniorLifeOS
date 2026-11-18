@@ -20,6 +20,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -155,6 +156,48 @@ class WorkflowRun(Base):
     status: Mapped[str] = mapped_column(String(16))
     started_at: Mapped[datetime] = created()
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class User(Base):
+    """A person who signs in (fastapi-backend Phase 1). id is the owner_id used everywhere else
+    (documents, runs, audit). login: an Indian mobile number as +91XXXXXXXXXX or a lower-case
+    e-mail. password_hash: scrypt (core/security.py), never the password. token_version: signing out
+    adds 1, so every token issued before stops working."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    login: Mapped[str] = mapped_column(String(254), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    display_name: Mapped[str] = mapped_column(String(120))
+    role: Mapped[str] = mapped_column(String(16))  # senior or family
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = created()
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    profile: Mapped[Profile | None] = relationship(back_populates="user", cascade="all, delete-orphan",
+                                                    uselist=False)
+
+
+class Profile(Base):
+    """What the app remembers about a person between requests: language, home (rounded to about
+    100 m), accessibility and consent choices (fastapi-backend Phase 1)."""
+
+    __tablename__ = "profiles"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    language: Mapped[str] = mapped_column(String(8), default="en", server_default="en")
+    home_label: Mapped[str | None] = mapped_column(String(200))
+    home_lat: Mapped[float | None] = mapped_column(Float)
+    home_lon: Mapped[float | None] = mapped_column(Float)
+    accessibility: Mapped[dict[str, Any]] = mapped_column(default=dict)  # font_scale, high_contrast, voice
+    consents: Mapped[dict[str, Any]] = mapped_column(default=dict)  # use_llm, medical_cloud, cloud_ocr
+    consents_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                 onupdate=func.now())
+
+    user: Mapped[User] = relationship(back_populates="profile")
 
 
 class AuditEvent(Base):

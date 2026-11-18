@@ -16,29 +16,21 @@ Or the owner types the details in, with no file (POST /api/v1/documents/manual, 
 from __future__ import annotations
 
 import logging
-import re
 import threading
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import Field
 
+from backend.api.deps import Actor, StorageUnavailable
 from backend.common.schemas import ApiResponse, CamelModel
 from backend.core.config import get_config
-from backend.errors import AppException, UnauthorizedException
+from backend.errors import AppException
 from backend.graphs.document_graph import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/api/v1/documents", tags=["Documents"])
 logger = logging.getLogger(__name__)
-
-ACTOR_ID = re.compile(r"[A-Za-z0-9._:@-]{1,128}")
-PRODUCTION = {"production", "prod"}
-
-
-class StorageUnavailable(AppException):
-    def __init__(self, message: str) -> None:
-        super().__init__(message=message, error_code="STORAGE_UNAVAILABLE", status_code=503)
 
 
 class PayloadTooLarge(AppException):
@@ -119,14 +111,6 @@ class ManualVersionRequest(CamelModel):
 
 # ---- dependencies -------------------------------------------------------------------------
 
-def current_actor(x_actor_id: Annotated[str | None, Header()] = None) -> str:
-    if get_config().app.environment.strip().lower() in PRODUCTION:
-        raise UnauthorizedException("Sign-in is not available yet, so documents can't be used in production")
-    if not x_actor_id or not ACTOR_ID.fullmatch(x_actor_id):
-        raise UnauthorizedException("Send your id in the X-Actor-Id header (development only)")
-    return x_actor_id
-
-
 _service: Any = None
 _service_lock = threading.Lock()
 
@@ -183,7 +167,6 @@ async def upload_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-Actor = Annotated[str, Depends(current_actor)]
 Service = Annotated[Any, Depends(get_document_service)]
 
 

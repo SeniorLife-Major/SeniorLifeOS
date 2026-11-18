@@ -40,7 +40,7 @@ If `py` is unavailable, create the venv with another installed Python 3.11 execu
 backend\.venv\Scripts\python.exe backend\run_server.py
 ```
 
-This starts FastAPI on port 8000 (`SERVER_PORT`). API docs are at `http://localhost:8000/docs`, and the demo routes are under `/api/v1/demo`. Settings come from `backend/config/application.yml`; each `${NAME:default}` there is read from the environment or `.env`. The `/actuator` admin routes are on by default (`ACTUATOR_ENABLED`) and have no login yet, so do not expose the server outside your machine.
+This starts FastAPI on port 8000 (`SERVER_PORT`). API docs are at `http://localhost:8000/docs`, and the demo routes are under `/api/v1/demo`. Settings come from `backend/config/application.yml`; each `${NAME:default}` there is read from the environment or `.env`. The `/actuator` admin routes are on by default (`ACTUATOR_ENABLED`) and have no login, so do not expose a development server outside your machine; with `APP_ENV=production` they are never on.
 
 ## Direct `invoke()` examples
 
@@ -200,7 +200,20 @@ Uploads are kept in PostgreSQL plus an encrypted file folder, and paused reviews
    Never change the storage or checkpoint key after data is stored: old files and paused reviews can't be read with a new key.
 3. Create the tables: `backend\.venv\Scripts\alembic.exe -c backend\alembic.ini upgrade head`. LangGraph's checkpoint tables are created by the checkpointer on first start; migrations never touch them.
 
-**API** (`api/documents.py`; sign-in isn't built yet, so the caller names themselves with the `X-Actor-Id` header, which is refused when `APP_ENV=production`):
+**Sign-in** (`api/auth.py`; needs `JWT_SECRET`, at least 32 characters, and in production not the `change-me...` placeholder). The login is a 10-digit mobile number (kept as `+91XXXXXXXXXX`; `98765 43210`, `+91 98765-43210`, `09876543210` are all the same) or an e-mail address. Passwords: 8 to 128 characters, stored only as a scrypt hash.
+
+| Call | What it does |
+|---|---|
+| `POST /api/v1/auth/register` | `{"login", "password", "displayName", "role": "senior" or "family"}`: makes the account and signs in |
+| `POST /api/v1/auth/login` | `{"login", "password"}` → `{"user", "accessToken", "tokenType": "bearer", "expiresIn"}` (seconds; `JWT_TTL_MINUTES`, 12 hours by default) |
+| `POST /api/v1/auth/logout` | ends every token of the account at once |
+| `GET /api/v1/auth/me` | who is signed in |
+| `GET /api/v1/me/profile` | language, home, accessibility (`fontScale`, `highContrast`, `voice`), consents (`useLlm`, `medicalCloud`, `cloudOcr`) |
+| `PATCH /api/v1/me/profile` | change only what is sent. Home: `{"homeLocation": {"place": "Andheri West, Mumbai"}}` (looked up with place search, needs `GEOAPIFY_API_KEY`) or `{"homeLocation": {"lat": .., "lon": ..}}` from the phone; kept rounded to about 100 m. A name that fits far-apart places answers 422 with `details.options` to choose from; `"homeLocation": null` forgets it |
+
+Every other call sends the token: `Authorization: Bearer <accessToken>`. A wrong password and an unknown login get the same answer.
+
+**API** (`api/documents.py`; the caller is the signed-in person. In development, a call without a token may name the caller with the `X-Actor-Id` header instead; that header is refused when `APP_ENV=production`):
 
 | Call | What it does |
 |---|---|

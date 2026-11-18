@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .._version import get_version
 
@@ -71,6 +71,7 @@ class DatabaseSection(BaseModel):
 class SecuritySection(BaseModel):
     hash_key: str = ""
     token_secret: str = "change-me-in-production-secret-key-32-chars-min"
+    token_ttl_minutes: int = 720  # how long a sign-in lasts (core/security.py)
 
 
 class GroqConfig(BaseModel):
@@ -100,6 +101,20 @@ class MetricsSection(BaseModel):
     endpoint: str = "/metrics"
 
 
+class CorsSection(BaseModel):
+    """Where the web app is served from. Comma-separated in CORS_ALLOWED_ORIGINS."""
+
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"])
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def split_commas(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [origin.strip().rstrip("/") for origin in value.split(",") if origin.strip()]
+        return value
+
+
 class AppConfig(BaseModel):
     app: AppSection = Field(default_factory=AppSection)
     server: ServerSection = Field(default_factory=ServerSection)
@@ -108,6 +123,7 @@ class AppConfig(BaseModel):
     llm: LlmSection = Field(default_factory=LlmSection)
     actuator: ActuatorSection = Field(default_factory=ActuatorSection)
     metrics: MetricsSection = Field(default_factory=MetricsSection)
+    cors: CorsSection = Field(default_factory=CorsSection)
 
 
 # Standard Python / FastAPI alias for settings
@@ -153,6 +169,14 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
 def get_config() -> AppConfig:
     """Dependency / accessor for application config."""
     return load_config()
+
+
+PRODUCTION = {"production", "prod"}
+
+
+def is_production(config: Any) -> bool:
+    """config: an AppConfig (or anything with app.environment). True for APP_ENV production/prod."""
+    return str(config.app.environment).strip().lower() in PRODUCTION
 
 
 def get_settings() -> AppConfig:

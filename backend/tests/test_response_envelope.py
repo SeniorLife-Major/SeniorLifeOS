@@ -1,6 +1,9 @@
 """Unit tests for the standardized API response envelopes and global error handler."""
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from fastapi import FastAPI, APIRouter
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
@@ -136,6 +139,19 @@ class ResponseEnvelopeTests(unittest.TestCase):
         self.assertEqual(json_data["status"], "ERROR")
         self.assertEqual(json_data["error"]["code"], ErrorCode.INTERNAL_SERVER_ERROR.value)
         self.assertIn("serverTime", json_data["meta"])
+
+    def test_unhandled_error_text_never_reaches_the_client_even_in_debug(self):
+        # An exception's text can hold personal values (a SQL row, a field value), so it stays in
+        # the server log only (fastapi-backend Decision 4).
+        for debug in (True, False):
+            config = SimpleNamespace(app=SimpleNamespace(debug=debug, version="test"))
+            with self.subTest(debug=debug), patch("backend.errors.global_error_handler.get_config",
+                                                  return_value=config), self.assertLogs(level="ERROR") as logs:
+                resp = self.client.get("/api/v1/test/unhandled-error")
+            self.assertEqual(resp.status_code, 500)
+            self.assertNotIn("suddenly dropped", resp.text)
+            self.assertIn("unexpected internal server error", resp.json()["error"]["message"])
+            self.assertIn("suddenly dropped", "\n".join(logs.output))  # still logged for the developer
 
 
 if __name__ == "__main__":

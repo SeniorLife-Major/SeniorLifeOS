@@ -27,6 +27,7 @@ pypdfium2==5.14.0
 
 # Security
 pycryptodome>=3.20  # AES for encrypted LangGraph checkpoints (utils/checkpoints.py)
+PyJWT==2.15.1  # sign-in tokens (core/security.py); no dependencies
 
 # Testing & Utilities
 httpx>=0.27.0
