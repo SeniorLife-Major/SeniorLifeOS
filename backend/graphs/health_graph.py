@@ -30,11 +30,13 @@ now, or said nothing about where; without the model, only clear "near me" words 
 anything else is asked (a request may name a place this machine can't recognise).
 
 Doctors near the place (step 2d) come from the stored list. With medical consent, a search the
-list lacks or holds from more than 30 days ago is fetched from Practo first
-(tools/doctor_refresh.py: Apify learns the specialty and the area, never the phone's location).
+list lacks or holds from more than 30 days ago is fetched from Practo first, unless the list
+already has 3 recent doctors of the specialty within 5 km (tools/doctor_refresh.py: Apify learns
+the specialty and the area, never the phone's location).
 Details fetched more than 30 days ago are still shown, with a note that they may have changed
-(Decision 12). Checking and ranking them comes next; this graph ends with the doctors found,
-nearest first.
+(Decision 12). Each doctor found then gets their registration level and a note (step 2e,
+tools/doctor_verify.py): verified by Practo, or only listed; not checked by us on the NMC
+register. Ranking comes next; this graph ends with the doctors found, nearest first.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from langgraph.types import interrupt
 
 from ..tools.doctor_refresh import refresh_doctors
 from ..tools.doctor_search import RADII_KM, DoctorListError, find_nearby, load_doctors
+from ..tools.doctor_verify import PRACTO_VERIFIED, registration_level, registration_note
 from ..tools.geocode import GeocodeError, device_location, find_place, search_near_from_text
 from ..tools.red_flags import emergency_message, emergency_numbers, find_red_flags
 from ..tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES, specialty_from_text
@@ -87,6 +90,8 @@ GENERAL_PHYSICIAN_FIRST = ("No {label} within {km} km in our list. A general phy
 NO_DOCTORS = "No doctor of this kind within {km} km in our list."
 SEARCH_UNAVAILABLE = "Doctor search is not available right now."
 OLD_DETAILS = "These details were last checked on {day} and may have changed. Call the clinic before going."
+NONE_VERIFIED = ("None of these doctors' registrations is marked verified by Practo. Please check the "
+                 "doctor's registration before going.")
 
 
 class HealthState(TypedDict, total=False):
@@ -124,7 +129,7 @@ class HealthState(TypedDict, total=False):
     location_problem: str  # why the location question was asked
     location_query: str  # the place text looked up
     location_asked: bool
-    doctors: list[dict[str, Any]]  # nearest first, each with distance_km (step 2d)
+    doctors: list[dict[str, Any]]  # nearest first, each with distance_km (2d), registration_level and _note (2e)
     search_radius_km: int
     relaxed_filters: list[str]  # the person's wishes that had to be dropped: max_fee, doctor_gender
     doctor_fallback: str | None  # general_physician when no doctor of the specialty was near
@@ -474,10 +479,25 @@ def search_doctors(state: HealthState) -> dict[str, Any]:
         "doctor_refresh": refresh,
         "status": "doctors_found" if count else "no_doctors_nearby",
         "warnings": warnings,
-        "route": "done",
+        "route": "verify" if count else "done",
         "events": [*events, f"search_doctors:{count}:{found['radius_km']}km"
                    + (":general_physician" if fallback else "")],
     }
+
+
+def verify(state: HealthState) -> dict[str, Any]:
+    """Each doctor's registration as Practo lists it (step 2e, Decision 16): practo_verified or
+    listed, with a fixed note that says we did not check it on the NMC register ourselves. Doctors
+    with no registration never get here (tools/doctor_search.usable). Ranking (2f) is to keep
+    listed doctors out of the top 3."""
+    doctors = [{**doctor, "registration_level": registration_level(doctor),
+                "registration_note": registration_note(doctor)} for doctor in state["doctors"]]
+    verified = sum(doctor["registration_level"] == PRACTO_VERIFIED for doctor in doctors)
+    warnings = list(state.get("warnings", []))
+    if not verified:
+        warnings.append(NONE_VERIFIED)
+    return {"doctors": doctors, "warnings": warnings, "route": "done",
+            "events": add_event(state, f"verify:{verified}/{len(doctors)}")}
 
 
 def route_step(state: HealthState) -> str:
@@ -501,6 +521,7 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_node("locate", locate)
     graph.add_node("ask_location", ask_location)
     graph.add_node("search_doctors", search_doctors)
+    graph.add_node("verify", verify)
 
     graph.add_edge(START, "validate_request")
     graph.add_conditional_edges("validate_request", route_step, {"continue": "safety_check", "stop": END})
@@ -516,6 +537,7 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_edge("map_specialty", "locate")
     graph.add_conditional_edges("locate", route_step, {"search": "search_doctors", "ask_location": "ask_location",
                                                        "stop": END})
-    graph.add_edge("search_doctors", END)
+    graph.add_conditional_edges("search_doctors", route_step, {"verify": "verify", "done": END})
+    graph.add_edge("verify", END)
     graph.add_conditional_edges("ask_location", route_step, {"again": "locate", "stop": END})
     return graph.compile(checkpointer=checkpointer)

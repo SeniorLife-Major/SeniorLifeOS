@@ -19,6 +19,9 @@ is never shown and is deleted from the file. A record without a valid date is ne
 Wrong places (Decision 14): a clinic more than CITY_SPREAD_KM from the middle of the other clinics
 Practo puts in the same city has wrong coordinates (seen live: a "Chembur, Mumbai" clinic placed
 in Bengaluru) and is never shown.
+
+Registration (Decision 16): a doctor with no registration number or council on Practo is never
+offered, so the widening looks for doctors who have one (tools/doctor_verify.py).
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from .doctor_verify import registration_level
 from .geocode import distance_km, in_india
 from .provider_import import (
     DEFAULT_LIST, KEEP_DAYS, ProviderImportError, expired, fetched_date, remove_expired, today_utc,
@@ -57,8 +61,11 @@ _cache_lock = threading.Lock()
 
 
 def usable(record: Any) -> bool:
-    """A record the search can use: our specialty, a gender, a clinic with a location in India."""
+    """A record the search can use: our specialty, a gender, a clinic with a location in India, and
+    a registration listed on Practo."""
     if not isinstance(record, dict) or not isinstance(record.get("doctor_id"), str):
+        return False
+    if registration_level(record) is None:
         return False
     clinic = record.get("clinic")
     if record.get("specialty") not in SPECIALTIES or record.get("gender") not in GENDERS or not isinstance(clinic, dict):

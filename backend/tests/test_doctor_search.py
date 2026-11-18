@@ -18,12 +18,15 @@ from backend.tools.doctor_search import (
 ANDHERI = {"lat": 19.12, "lon": 72.84}
 KM_NORTH = 1 / 111.2  # degrees of latitude in one km
 TODAY = date(2026, 11, 17)  # the list's "today" in these tests: they never depend on the real date
+REGISTERED = {"number": "2004/03/1234", "council": "Maharashtra Medical Council", "year": 2004,
+              "practo_verified": True}
 
 
-def doctor(number, km, specialty="cardiologist", gender="female", fee=1000, clinic=1, days_old=0):
+def doctor(number, km, specialty="cardiologist", gender="female", fee=1000, clinic=1, days_old=0,
+           registration=REGISTERED):
     """A made-up doctor's clinic, km north of ANDHERI, fetched days_old days before TODAY."""
     return {"id": f"practo:{number}:{clinic}:{specialty}", "doctor_id": f"practo:{number}", "name": f"Dr. Demo {number}",
-            "gender": gender, "specialty": specialty, "fee": fee,
+            "gender": gender, "specialty": specialty, "fee": fee, "registration": registration,
             "fetched_on": (TODAY - timedelta(days=days_old)).isoformat(),
             "clinic": {"name": f"Demo Clinic {clinic}", "lat": round(ANDHERI["lat"] + km * KM_NORTH, 5),
                        "lon": ANDHERI["lon"]}}
@@ -115,6 +118,14 @@ class LoadDoctorsTests(unittest.TestCase):
                {**doctor(7, 1), "doctor_id": 7}, "not a record", doctor(8, 1, fee=True)]
         self.write([good, *bad])
         self.assertEqual(self.load(), [{**good, "stale": False}])
+
+    def test_a_doctor_with_no_registration_is_never_offered(self):
+        unregistered = [doctor(2, 1.0, registration={**REGISTERED, "number": None}),
+                        doctor(3, 2.0, registration={**REGISTERED, "council": " "}), doctor(5, 3.0, registration=None)]
+        listed = doctor(4, 4.0, registration={**REGISTERED, "practo_verified": False})  # offered, only listed
+        self.write([doctor(1, 1.0), *unregistered, listed, doctor(6, 8.0)])
+        found = find_nearby(self.load(), "cardiologist", ANDHERI)
+        self.assertEqual((ids(found), found["radius_km"]), (["practo:1", "practo:4", "practo:6"], 10))  # widened
 
     def test_a_missing_or_broken_list_is_an_error(self):
         with self.assertRaisesRegex(DoctorListError, "missing"):

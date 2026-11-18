@@ -18,21 +18,17 @@ from backend.tools import doctor_refresh
 from backend.tools.doctor_refresh import (
     DAILY_LIMIT_USD, FETCH_PER_SEARCH, FRESH_DAYS, RETRY_AFTER_SECONDS, WORST_COST_USD, refresh_doctors,
 )
+from backend.tools.doctor_search import load_doctors
 from backend.tools.geocode import GeocodeError
 from backend.tools.provider_import import KEY_NAME, PRICE_PER_RESULT, search_key, today_utc
 from test_doctor_search import ANDHERI, doctor
-from test_provider_import import FAKE_KEY, Apify, SlowApify, practo_row
+from test_provider_import import FAKE_KEY, Apify, SlowApify, clinic, practo_row
 
 KOREGAON_PARK = {"lat": 18.536, "lon": 73.893, "label": "Koregaon Park, Pune, Maharashtra", "city": "Pune",
                  "area": "Koregaon Park", "source": "request"}
 KEY = search_key("Pune", "Koregaon Park", "cardiologist")
 ROWS = {("Cardiologist", "female"): [practo_row(doctorId=1)], ("Cardiologist", "male"): [practo_row(doctorId=2)]}
-
-
-def stored_clinic(number, km):
-    """A stored doctor whose clinic Practo places in Andheri West, Mumbai, km north of ANDHERI."""
-    record = doctor(number, km)
-    return {**record, "clinic": {**record["clinic"], "city": "Mumbai", "locality": "Andheri West"}}
+IN_KORAMANGALA = {"lat": 12.935, "lon": 77.624, "label": "your current location", "source": "phone"}  # Bengaluru
 
 
 class RefreshTests(unittest.TestCase):
@@ -58,6 +54,10 @@ class RefreshTests(unittest.TestCase):
 
     def spent(self):
         return json.loads(self.spend.read_text(encoding="utf-8"))
+
+    def checked(self, number, km, days_old=0, **fields):
+        """A stored doctor's clinic km north of ANDHERI, checked days_old days before today."""
+        return {**doctor(number, km, **fields), "fetched_on": (self.today - timedelta(days=days_old)).isoformat()}
 
     def remember(self, days_old):
         searches = {KEY: {"city": "Pune", "locality": "Koregaon Park", "specialty": "cardiologist",
@@ -102,29 +102,51 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(self.refresh(again)["status"], "fresh")
         self.assertEqual(again.requests, [])
 
-    def test_near_me_uses_the_area_practo_gives_the_nearest_stored_clinic(self):
+    def test_enough_recent_doctors_near_the_place_mean_nothing_is_fetched_or_sent(self):
         phone = {**ANDHERI, "label": "your current location", "source": "phone"}
-        apify = Apify(ROWS)
-        result = self.refresh(apify, phone, [stored_clinic(7, 8.0), stored_clinic(8, 2.5)])
-        self.assertEqual((result["status"], result["area"]), ("fetched", "Andheri West, Mumbai"))
-        for request in apify.requests:  # the phone's coordinates never leave the machine
-            body = json.loads(request.content)
-            self.assertEqual((body["cities"], body["localities"]), (["Mumbai"], ["Andheri West"]))
-            self.assertNotIn(str(ANDHERI["lat"]), request.content.decode() + str(request.url))
-        self.area_near.assert_not_called()  # a stored clinic named it: nothing sent to name the area
-        far = Apify(ROWS)
-        self.assertEqual(self.refresh(far, phone, [stored_clinic(7, 3.5)])["status"], "no_area")
-        self.assertEqual(self.refresh(far, phone, [])["status"], "no_area")
-        self.assertEqual(far.requests, [])
-        self.assertEqual(self.area_near.call_count, 2)  # asked, and Geoapify did not know either
+        named = {**ANDHERI, "label": "Andheri West, Mumbai", "city": "Mumbai", "area": "Andheri West",
+                 "source": "request"}
+        enough = [self.checked(1, 1.0), self.checked(2, 2.0, days_old=FRESH_DAYS),
+                  self.checked(3, 4.9, gender="male")]
+        for place in (phone, named):
+            with self.subTest(place=place["source"]):
+                apify = Apify(ROWS)
+                self.assertEqual(self.refresh(apify, place, enough),
+                                 {"status": "covered", "area": None, "results": 0, "cost_usd": 0.0})
+                self.assertEqual(apify.requests, [])
+        self.area_near.assert_not_called()  # nothing sent, not even to name the area
+        not_counted = {"farther than 5 km": self.checked(3, 5.2),
+                       "another specialty": self.checked(3, 1.0, specialty="dentist"),
+                       "checked over 30 days ago": self.checked(3, 1.0, days_old=FRESH_DAYS + 1),
+                       "the same doctor's other clinic": self.checked(2, 3.0, clinic=2),
+                       "no valid date": {**self.checked(3, 1.0), "fetched_on": "soon"}}
+        for why, third in not_counted.items():
+            with self.subTest(why):
+                calls = self.area_near.call_count
+                self.assertEqual(self.refresh(Apify(ROWS), phone, [*enough[:2], third])["status"], "no_area")
+                self.assertEqual(self.area_near.call_count, calls + 1)  # went on to name the area
 
-    def test_near_me_far_from_stored_clinics_gets_the_area_name_from_geoapify(self):
-        phone = {"lat": 12.935, "lon": 77.624, "label": "your current location", "source": "phone"}  # Bengaluru
+    def test_near_me_is_not_paid_for_twice_when_practo_spells_the_area_its_own_way(self):
+        # Seen live (Decision 15): "Koramangala, Bengaluru" was fetched; the next request named the
+        # area after a fetched clinic, "Koramangala 5 Block, Bangalore", and paid again.
         self.area_near.return_value = {"city": "Bengaluru", "area": "Koramangala"}
+        there = {**clinic(601, 12.936, 77.625, 800, "Koramangala 5 Block"), "city": "Bangalore"}
+        rows = {("Cardiologist", "female"): [practo_row(doctorId=1, clinics=[there])],
+                ("Cardiologist", "male"): [practo_row(doctorId=2, clinics=[there])]}
+        self.assertEqual(self.refresh(Apify(rows), IN_KORAMANGALA)["status"], "fetched")
+        again = Apify(rows)
+        result = self.refresh(again, IN_KORAMANGALA, load_doctors(self.path))  # 2 doctors: not covered
+        self.assertEqual((result["status"], result["area"]), ("fresh", "Koramangala, Bengaluru"))
+        self.assertEqual(again.requests, [])
+
+    def test_near_me_gets_the_area_name_from_geoapify(self):
+        self.area_near.return_value = {"city": "Bengaluru", "area": "Koramangala"}
+        next_door = {**self.checked(7, 0.0), "clinic": {"lat": 12.9351, "lon": 77.6241, "city": "Bangalore",
+                                                         "locality": "Koramangala 5 Block"}}
         apify = Apify(ROWS)
-        result = self.refresh(apify, phone, [stored_clinic(7, 1.0)])  # Mumbai: far away
+        result = self.refresh(apify, IN_KORAMANGALA, [next_door])  # a stored clinic's name is not used
         self.assertEqual((result["status"], result["area"]), ("fetched", "Koramangala, Bengaluru"))
-        self.area_near.assert_called_once_with(phone)
+        self.area_near.assert_called_once_with(IN_KORAMANGALA)
         for request in apify.requests:  # Apify gets names, never coordinates
             body = json.loads(request.content)
             self.assertEqual((body["cities"], body["localities"]), (["Bengaluru"], ["Koramangala"]))
@@ -132,14 +154,14 @@ class RefreshTests(unittest.TestCase):
         self.area_near.return_value = {"city": "Bengaluru", "area": None}  # no suburb near: the whole city
         self.path.unlink()
         whole_city = Apify(ROWS)
-        self.assertEqual(self.refresh(whole_city, phone)["area"], "Bengaluru")
+        self.assertEqual(self.refresh(whole_city, IN_KORAMANGALA)["area"], "Bengaluru")
         self.assertEqual(whole_city.bodies()[0]["localities"], [])
 
-    def test_when_the_area_lookup_fails_nothing_is_fetched(self):
-        self.area_near.side_effect = GeocodeError("Area lookup failed (HTTP 503)")
+    def test_when_the_area_is_not_known_nothing_is_fetched(self):
         apify = Apify(ROWS)
-        phone = {"lat": 12.935, "lon": 77.624, "label": "your current location", "source": "phone"}
-        self.assertEqual(self.refresh(apify, phone)["status"], "no_area")
+        self.assertEqual(self.refresh(apify, IN_KORAMANGALA)["status"], "no_area")  # Geoapify knew nothing
+        self.area_near.side_effect = GeocodeError("Area lookup failed (HTTP 503)")
+        self.assertEqual(self.refresh(apify, IN_KORAMANGALA)["status"], "no_area")
         self.assertEqual(apify.requests, [])
 
     def test_a_whole_city_is_searched_without_a_neighbourhood(self):

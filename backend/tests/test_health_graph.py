@@ -14,12 +14,12 @@ from langgraph.types import Command
 
 from backend.graphs.health_graph import (
     CLARIFYING_QUESTION, GENERAL_PHYSICIAN_FIRST, HERE_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS, MAX_QUERY_CHARS,
-    CALL_QUESTION, NO_DOCTORS, OLD_DETAILS, RELAXED_NOTES, SEARCH_UNAVAILABLE, VAGUE_NEED, build_health_graph,
-    map_specialty,
+    CALL_QUESTION, NO_DOCTORS, NONE_VERIFIED, OLD_DETAILS, RELAXED_NOTES, SEARCH_UNAVAILABLE, VAGUE_NEED,
+    build_health_graph, map_specialty,
 )
 from backend.tools.doctor_search import DoctorListError
 from backend.tools.geocode import ATTRIBUTION, GeocodeError
-from test_doctor_search import doctor
+from test_doctor_search import REGISTERED, doctor
 from backend.tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES
 from backend.utils.checkpoints import make_checkpointer
 
@@ -453,6 +453,8 @@ class DoctorSearchTests(unittest.TestCase):
         self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:5"])
         self.assertIn(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES["ophthalmologist"], km=20), result["warnings"])
         self.assertIn("search_doctors:1:20km:general_physician", result["events"])
+        self.assertEqual((result["events"][-1], result["doctors"][0]["registration_level"]),
+                         ("verify:1/1", "practo_verified"))  # the general physician is checked too
 
     def test_nobody_near_says_so(self):
         result, _ = with_model("Pune mein heart doctor", reading(search_near="named_place",
@@ -461,6 +463,7 @@ class DoctorSearchTests(unittest.TestCase):
         self.assertEqual((result["status"], result["doctors"]), ("no_doctors_nearby", []))
         self.assertIn(NO_DOCTORS.format(km=20), result["warnings"])
         self.assertEqual(result["relaxed_filters"], [])
+        self.assertFalse([event for event in result["events"] if event.startswith("verify")])  # nobody to check
 
     def test_without_the_list_the_search_is_unavailable(self):
         def no_list():
@@ -471,6 +474,32 @@ class DoctorSearchTests(unittest.TestCase):
                                    current_location=IN_ANDHERI)
         self.assertEqual(result["status"], "search_unavailable")
         self.assertIn(SEARCH_UNAVAILABLE, result["warnings"])
+        self.assertFalse([event for event in result["events"] if event.startswith("verify")])
+
+    def test_each_doctor_found_gets_their_registration_level_and_note(self):
+        only_listed = {**FAKE_DOCTORS[2], "registration": {**REGISTERED, "practo_verified": False}}
+        listed = [*FAKE_DOCTORS[:2], only_listed, *FAKE_DOCTORS[3:]]
+        with patch("backend.graphs.health_graph.load_doctors", lambda: listed):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "doctors_found")
+        self.assertEqual([(d["doctor_id"], d["registration_level"]) for d in result["doctors"]],
+                         [("practo:1", "practo_verified"), ("practo:2", "practo_verified"), ("practo:3", "listed")])
+        self.assertEqual(result["doctors"][0]["registration_note"],
+                         "Registration 2004, Maharashtra Medical Council, verified by Practo. "
+                         "Not checked by us on the NMC register.")
+        self.assertIn("not marked verified by Practo", result["doctors"][2]["registration_note"])
+        self.assertEqual(result["events"][-1], "verify:2/3")
+        self.assertNotIn(NONE_VERIFIED, result["warnings"])
+
+    def test_when_no_doctor_found_is_verified_by_practo_the_answer_says_so(self):
+        listed = [{**d, "registration": {**REGISTERED, "practo_verified": False}} for d in FAKE_DOCTORS]
+        with patch("backend.graphs.health_graph.load_doctors", lambda: listed):
+            result, _ = with_model("heart doctor near me", reading(search_near="current_location"), FakePlaces(),
+                                   current_location=IN_ANDHERI)
+        self.assertEqual(result["status"], "doctors_found")  # still shown: each note says "not marked verified"
+        self.assertIn(NONE_VERIFIED, result["warnings"])
+        self.assertEqual(result["events"][-1], "verify:0/3")
 
     def test_details_checked_over_30_days_ago_come_with_a_note(self):
         checked = {"practo:2": "2026-10-10", "practo:3": "2026-10-05"}
