@@ -37,8 +37,9 @@ Details fetched more than 30 days ago are still shown, with a note that they may
 (Decision 12). Each doctor found then gets their registration level and a note (step 2e,
 tools/doctor_verify.py): verified by Practo, or only listed; not checked by us on the NMC
 register. Then a fixed formula orders them and picks the top 3 (step 2f, tools/doctor_rank.py):
-only doctors verified by Practo and not rated below 70% can be in the top 3. Explaining the
-choice comes next; this graph ends with the doctors ranked.
+only doctors verified by Practo and not rated below 70% can be in the top 3. Last, the choice is
+put in plain words (step 2g, tools/doctor_explain.py): fixed sentences filled from the data, no
+model; the graph ends with the reasons on each doctor shown and the whole reply in answer.
 """
 
 from __future__ import annotations
@@ -49,7 +50,8 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from ..tools.doctor_rank import LOW_RATING_PERCENT, rank_doctors
+from ..tools.doctor_explain import explain_doctors
+from ..tools.doctor_rank import LOW_RATING_PERCENT, TOP, rank_doctors
 from ..tools.doctor_refresh import refresh_doctors
 from ..tools.doctor_search import RADII_KM, DoctorListError, find_nearby, load_doctors
 from ..tools.doctor_verify import PRACTO_VERIFIED, registration_level, registration_note
@@ -136,7 +138,8 @@ class HealthState(TypedDict, total=False):
     location_asked: bool
     doctors: list[dict[str, Any]]  # each with distance_km (2d), registration_level and _note (2e); after rank
     #   the top first, then the rest best first, each with score, score_parts and held_back (2f)
-    top_doctors: list[dict[str, Any]]  # at most 3, best first (2f)
+    top_doctors: list[dict[str, Any]]  # at most 3, best first (2f); those shown gain reasons, labels, flags (2g)
+    answer: str  # the whole reply in plain words (2g)
     search_radius_km: int
     relaxed_filters: list[str]  # the person's wishes that had to be dropped: max_fee, doctor_gender
     doctor_fallback: str | None  # general_physician when no doctor of the specialty was near
@@ -520,6 +523,29 @@ def rank(state: HealthState) -> dict[str, Any]:
             "events": add_event(state, f"rank:{len(doctors)}:{len(top)}")}
 
 
+def explain(state: HealthState) -> dict[str, Any]:
+    """The reply in plain words (step 2g, Decision 19): fixed sentences filled from the doctors'
+    data and the ranking, no model (tools/doctor_explain.py). The notes are the fixed ones the
+    person needs (a vague need, general physician first, wishes dropped, none verified, no first
+    choice), never the model's words or the technical warnings; old details are flagged on each
+    doctor shown instead."""
+    specialty = state.get("specialty") if state.get("specialty") in SPECIALTIES else GENERAL_PHYSICIAN
+    fallback = state.get("doctor_fallback") == GENERAL_PHYSICIAN
+    top = state.get("top_doctors") or []
+    notes = [VAGUE_NEED + "."] if state.get("reason") == VAGUE_NEED else []
+    if fallback:
+        notes.append(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES[specialty], km=FAR))
+    notes += [RELAXED_NOTES[name] for name in state.get("relaxed_filters", []) if name in RELAXED_NOTES]
+    if NONE_VERIFIED in state.get("warnings", []):
+        notes.append(NONE_VERIFIED)
+    if not top:
+        notes.append(NO_TOP_CHOICE.format(percent=LOW_RATING_PERCENT))
+    explained = explain_doctors(state["doctors"], top, SPECIALTIES[GENERAL_PHYSICIAN if fallback else specialty],
+                                state["search_location"], notes, state.get("urgency"))
+    shown = len(top) or min(TOP, len(state["doctors"]))
+    return {**explained, "route": "done", "events": add_event(state, f"explain:{shown}")}
+
+
 def route_step(state: HealthState) -> str:
     return state.get("route", "stop")
 
@@ -543,6 +569,7 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_node("search_doctors", search_doctors)
     graph.add_node("verify", verify)
     graph.add_node("rank", rank)
+    graph.add_node("explain", explain)
 
     graph.add_edge(START, "validate_request")
     graph.add_conditional_edges("validate_request", route_step, {"continue": "safety_check", "stop": END})
@@ -560,6 +587,7 @@ def build_health_graph(checkpointer: Any = None):
                                                        "stop": END})
     graph.add_conditional_edges("search_doctors", route_step, {"verify": "verify", "done": END})
     graph.add_edge("verify", "rank")
-    graph.add_edge("rank", END)
+    graph.add_edge("rank", "explain")
+    graph.add_edge("explain", END)
     graph.add_conditional_edges("ask_location", route_step, {"again": "locate", "stop": END})
     return graph.compile(checkpointer=checkpointer)

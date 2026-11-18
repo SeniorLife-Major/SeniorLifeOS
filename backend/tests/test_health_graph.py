@@ -455,9 +455,12 @@ class DoctorSearchTests(unittest.TestCase):
         self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:5"])
         self.assertIn(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES["ophthalmologist"], km=20), result["warnings"])
         self.assertIn("search_doctors:1:20km:general_physician", result["events"])
-        self.assertEqual((result["events"][-2:], result["doctors"][0]["registration_level"]),
-                         (["verify:1/1", "rank:1:1"], "practo_verified"))  # the general physician is checked too
+        self.assertEqual((result["events"][-3:], result["doctors"][0]["registration_level"]),
+                         (["verify:1/1", "rank:1:1", "explain:1"], "practo_verified"))  # checked too
         self.assertEqual([d["doctor_id"] for d in result["top_doctors"]], ["practo:5"])
+        self.assertEqual(result["answer"].splitlines()[0],
+                         f"{SPECIALTIES[GENERAL_PHYSICIAN]} near {HERE_LABEL}: 1 best match")  # who is shown
+        self.assertIn(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES["ophthalmologist"], km=20), result["answer"])
 
     def test_nobody_near_says_so(self):
         result, _ = with_model("Pune mein heart doctor", reading(search_near="named_place",
@@ -503,6 +506,20 @@ class DoctorSearchTests(unittest.TestCase):
         self.assertEqual(result["status"], "doctors_found")  # still shown: each note says "not marked verified"
         self.assertIn(NONE_VERIFIED, result["warnings"])
         self.assertIn("verify:0/3", result["events"])
+        self.assertIn(NONE_VERIFIED, result["answer"])  # the person is told to check
+        self.assertIn(NO_TOP_CHOICE.format(percent=70), result["answer"])
+
+    def test_a_vague_need_is_said_in_the_reply_but_the_models_own_reason_never(self):
+        vague, _ = with_model("I need a doctor near me", reading(specialty="unsure", search_near="current_location"),
+                              FakePlaces(), current_location=IN_ANDHERI)
+        self.assertEqual(vague["specialty"], GENERAL_PHYSICIAN)
+        self.assertIn(VAGUE_NEED + ".", vague["answer"])
+        heart, _ = with_model("heart doctor near me", reading(search_near="current_location",
+                                                              reason="Model says: heart words were used"),
+                              FakePlaces(), current_location=IN_ANDHERI)
+        self.assertEqual(heart["reason"], "Model says: heart words were used")
+        self.assertNotIn("Model says", heart["answer"])
+        self.assertNotIn(VAGUE_NEED, heart["answer"])
 
     def test_the_doctors_found_are_ranked_and_the_top_3_picked(self):
         reviews = {"practo:1": {"recommend_percent": 75, "patient_stories": 40},
@@ -516,7 +533,7 @@ class DoctorSearchTests(unittest.TestCase):
         # the reviews lift the second nearest to first.
         self.assertEqual([d["doctor_id"] for d in result["top_doctors"]], ["practo:2", "practo:1", "practo:3"])
         self.assertEqual(result["doctors"], result["top_doctors"])
-        self.assertEqual(result["events"][-1], "rank:3:3")
+        self.assertIn("rank:3:3", result["events"])
         first = result["top_doctors"][0]
         self.assertEqual((first["held_back"], first["score_parts"]["fee"]["value"], first["registration_level"]),
                          (None, 2000, "practo_verified"))
@@ -541,7 +558,35 @@ class DoctorSearchTests(unittest.TestCase):
         self.assertEqual((result["status"], result["top_doctors"], len(result["doctors"])), ("doctors_found", [], 3))
         self.assertIn(NO_TOP_CHOICE.format(percent=70), result["warnings"])
         self.assertEqual({d["held_back"] for d in result["doctors"]}, {"low_rating"})
-        self.assertEqual(result["events"][-1], "rank:3:0")
+        self.assertEqual(result["events"][-2:], ["rank:3:0", "explain:3"])
+        self.assertIn("3 found, none a first choice", result["answer"])
+        self.assertIn(NO_TOP_CHOICE.format(percent=70), result["answer"])
+
+    def test_the_reply_explains_the_top_3_in_plain_words(self):
+        result, _ = with_model("heart doctor near me", reading(search_near="current_location", urgency="urgent"),
+                               FakePlaces(), current_location=IN_ANDHERI)
+        answer = result["answer"]
+        self.assertTrue(answer.startswith(f"{SPECIALTIES['cardiologist']} near {HERE_LABEL}: 3 best matches"))
+        for number, doctor in enumerate(result["top_doctors"], 1):
+            self.assertIn(f"{number}. {doctor['name']}", answer)
+            self.assertEqual(doctor["reasons"][-1], f"Fee ₹{doctor['fee']:,}")
+        self.assertIn("Call the clinic today. If it gets worse suddenly, call 108.", answer)  # the model read urgent
+        self.assertNotIn(ATTRIBUTION, answer)  # the phone's location: no place was looked up
+        self.assertEqual(result["events"][-1], "explain:3")
+        no_consent = without_model("heart doctor near me", FakePlaces(), current_location=IN_ANDHERI, use_llm=True)
+        self.assertIn("The AI model was not used: health requests need medical consent", no_consent["warnings"])
+        self.assertTrue(no_consent["answer"].startswith(f"{SPECIALTIES['cardiologist']} near {HERE_LABEL}: 3 best"))
+        self.assertNotIn("AI model", no_consent["answer"])  # technical warnings stay out of the reply
+
+    def test_a_looked_up_place_is_named_and_credited_and_dropped_wishes_are_said(self):
+        result, _ = with_model("heart doctor in Andheri West under 500 rupees",
+                               reading(search_near="named_place", preferences={"area": "Andheri West", "max_fee": 500}),
+                               FakePlaces({"Andheri West": found(ANDHERI_WEST)}))
+        answer = result["answer"]
+        self.assertIn(f" near {ANDHERI_WEST['label']}: ", answer)
+        self.assertIn(f"Place search: {ATTRIBUTION}", answer)
+        self.assertEqual(result["relaxed_filters"], ["max_fee"])  # the cheapest cardiologist asks ₹800
+        self.assertIn(RELAXED_NOTES["max_fee"], answer)
 
     def test_details_checked_over_30_days_ago_come_with_a_note(self):
         checked = {"practo:2": "2026-10-10", "practo:3": "2026-10-05"}
