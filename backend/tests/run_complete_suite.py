@@ -450,7 +450,7 @@ def section_cloud_blackout(manifest: list[dict], ocr: dict[str, list], runs: dic
     again with the real OCR: can the ID number still be read?"""
     from PIL import Image
 
-    from backend.graphs.document_graph import id_not_located
+    from backend.graphs.document_graph import has_id_number, id_not_located
     from backend.tools.ocr import read_document
     from backend.tools.ocr_postprocess import clean_page
     from backend.tools.vision_extract import safe_page_images
@@ -476,7 +476,8 @@ def section_cloud_blackout(manifest: list[dict], ocr: dict[str, list], runs: dic
             if extracted.get(key, {}).get("box"):
                 boxes.setdefault(extracted[key]["page"], []).append(extracted[key]["box"])
         try:
-            images = safe_page_images(str(DATA / entry["path"]), entry["mime_type"], local, boxes)
+            images = safe_page_images(str(DATA / entry["path"]), entry["mime_type"], local, boxes,
+                                      has_id_number(first.get("document_type") or entry["type"]))  # as the graph does
         except Exception as exc:
             section.check(False, f"{entry['path']}: blackout failed ({type(exc).__name__})")
             continue

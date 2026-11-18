@@ -229,6 +229,18 @@ With `Accept: text/event-stream` the answer is server-sent events: `step` events
 
 Kept: the request text, name and phone location only in the encrypted checkpoint while a question waits; a question not answered in 24 hours expires and that checkpoint is deleted. What the person was shown (no request text, no coordinates of the person) is kept 30 days.
 
+**Limits** (`storage/limits.py`; counts kept in the database, so every server shares them; needs the `0007` migration). Over a limit the answer is 429 `TOO_MANY_REQUESTS`, with a `Retry-After` header and `details.retryAfterSeconds`; the message says how long to wait.
+
+| What | Default | Setting (`config/application.yml`, `limits:`) |
+|---|---|---|
+| sign-in attempts per login | 5 in 15 minutes; a right password starts the count again. Unknown logins are counted too; over the limit the password is not even checked. The count is kept under a keyed hash of the login, never the login | `SIGN_IN_ATTEMPTS`, `SIGN_IN_WINDOW_MINUTES` |
+| doctor searches per account | 30 an hour (a question's answer counts too). **An emergency is never held back**: a request that shows danger signs, and the "call emergency" answer, always go through | `DOCTOR_SEARCHES_PER_HOUR` |
+| uploads per account | 20 an hour (also renewals; refused before anything is stored). Typing a document in is not counted | `UPLOADS_PER_HOUR` |
+
+Counts are per login or per account, not per address: behind nginx the server sees nginx's address for every caller.
+
+**Request IDs.** Every answer has an `X-Request-ID` header, and the envelope repeats it in `meta.requestId` (errors too, also an unexpected 500). A caller may send its own `X-Request-ID` (8 to 64 letters, digits, `.`, `_`, `-`); anything else is replaced by a new random one. Every log line shows it as `[id]` (`-` outside a request), also from doctor search's streaming worker and a background document reading, so one problem can be followed through the log. Quote it when reporting a problem.
+
 **API** (`api/documents.py`; the caller is the signed-in person. In development, a call without a token may name the caller with the `X-Actor-Id` header instead; that header is refused when `APP_ENV=production`):
 
 | Call | What it does |
@@ -364,6 +376,7 @@ The document graph uses it when the upload names a real file instead of page fix
 - **Consent:** medical pages are never sent to the cloud model, not even to work out their type, unless the state sets `medical_cloud_consent: True`. Without it, they are classified on this machine.
 - **Read by the vision model (`tools/vision_extract.py`):** with both `cloud_ocr_consent` and `medical_cloud_consent`, a scanned or photographed prescription, lab report or medical bill is read by the Groq vision model (`GROQ_API_KEY`, `SENIORLIFE_VISION_MODEL`) straight into fields, because it reads handwriting and free layouts far better than local OCR.
   - Local OCR still runs first. Every line that shows an identifier is painted black before the picture is sent: ID numbers (Aadhaar, PAN, account, policy), even one read with a wrong digit, Virtual ID and enrolment numbers, phone numbers, e-mails and ABHA health IDs. QR codes and faces are painted black too. At most 3 pages, in one request.
+  - Other codes stay visible on these pages (a lab sample ID, a bill number, a doctor's registration number): painting their line black also hid the name and dates printed beside them. Only identity cards, insurance cards and passbooks have every ID-like code painted black as well (`has_id_number` in `graphs/document_graph.py`).
   - The model's values are used, and **every one is sent to review** (it gives no confidence and can make up a plausible value, such as a wrong dose). Where local OCR read the same field differently, the flag says "the local reading differs".
   - ID numbers in its answer are masked; ID fields are always the local reading.
   - A handwritten page that local OCR reads badly is no longer sent back; a **blurry** photo still is (its ID numbers couldn't be found to black them out).
@@ -372,7 +385,7 @@ The document graph uses it when the upload names a real file instead of page fix
 
 ### Vision reading of the other types
 
-With `cloud_ocr_consent` and `GROQ_API_KEY`, a scanned or photographed identity card, certificate, insurance card or passbook is also read by the vision model, with the same blackout as above. The model is asked for the plain fields (name, dates, income, issuer, and so on), never for an ID number.
+With `cloud_ocr_consent` and `GROQ_API_KEY`, a scanned or photographed identity card, certificate, insurance card or passbook is also read by the vision model, with the same blackout as above (a certificate keeps its certificate number visible; an identity card, insurance card or passbook has every ID-like code painted black). The model is asked for the plain fields (name, dates, income, issuer, and so on), never for an ID number.
 - **ID numbers** always come from the local reading. A card whose ID number local OCR could not find is not sent (`vision_extract:id_not_located`), because there would be nothing to black out. A card that shows only a PAN number is therefore never sent unless local OCR found the PAN.
 - **Cross-check:** a model value that appears nowhere in the text read on this machine gets the flag "not found in the text read on this machine, please check carefully". Every model value is reviewed anyway.
 - **The answer** is JSON asked for in the prompt and parsed from the text reply (`fields_from_answer`); the request does not use Groq's `response_format`.
@@ -444,6 +457,8 @@ Other options:
 - `--no-db` skips the vault part. That part needs `TEST_DATABASE_URL` naming a database whose name ends in `_test`, and it empties that database.
 - `--no-unit` skips the unit tests.
 - `--live` also scores the Groq vision model and LLM. It sends the fake pages to Groq and uses the API quota.
+
+A value that differs from the expected one only in letter case counts as right (a paper printed in capitals is stored as printed; the app compares names ignoring case too). Scores from before 2026-11-19 counted it as wrong, so they are a little lower.
 
 The suite never reads `.env`, except for `TEST_DATABASE_URL` and, with `--live`, the Groq key. It uses its own test hash key and turns tracing off.
 

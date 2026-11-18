@@ -115,6 +115,16 @@ class CorsSection(BaseModel):
         return value
 
 
+class LimitsSection(BaseModel):
+    """How often one person may do something costly or guessable (fastapi-backend Phase 5).
+    Counted per login / per account in the database, so every server shares the counts."""
+
+    sign_in_attempts: int = 5  # per login, then wait until the window ends
+    sign_in_window_minutes: int = 15
+    doctor_searches_per_hour: int = 30  # new requests and answers (never an emergency)
+    uploads_per_hour: int = 20  # files read (OCR, maybe the cloud); typing in is free
+
+
 class AppConfig(BaseModel):
     app: AppSection = Field(default_factory=AppSection)
     server: ServerSection = Field(default_factory=ServerSection)
@@ -124,6 +134,7 @@ class AppConfig(BaseModel):
     actuator: ActuatorSection = Field(default_factory=ActuatorSection)
     metrics: MetricsSection = Field(default_factory=MetricsSection)
     cors: CorsSection = Field(default_factory=CorsSection)
+    limits: LimitsSection = Field(default_factory=LimitsSection)
 
 
 # Standard Python / FastAPI alias for settings

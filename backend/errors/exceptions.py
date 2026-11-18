@@ -19,12 +19,14 @@ class AppException(Exception):
         error_code: ErrorCode | str = ErrorCode.INTERNAL_SERVER_ERROR,
         status_code: int = 500,
         details: Any | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.error_code = error_code.value if isinstance(error_code, ErrorCode) else error_code
         self.status_code = status_code
         self.details = details
+        self.headers = headers  # sent with the error response (e.g. Retry-After)
 
 
 class BadRequestException(AppException):
@@ -100,6 +102,14 @@ class ValidationException(AppException):
 
 
 # Domain-Specific Exceptions
+class TooManyRequestsException(AppException):
+    """429: a limit was reached (fastapi-backend Phase 5). retry_after: seconds until it resets."""
+
+    def __init__(self, message: str, retry_after: int) -> None:
+        super().__init__(message=message, error_code=ErrorCode.TOO_MANY_REQUESTS, status_code=429,
+                         details={"retryAfterSeconds": retry_after}, headers={"Retry-After": str(retry_after)})
+
+
 class CaseNotFoundException(NotFoundException):
     def __init__(self, case_id: str) -> None:
         super().__init__(

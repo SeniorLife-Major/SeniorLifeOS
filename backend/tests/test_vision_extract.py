@@ -299,6 +299,22 @@ class GraphVisionTests(unittest.TestCase):
         self.assertTrue(fields["aadhaar_number"]["source_ref"].endswith("page:1:line:3"))  # local, not the model
         self.assertNotIn(AADHAAR, json.dumps(result, default=str))
 
+    def test_a_lab_reports_sample_id_and_a_registration_number_stay_visible_but_not_on_an_id_card(self, _):
+        # full-test-review Decision 14d: these lines held the patient's name, the dates and the doctor.
+        lab = [("Name: Meera Rao  Sample ID LAB429237", 0.9), ("Reg. No. DEMO-12345", 0.9),
+               (f"Aadhaar {AADHAAR}", 0.99), ("Ph 9876543210", 0.9)]
+        recorder = Recorder(answer({"name": "Meera Rao"}))
+        self.run_upload(recorder, pages=[ocr_page(lab)], doc_type="lab_report", **self.CONSENT)
+        sent = recorder.sent_image()
+        self.assertFalse((sent[0:30, 10:600] < 40).all())   # name and sample ID
+        self.assertFalse((sent[40:70, 10:600] < 40).all())  # registration number
+        self.assertTrue((sent[80:110, 10:600] < 40).all())  # Aadhaar, on every type
+        self.assertTrue((sent[120:150, 10:600] < 40).all())  # phone, on every type
+        card = [("Meera Rao", 0.99), ("DOB: 17/09/1950", 0.99), (AADHAAR, 0.99), ("Card No. DEMO-12345", 0.9)]
+        recorder = Recorder(answer({"name": "Meera Rao", "date_of_birth": "17/09/1950"}))
+        self.run_upload(recorder, pages=[ocr_page(card)], doc_type="identity", cloud_ocr_consent=True)
+        self.assertTrue((recorder.sent_image()[120:150, 10:600] < 40).all())  # any ID-like code on an ID card
+
     def test_no_key_or_a_failure_keeps_the_local_reading_and_asks_once(self, _):
         cases = ((Recorder(answer(PRESCRIPTION)), None, "vision_extract:no_key",
                   "Vision reading skipped: GROQ_API_KEY is not set"),

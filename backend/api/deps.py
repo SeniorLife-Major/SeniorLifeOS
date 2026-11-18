@@ -90,7 +90,9 @@ def build_account_service() -> Any:
 
     sessions = database_sessions()
     needs_table(sessions, "users", "account")
-    return AccountService(sessions)
+    needs_table(sessions, "request_counts", "sign-in limit")
+    config = get_config()
+    return AccountService(sessions, config.limits, key_secret=config.security.token_secret)
 
 
 def get_health_service() -> Any:
@@ -105,6 +107,7 @@ def build_health_service() -> Any:
 
     sessions = database_sessions()
     needs_table(sessions, "graph_runs", "doctor search")
+    needs_table(sessions, "request_counts", "doctor search limit")
     try:
         checkpointer = make_postgres_checkpointer(with_driver(database_url(), ""))
     except CheckpointKeyError as exc:
@@ -112,7 +115,7 @@ def build_health_service() -> Any:
     except Exception as exc:
         logger.error("Doctor search storage could not start: %s", type(exc).__name__)
         raise StorageUnavailable("The doctor search database can't be reached") from None
-    return HealthService(sessions, checkpointer)
+    return HealthService(sessions, checkpointer, get_config().limits)
 
 
 def account_lookup() -> Callable[[], Any]:

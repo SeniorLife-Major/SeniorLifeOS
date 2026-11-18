@@ -167,11 +167,25 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
     return safe, mapping
 
 
-def shows_identifier(text: str) -> bool:
+def shows_identifier(text: str, generic_codes: bool = True) -> bool:
     """True if this text (one OCR line) must not be seen by a cloud service: anything redact()
     would hide (an ID number even if misread, a phone number, an e-mail, an ID-like code) or the
-    label of a Virtual ID / enrolment number. Used to paint lines black before a picture is sent."""
-    return bool(redact(text)[1]) or bool(ID_LABEL_PATTERN.search(text))
+    label of a Virtual ID / enrolment number. Used to paint lines black before a picture is sent.
+
+    generic_codes=False is for a page whose type carries no ID number (a lab report, a
+    prescription, a bill, a certificate): a plain long number or a code such as a lab sample ID
+    (LAB429237) or a doctor's registration number (DEMO-12345) stays visible, because painting
+    its line black also hid the name and dates printed on it (full-test-review Decision 14d).
+    Still hidden there: an Aadhaar-shaped number (even misread), a Virtual ID, a PAN, a phone
+    number, an e-mail, an account or policy number after its label, and the Virtual ID /
+    enrolment labels: never more than generic_codes=True hides."""
+    if ID_LABEL_PATTERN.search(text):
+        return True
+    if generic_codes:
+        return bool(redact(text)[1])
+    return (any(pattern.search(text) for pattern in (VID_PATTERN, AADHAAR_PATTERN, PHONE_PATTERN, EMAIL_PATTERN,
+                                                     ACCOUNT_PATTERN, POLICY_PATTERN))
+            or any(is_valid_pan(match.group(0)) for match in PAN_PATTERN.finditer(text)))
 
 
 def mask_identifier(field: str, value: str) -> str:

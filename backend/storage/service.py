@@ -42,7 +42,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from ..errors import AppException, DocumentNotFoundException, NotFoundException, ValidationException
-from ..errors.exceptions import ConflictException
+from ..common.request_id import in_this_request
+from ..core.config import LimitsSection
+from ..errors.exceptions import ConflictException, TooManyRequestsException
 from ..errors.error_codes import ErrorCode
 from ..graphs.document_graph import (
     ALLOWED_MIME_TYPES,
@@ -56,6 +58,7 @@ from ..tools.document_rules import DOCUMENT_TYPES, PROOFS, match_proofs, match_r
 from ..utils.checkpoints import forget_run
 from ..utils.privacy import mask_ids_in_text
 from .files import EncryptedFileStore, StoredFileError
+from .limits import count, wait_words
 from .models import Document, DocumentVersion, IdentifierHash, WorkflowRun
 from .repository import (
     audit,
@@ -127,10 +130,12 @@ class ReaderBusy(AppException):
 
 
 class DocumentService:
-    def __init__(self, sessions: sessionmaker, files: EncryptedFileStore, checkpointer: Any):
+    def __init__(self, sessions: sessionmaker, files: EncryptedFileStore, checkpointer: Any,
+                 limits: LimitsSection | None = None):
         self.sessions = sessions
         self.files = files
         self.checkpointer = checkpointer
+        self.limits = limits or LimitsSection()
         self.graph = build_document_graph(checkpointer=checkpointer)  # refuses an unencrypted one
         # Typed-in documents never pause (typing in is the owner's confirmation), so nothing is
         # checkpointed: the typed values exist only in memory for one call.
@@ -171,6 +176,11 @@ class DocumentService:
             raise ValidationException("Only PDF, PNG and JPEG files can be uploaded")
         if not 0 < len(data) <= MAX_UPLOAD_BYTES:
             raise ValidationException("File must be between 1 byte and 5 MB")
+        with self.sessions.begin() as session:  # limits.uploads_per_hour per person, before anything is stored
+            wait = count(session, f"upload:{owner_id}", self.limits.uploads_per_hour, timedelta(hours=1))
+        if wait is not None:
+            raise TooManyRequestsException(
+                f"Many documents were added in the last hour. Please wait {wait_words(wait)} and try again.", wait)
         self._tidy()
         if background and not self._slots.acquire(blocking=False):
             raise ReaderBusy()  # before anything is stored
@@ -187,8 +197,8 @@ class DocumentService:
             return self._read(owner_id, document_id, run_id, storage_key, suffix, state)
         try:
             started = self.get(owner_id, document_id)  # before a reader can change it: always "processing"
-            self.background.submit(self._read_in_background, owner_id, document_id, run_id, storage_key, suffix,
-                                   state)
+            self.background.submit(in_this_request(self._read_in_background, owner_id, document_id, run_id,
+                                                   storage_key, suffix, state))  # logs keep the upload's ID
         except Exception as exc:  # the database, or the reader pool (the server is shutting down)
             self._slots.release()
             self._record_failure(owner_id, document_id, run_id, exc)

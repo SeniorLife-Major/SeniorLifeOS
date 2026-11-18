@@ -27,15 +27,19 @@ from backend.graphs.document_graph import build_document_graph
 from pyctuator.environment.scrubber import SecretScrubber, default_keys_to_scrub
 from pyctuator.pyctuator import Pyctuator
 
+from backend.common.request_id import RequestIdLogFilter, RequestIdMiddleware
+
 import re
 import sys
 from uvicorn.logging import ColourizedFormatter
 
-# Configure aligned, colourized logging matching Uvicorn / FastAPI server logs
+# Configure aligned, colourized logging matching Uvicorn / FastAPI server logs; each line shows
+# its request's ID ("-" outside a request), the same as the X-Request-ID header.
 _log_handler = logging.StreamHandler(sys.stdout)
 _log_handler.setFormatter(
-    ColourizedFormatter(fmt="%(levelprefix)s %(message)s", use_colors=True)
+    ColourizedFormatter(fmt="%(levelprefix)s [%(request_id)s] %(message)s", use_colors=True)
 )
+_log_handler.addFilter(RequestIdLogFilter())
 logging.root.handlers = [_log_handler]
 logging.root.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,6 +69,7 @@ def install_cors(target: FastAPI, app_config: Any) -> None:
 
 
 install_cors(app, config)
+app.add_middleware(RequestIdMiddleware)  # added last, so it is outside CORS: every answer has the ID
 
 # 2. Register Global Error Handler (@ControllerAdvice)
 register_global_error_handlers(app)

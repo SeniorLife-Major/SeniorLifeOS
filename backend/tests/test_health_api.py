@@ -12,6 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from backend.core.config import LimitsSection
 from backend.api import deps, health_requests
 from backend.api.deps import StorageUnavailable
 from backend.storage.health_service import HealthService
@@ -236,7 +237,8 @@ class ServiceSetupTests(DatabaseCase):
                         patch("backend.storage.settings.find_env_file", return_value=None),
                         patch("backend.utils.checkpoints.find_env_file", return_value=None),
                         patch("backend.api.deps.get_config", return_value=SimpleNamespace(
-                            database=SimpleNamespace(pool_size=2, max_overflow=0, echo=False)))):
+                            database=SimpleNamespace(pool_size=2, max_overflow=0, echo=False),
+                            security=SimpleNamespace(token_secret="s" * 32), limits=LimitsSection()))):
             patcher.start()
             self.addCleanup(patcher.stop)
 

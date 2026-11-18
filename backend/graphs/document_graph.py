@@ -560,7 +560,7 @@ def vision_extract(state: DocumentState) -> dict[str, Any]:
             boxes.setdefault(local[field]["page"], []).append(local[field]["box"])
     try:  # more than 3 pages is refused before anything is sent
         found = extract_with_vision(document["file_path"], document["mime_type"], document["pages"], boxes,
-                                    state["document_type"], key)
+                                    state["document_type"], key, generic_codes=has_id_number(state["document_type"]))
     except (CloudOcrError, OcrError) as exc:
         return local_only(f"Vision reading unavailable ({exc})", "vision_extract:failed")
     fields = {name: dict(item) for name, item in local.items()}
@@ -697,6 +697,13 @@ ID_FIELD_OF_TYPE = {"identity": "aadhaar_number", "health_insurance": "policy_nu
                     "bank_passbook": "account_number"}
 
 
+def has_id_number(document_type: str) -> bool:
+    """Identity, insurance and passbook pages: before they are sent, every ID-like code is painted
+    black too. Other types keep lab sample IDs and registration numbers visible (full-test-review
+    Decision 14d); Aadhaar, VID, PAN, phone and e-mail are painted black on every type."""
+    return document_type in ID_FIELD_OF_TYPE
+
+
 def id_not_located(document_type: str, fields: dict[str, Any]) -> bool:
     """True if the document should carry an ID number but local OCR didn't locate it. A card
     without that number (e.g. a PAN card as identity) is then not sent either: safer, less help."""
@@ -732,7 +739,7 @@ def cloud_ocr(state: DocumentState) -> dict[str, Any]:
             boxes.setdefault(local[field]["page"], []).append(local[field]["box"])
     try:
         pages = read_document_in_cloud(document["file_path"], document["mime_type"], document["pages"], boxes, key,
-                                       engine=engine)
+                                       engine=engine, generic_codes=has_id_number(state["document_type"]))
     except (CloudOcrError, OcrError) as exc:
         return {**done, "warnings": [*warnings, f"Cloud OCR unavailable ({exc})"],
                 "events": add_event(state, "cloud_ocr:failed")}

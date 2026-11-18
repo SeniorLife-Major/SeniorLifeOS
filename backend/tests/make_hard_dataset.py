@@ -783,13 +783,20 @@ LIST_COMPARE = {"tests": ("name", "value", "unit", "ref_range"),
                 "items": ("description", "amount")}
 
 
+def same_text(got: Any, want: Any) -> bool:
+    """Letter case alone is not a reading error: a paper printed in capitals is stored as printed
+    (full-test-review Decision 14d; the app's own name check ignores case too)."""
+    if isinstance(got, str) and isinstance(want, str):
+        return got.casefold() == want.casefold()
+    return got == want
+
+
 def same_value(key: str, got: Any, want: Any) -> bool:
     if key in LIST_COMPARE:
         columns = LIST_COMPARE[key]
         return (isinstance(got, list) and len(got) == len(want)
-                and all(tuple(g.get(c) for c in columns) == tuple(w.get(c) for c in columns)
-                        for g, w in zip(got, want)))
-    return got is not None and got == want
+                and all(all(same_text(g.get(c), w.get(c)) for c in columns) for g, w in zip(got, want)))
+    return got is not None and same_text(got, want)
 
 
 def score_page(entry: dict[str, Any], page: dict[str, Any], use_llm: bool = False) -> dict[str, Any]:

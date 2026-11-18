@@ -206,6 +206,18 @@ class Profile(Base):
     user: Mapped[User] = relationship(back_populates="profile")
 
 
+class RequestCount(Base):
+    """How many times something was done in the current window (fastapi-backend Phase 5,
+    storage/limits.py). key: what and whose, e.g. "upload:<user id>", or "sign-in:" + a keyed
+    hash of the login (never the login itself)."""
+
+    __tablename__ = "request_counts"
+
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    count: Mapped[int] = mapped_column(Integer, default=1)
+
+
 class GraphRun(Base):
     """One run of a graph other than the document graph: doctor search ("health") now, benefits
     later (fastapi-backend Phase 2). Its id is the LangGraph thread id of the encrypted checkpoint,

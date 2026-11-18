@@ -330,6 +330,14 @@ class BlackoutTests(unittest.TestCase):
         self.assertEqual(boxes, [[10, 40 * i, 600, 40 * i + 30] for i in (1, 2, 3, 4, 5)])
 
 
+    def test_on_a_type_without_an_id_number_codes_stay_but_real_identifiers_go(self):
+        lines = [("Meera Rao  Sample ID LAB429237", 0.9), ("Reg. No. DEMO-12345", 0.9), (AADHAAR, 0.9),
+                 ("Mobile 9876543210", 0.9), ("VID: 9134 5G78 9O12 3456", 0.6)]
+        boxes = [[10, 40 * i, 600, 40 * i + 30] for i in range(5)]
+        self.assertEqual(id_boxes(ocr_page(lines), generic_codes=False), boxes[2:])
+        self.assertEqual(id_boxes(ocr_page(lines)), boxes)  # identity, insurance, passbook
+
+
 class FaceTests(unittest.TestCase):
     def test_no_face_is_found_on_a_page_of_text(self):
         ensure_fixtures()
@@ -493,6 +501,20 @@ class GraphCloudOcrTests(unittest.TestCase):
         self.assertEqual(len(recorder.requests), 1)
         self.assertNotIn("cloud_ocr:id_not_located", result["events"])
         self.assertTrue((recorder.sent_image()[80:110, 10:600] == 0).all())  # the Aadhaar line
+
+    def test_a_certificate_number_stays_visible_but_not_on_an_id_card(self, _):
+        # full-test-review Decision 14d: codes are painted black only on identity, insurance and passbook pages.
+        self.LOCAL = [("Name: Meera Ra0", 0.62), ("Certificate No. INC/2026/48213", 0.99),
+                      (f"Aadhaar: {AADHAAR}", 0.99)]
+        recorder = Recorder(vision_answer(self.CLOUD))
+        self.run_upload(recorder, cloud_ocr_consent=True)
+        sent = recorder.sent_image()
+        self.assertFalse((sent[40:70, 10:600] == 0).all())  # the certificate number
+        self.assertTrue((sent[80:110, 10:600] == 0).all())  # the Aadhaar line, on every type
+        self.LOCAL = [("Name: Meera Ra0", 0.62), ("Card No. DEMO-12345", 0.99), (f"Aadhaar: {AADHAAR}", 0.99)]
+        recorder = Recorder(vision_answer(self.CLOUD))
+        self.run_upload(recorder, doc_type="identity", cloud_ocr_consent=True)
+        self.assertTrue((recorder.sent_image()[40:70, 10:600] == 0).all())
 
     def test_cloud_is_asked_only_once(self, _):
         recorder = Recorder(vision_answer([("Name: Meera Ra0", 0.5, 0)]))  # the cloud is unsure too

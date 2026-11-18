@@ -14,6 +14,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ..common.request_id import HEADER as REQUEST_ID_HEADER
+from ..common.request_id import request_id
 from ..common.schemas.response import ApiErrorResponse
 from ..core.config import get_config
 from .error_codes import ErrorCode
@@ -59,6 +61,7 @@ def register_global_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=response_data.model_dump(by_alias=True, mode="json"),
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -113,7 +116,10 @@ def register_global_error_handlers(app: FastAPI) -> None:
             request_uri=request.url.path,
             version=config.app.version,
         )
+        # This handler runs outside the request-ID middleware, so it sends the header itself.
+        this_id = request_id()
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=response_data.model_dump(by_alias=True, mode="json"),
+            headers={REQUEST_ID_HEADER: this_id} if this_id else None,
         )

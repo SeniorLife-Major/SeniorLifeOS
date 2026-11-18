@@ -174,7 +174,7 @@ def build_service() -> Any:
         url = database_url()
         files = EncryptedFileStore(storage_dir(), storage_key())
         engine = make_engine(url, pool_size=pool.pool_size, max_overflow=pool.max_overflow, echo=pool.echo)
-        if not inspect(engine).has_table("documents"):
+        if not all(inspect(engine).has_table(table) for table in ("documents", "request_counts")):
             engine.dispose()
             raise StorageUnavailable("The document tables are missing; run: alembic -c backend/alembic.ini upgrade head")
         checkpointer = make_postgres_checkpointer(with_driver(url, ""))
@@ -185,7 +185,7 @@ def build_service() -> Any:
     except Exception as exc:
         logger.error("Document storage could not start: %s", type(exc).__name__)
         raise StorageUnavailable("The document database can't be reached") from None
-    return DocumentService(make_sessions(engine), files, checkpointer)
+    return DocumentService(make_sessions(engine), files, checkpointer, get_config().limits)
 
 
 async def upload_body(request: Request) -> bytes:

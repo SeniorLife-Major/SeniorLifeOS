@@ -181,24 +181,26 @@ def fields_from_answer(answer: str, document_type: str) -> dict[str, Any]:
 
 
 def safe_page_images(path: str, mime_type: str, local_pages: list[dict[str, Any]],
-                     id_field_boxes: dict[int, list[list[int]]]) -> list[np.ndarray]:
-    """Every page with identifiers (ID numbers, phone, e-mail, health IDs), QR codes and faces painted black."""
+                     id_field_boxes: dict[int, list[list[int]]], generic_codes: bool = True) -> list[np.ndarray]:
+    """Every page with identifiers (ID numbers, phone, e-mail, health IDs), QR codes and faces painted
+    black. generic_codes=False keeps lab sample IDs and registration numbers (privacy.shows_identifier)."""
     images = []
     for local, image in zip(local_pages, page_images(path, mime_type)):
-        boxes = id_boxes(local, id_field_boxes.get(local["page"], [])) + health_id_boxes(local)
+        boxes = id_boxes(local, id_field_boxes.get(local["page"], []), generic_codes) + health_id_boxes(local)
         images.append(black_out(image, boxes + qr_boxes(image) + face_boxes(image)))
     return images
 
 
 def extract_with_vision(path: str, mime_type: str, local_pages: list[dict[str, Any]],
                         id_field_boxes: dict[int, list[list[int]]], document_type: str, api_key: str,
-                        client: httpx.Client | None = None, model: str | None = None) -> dict[str, Any]:
+                        client: httpx.Client | None = None, model: str | None = None,
+                        generic_codes: bool = True) -> dict[str, Any]:
     if document_type not in SHAPES:
         raise CloudOcrError("The vision model does not read this document type")
     if len(local_pages) > MAX_PAGES:
         raise CloudOcrError(f"more than {MAX_PAGES} pages")
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt_for(document_type)}]
-    for image in safe_page_images(path, mime_type, local_pages, id_field_boxes):
+    for image in safe_page_images(path, mime_type, local_pages, id_field_boxes, generic_codes):
         buffer = io.BytesIO()
         _shrink(image).convert("RGB").save(buffer, format="JPEG", quality=90)
         picture = base64.b64encode(buffer.getvalue()).decode("ascii")

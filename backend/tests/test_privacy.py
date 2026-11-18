@@ -89,6 +89,25 @@ class ShowsIdentifierTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(shows_identifier(text))
 
+    def test_on_a_type_without_an_id_number_only_real_identifiers_are_hidden(self):
+        # full-test-review Decision 14d: on a lab report or prescription, painting a sample ID or a
+        # doctor's registration number black also hid the name, dates and doctor on that line.
+        aadhaar = fake_aadhaar(3)
+        wrong_digit = aadhaar[:-1] + str((int(aadhaar[-1]) + 1) % 10)
+        codes = ("Name: Meera Rao  Date: 12/03/2026  Sample ID LAB429237", "Reg. No. DEMO-12345", "UHID 4402817731")
+        for text in codes:
+            with self.subTest(text=text):
+                self.assertFalse(shows_identifier(text, generic_codes=False))
+                self.assertTrue(shows_identifier(text))  # an identity, insurance or passbook page hides them
+        for text in (aadhaar, f"Aadhaar: {aadhaar}", wrong_digit, "VID 9134 5678 9012 3456", "Virtual ID",
+                     "Enrolment No.: 1234/56789/01234", "Ph 9876543210", "a@b.in", "PAN HAVPC1814K",
+                     "A/c No: 123456789012", "Policy No: HLT/2024/288382", "Sample ID LAB429237  Ph 9876543210"):
+            with self.subTest(text=text):
+                self.assertTrue(shows_identifier(text, generic_codes=False))
+        for text in ("Kavita Sharma", "DOB: 06/10/1958", "IFSC: SBIN0001234", "Haemoglobin 12.1 g/dL 12-15"):
+            with self.subTest(text=text):
+                self.assertFalse(shows_identifier(text, generic_codes=False))
+
     def test_a_virtual_id_is_hidden_whole_in_prompts(self):
         self.assertEqual(redact("VID 9134 5678 9012 3456")[0], "VID [ID_1]")
 

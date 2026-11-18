@@ -9,7 +9,7 @@ was switched on or off), never the login, the password, the name or the place.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -17,10 +17,12 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+from ..core.config import LimitsSection
 from ..core.security import burn_password_check, hash_password, verify_password
 from ..errors import AppException, ForbiddenException, NotFoundException, ValidationException
 from ..errors.error_codes import ErrorCode
-from ..errors.exceptions import ConflictException
+from ..errors.exceptions import ConflictException, TooManyRequestsException
+from .limits import clear, count, sign_in_key, wait_words
 from .models import Profile, User
 from .repository import audit
 
@@ -98,8 +100,11 @@ def profile_view(profile: Profile) -> dict[str, Any]:
 
 
 class AccountService:
-    def __init__(self, sessions: sessionmaker):
+    def __init__(self, sessions: sessionmaker, limits: LimitsSection | None = None, key_secret: str = ""):
+        """key_secret: keys the hash under which sign-in attempts are counted (the token secret)."""
         self.sessions = sessions
+        self.limits = limits or LimitsSection()
+        self.key_secret = key_secret
 
     # ---- accounts ----------------------------------------------------------------------------
 
@@ -121,12 +126,22 @@ class AccountService:
 
     def sign_in(self, login: str, password: str) -> dict[str, Any]:
         """The user (with token_version, for the token) if the password is right. A login that
-        matches no account takes as long as a wrong password, and gives the same answer."""
+        matches no account takes as long as a wrong password, and gives the same answer.
+        Attempts on one login are limited (limits.sign_in_attempts per window), whether or not it
+        has an account, so the limit doesn't tell which logins exist; a right password resets it.
+        Over the limit, the password isn't checked at all."""
         try:
             normalized = normalize_login(login)
         except ValidationException:
             burn_password_check(password)
             raise InvalidCredentials() from None
+        key = sign_in_key(normalized, self.key_secret)
+        with self.sessions.begin() as session:  # its own transaction: the attempt stays counted if it fails
+            wait = count(session, key, self.limits.sign_in_attempts,
+                         timedelta(minutes=self.limits.sign_in_window_minutes))
+        if wait is not None:
+            raise TooManyRequestsException(
+                f"Too many sign-in attempts. Please wait {wait_words(wait)} and try again.", wait)
         with self.sessions.begin() as session:
             user = session.execute(select(User).where(User.login == normalized)).scalar_one_or_none()
             if user is None:
@@ -138,6 +153,8 @@ class AccountService:
             elif not user.disabled:
                 user.last_login_at = now()
                 audit(session, user.id, "account.signed_in", None)
+            if right:
+                clear(session, key)  # the right password: counting starts again
             signed_in = {**user_view(user), "token_version": user.token_version}
             disabled = user.disabled
         if not right:

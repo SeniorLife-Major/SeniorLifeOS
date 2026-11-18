@@ -31,14 +31,17 @@ from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..errors import NotFoundException, ValidationException
-from ..errors.exceptions import ConflictException
+from ..core.config import LimitsSection
+from ..errors.exceptions import ConflictException, TooManyRequestsException
 from ..graphs.health_graph import (
     GENERAL_PHYSICIAN_FIRST, LOCATION_NOT_FOUND, NO_DOCTORS, NO_TOP_CHOICE, NONE_VERIFIED, NOT_HANDLED, OLD_DETAILS,
     RELAXED_NOTES, SEARCH_UNAVAILABLE, build_health_graph,
 )
 from ..tools.doctor_rank import TOP
+from ..tools.red_flags import find_red_flags
 from ..tools.specialties import SPECIALTIES
 from ..utils.checkpoints import forget_run
+from .limits import count, wait_words
 from .models import GraphRun
 from .repository import audit
 from .service import WorkflowFailed, run_config
@@ -160,9 +163,10 @@ def claim_graph_run(session: Session, run_id: str, from_status: str, **values: A
 
 
 class HealthService:
-    def __init__(self, sessions: sessionmaker, checkpointer: Any):
+    def __init__(self, sessions: sessionmaker, checkpointer: Any, limits: LimitsSection | None = None):
         self.sessions = sessions
         self.checkpointer = checkpointer
+        self.limits = limits or LimitsSection()
         self.graph = build_health_graph(checkpointer=checkpointer)  # refuses an unencrypted one
 
     # ---- asking ------------------------------------------------------------------------------
@@ -172,6 +176,7 @@ class HealthService:
               medical_cloud_consent: bool = False, owner_name: str | None = None) -> Iterator[tuple[str, dict[str, Any]]]:
         """owner_name is hidden from the model's prompt; current_location is the phone's (lat, lon);
         home_location the home saved in the profile, used only when the person means home."""
+        self._count_search(owner_id, emergency=bool(find_red_flags(query)))
         self.purge_expired()
         run_id = str(uuid4())
         with self.sessions.begin() as session:
@@ -189,6 +194,7 @@ class HealthService:
     def answer(self, owner_id: str, run_id: str, kind: str, value: Any) -> Iterator[tuple[str, dict[str, Any]]]:
         """kind: call_emergency (value True or False), clarification (text) or location (text, or
         {"lat", "lon"}); it must be the one the waiting question asks for."""
+        self._count_search(owner_id, emergency=kind == "call_emergency")
         self.purge_expired()
         with self.sessions.begin() as session:
             run = self._owned(session, owner_id, run_id)
@@ -205,6 +211,19 @@ class HealthService:
             audit(session, owner_id, "health.answered", None, run_id=run_id, kind=kind)
         resume = {"call_emergency": value} if kind == "call_emergency" else value
         return self._steps(owner_id, run_id, Command(resume=resume))
+
+    def _count_search(self, owner_id: str, emergency: bool) -> None:
+        """limits.doctor_searches_per_hour per person (requests and answers: each may use the AI
+        model, place lookups and a doctor-list refresh). An emergency is never refused: a request
+        the fixed rules see as one (no model, no network) and the answer to "call emergency?"
+        always go through, and the refusal itself says to call 112."""
+        with self.sessions.begin() as session:
+            wait = count(session, f"doctor-search:{owner_id}", self.limits.doctor_searches_per_hour,
+                         timedelta(hours=1))
+        if wait is not None and not emergency:
+            raise TooManyRequestsException(
+                f"You have asked many times in the last hour. Please wait {wait_words(wait)} and try again. "
+                "In an emergency, call 112 or 108 now.", wait)
 
     def _steps(self, owner_id: str, run_id: str, graph_input: Any) -> Iterator[tuple[str, dict[str, Any]]]:
         config = run_config(run_id)

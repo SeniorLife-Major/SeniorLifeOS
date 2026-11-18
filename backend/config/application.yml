@@ -45,3 +45,11 @@ actuator:
 cors:
   allowed_origins: "${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}"
 
+
+# How often one person may do something costly or guessable; more answer 429 with Retry-After.
+# Counted per login / per account in the database (all servers share the counts).
+limits:
+  sign_in_attempts: ${SIGN_IN_ATTEMPTS:5}  # per login, within the window; a right password resets
+  sign_in_window_minutes: ${SIGN_IN_WINDOW_MINUTES:15}
+  doctor_searches_per_hour: ${DOCTOR_SEARCHES_PER_HOUR:30}  # requests + answers; an emergency always goes through
+  uploads_per_hour: ${UPLOADS_PER_HOUR:20}  # uploaded files read; typing in is not counted

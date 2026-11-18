@@ -171,9 +171,10 @@ class ScorePageTests(unittest.TestCase):
                                                   "Haemoglobin 11.2 g/dL 12.0 - 15.5"}
         result = hard.score_page(self.entry, page)
         self.assertEqual(result["read"], {"name": True, "issue_date": True, "annual_income": True})
-        # Name is read but keeps OCR's capitals (not the stored value); "Date" alone is not a
-        # known label. "Rs. 2,66,000/-" is understood since step 7c-3.
-        self.assertEqual(result["parsed"], {"name": False, "issue_date": False, "annual_income": True})
+        # The name keeps the paper's capitals, which counts as right (letter case alone is not a
+        # reading error, full-test-review 14d); "Date" alone is not a known label. "Rs. 2,66,000/-"
+        # is understood since step 7c-3.
+        self.assertEqual(result["parsed"], {"name": True, "issue_date": False, "annual_income": True})
         self.assertEqual(result["rows_ok"], 1)
 
     def test_parser_friendly_text_counts_as_parsed(self):
@@ -218,6 +219,15 @@ class ScorePageTests(unittest.TestCase):
         self.assertFalse(hard.same_value("tests", got + got, want))
         self.assertFalse(hard.same_value("tests", None, want))
         self.assertFalse(hard.same_value("name", None, None))
+
+    def test_letter_case_alone_is_not_a_reading_error(self):
+        self.assertTrue(hard.same_value("bank_name", "DEMO CO-OPERATIVE BANK LTD.", "Demo Co-operative Bank Ltd."))
+        self.assertFalse(hard.same_value("bank_name", "DEMO CO-OPERATIVE BANK", "Demo Co-operative Bank Ltd."))
+        self.assertFalse(hard.same_value("name", "Meera Rao", "Meera Rao "))  # only letter case is let go
+        want = [{"name": "Tab Metformin", "strength": "500 mg", "frequency": "1-0-1", "duration": "30 days"}]
+        self.assertTrue(hard.same_value("medicines", [{**want[0], "name": "TAB METFORMIN"}], want))
+        self.assertFalse(hard.same_value("medicines", [{**want[0], "strength": "50 mg"}], want))
+        self.assertFalse(hard.same_value("sum_insured", 500000, "500000"))  # a number is not text
 
     def test_value_split_across_lines_is_not_counted(self):
         page = {"page": 1, "quality": 1.0, "text": "Name: Meera\nRao"}

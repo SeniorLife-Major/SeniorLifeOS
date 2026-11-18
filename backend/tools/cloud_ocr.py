@@ -90,12 +90,14 @@ def engine_label(engine_id: str) -> str:
     return next((label for page_engine, label, _ in ENGINES.values() if page_engine == engine_id), engine_id)
 
 
-def id_boxes(page: dict[str, Any], extra_boxes: list[list[int]] | None = None) -> list[list[int]]:
+def id_boxes(page: dict[str, Any], extra_boxes: list[list[int]] | None = None,
+             generic_codes: bool = True) -> list[list[int]]:
     """Boxes of OCR lines that show an identifier, plus boxes of ID fields found locally. A line
     counts if anything on it looks like an ID, even a number OCR misread (wrong check digit), so a
-    worn card's number is not sent just because it was read with one wrong digit."""
+    worn card's number is not sent just because it was read with one wrong digit.
+    generic_codes=False for a type that carries no ID number: see privacy.shows_identifier."""
     boxes = [line["box"] for line in page.get("lines", [])
-             if line.get("box") and shows_identifier(line["text"])]
+             if line.get("box") and shows_identifier(line["text"], generic_codes)]
     return boxes + [box for box in (extra_boxes or []) if box]
 
 
@@ -310,7 +312,8 @@ def read_with_groq_vision(image: np.ndarray, api_key: str, client: httpx.Client 
 
 def read_document_in_cloud(path: str, mime_type: str, local_pages: list[dict[str, Any]],
                            id_field_boxes: dict[int, list[list[int]]], api_key: str,
-                           client: httpx.Client | None = None, engine: str = "google") -> list[dict[str, Any]]:
+                           client: httpx.Client | None = None, engine: str = "google",
+                           generic_codes: bool = True) -> list[dict[str, Any]]:
     """Read every scanned page again in the cloud, with ID regions blacked out first.
 
     Pages whose text was stored in a PDF (exact already) are skipped. id_field_boxes maps a
@@ -320,8 +323,8 @@ def read_document_in_cloud(path: str, mime_type: str, local_pages: list[dict[str
     for local, image in zip(local_pages, page_images(path, mime_type)):
         if local.get("engine") == "pdf_text":
             continue
-        safe = black_out(image, id_boxes(local, id_field_boxes.get(local["page"], [])) + qr_boxes(image)
-                         + face_boxes(image))
+        safe = black_out(image, id_boxes(local, id_field_boxes.get(local["page"], []), generic_codes)
+                         + qr_boxes(image) + face_boxes(image))
         if engine == "groq":
             lines = read_with_groq_vision(safe, api_key, client)
         else:

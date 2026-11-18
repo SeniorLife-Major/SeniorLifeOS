@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import Field, StrictBool, model_validator
 
 from backend.api.deps import Actor, get_account_service, get_health_service
+from backend.common.request_id import in_this_request
 from backend.common.schemas import ApiResponse, CamelModel
 from backend.core.config import get_config
 from backend.errors import AppException
@@ -208,7 +209,7 @@ def stream(events: Iterator[tuple[str, dict[str, Any]]]) -> Iterator[str]:
         finally:
             queue.put(None)
 
-    _runner.submit(work)
+    _runner.submit(in_this_request(work))  # its log lines keep the request's ID
     while (text := queue.get()) is not None:
         yield text
 

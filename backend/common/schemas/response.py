@@ -14,6 +14,8 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from ..request_id import request_id as current_request_id  # the of() methods take a request_id argument
+
 T = TypeVar("T")
 
 
@@ -36,7 +38,7 @@ class MetaResponse(CamelModel):
         description="UTC timestamp of the server response",
     )
     request_id: str | None = Field(
-        default=None,
+        default_factory=current_request_id,  # this request's ID (common/request_id.py), also in X-Request-ID
         description="Trace/Request correlation ID",
     )
 
@@ -67,7 +69,7 @@ class ApiResponse(CamelModel, Generic[T]):
         version: str = "1.0.0",
         request_id: str | None = None,
     ) -> ApiResponse[T]:
-        meta_obj = meta or MetaResponse(version=version, request_id=request_id)
+        meta_obj = meta or MetaResponse(version=version, request_id=request_id or current_request_id())
         return cls(status="SUCCESS", data=data, meta=meta_obj)
 
 
@@ -117,5 +119,5 @@ class ApiErrorResponse(CamelModel):
             status="ERROR",
             error=ErrorDetail(code=code, message=message, details=details),
             request_uri=request_uri,
-            meta=MetaResponse(version=version, request_id=request_id),
+            meta=MetaResponse(version=version, request_id=request_id or current_request_id()),
         )
