@@ -19,6 +19,7 @@ import logging
 import threading
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import Field
@@ -254,6 +255,29 @@ def list_documents(response: Response, actor: Actor, service: Service,
 @router.get("/{document_id}", response_model=ApiResponse[DocumentDto], summary="One of my documents")
 def get_document(document_id: str, response: Response, actor: Actor, service: Service) -> ApiResponse[DocumentDto]:
     return envelope(DocumentDto.model_validate(service.get(actor, document_id)), response)
+
+
+FILE_TYPES = {"application/pdf", "image/png", "image/jpeg"}
+
+
+def inline_disposition(filename: str | None) -> str:
+    """Shown in the browser, under the stored name (ID numbers in it are already masked)."""
+    name = filename or "document"
+    plain = "".join(char if char.isascii() and char.isprintable() and char not in '"\\' else "_" for char in name)
+    return f"inline; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+@router.get("/{document_id}/file", summary="The original file of one of my documents",
+            response_class=Response, responses={200: {"content": {media: {} for media in sorted(FILE_TYPES)}}})
+def get_document_file(document_id: str, actor: Actor, service: Service,
+                      version: Annotated[int | None, Query(ge=1)] = None) -> Response:
+    """The version in use, or ?version=N (for example a renewal waiting for review)."""
+    found = service.file(actor, document_id, version)
+    media_type = found["mime_type"] if found["mime_type"] in FILE_TYPES else "application/octet-stream"
+    return Response(content=found["data"], media_type=media_type, headers={
+        "Cache-Control": "no-store",  # personal
+        "X-Content-Type-Options": "nosniff",  # never read as another type
+        "Content-Disposition": inline_disposition(found["filename"])})
 
 
 @router.get("/{document_id}/review", response_model=ApiResponse[ReviewDto],

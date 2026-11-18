@@ -32,7 +32,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from ..errors import AppException, DocumentNotFoundException, ValidationException
+from ..errors import AppException, DocumentNotFoundException, NotFoundException, ValidationException
 from ..errors.exceptions import ConflictException
 from ..errors.error_codes import ErrorCode
 from ..graphs.document_graph import (
@@ -45,7 +45,7 @@ from ..graphs.document_graph import (
 )
 from ..utils.checkpoints import forget_run
 from ..utils.privacy import mask_ids_in_text
-from .files import EncryptedFileStore
+from .files import EncryptedFileStore, StoredFileError
 from .models import Document, DocumentVersion, IdentifierHash, WorkflowRun
 from .repository import (
     audit,
@@ -391,6 +391,36 @@ class DocumentService:
         with self.sessions() as session:
             return [view(document, with_fields=False) for document in owned_documents(session, owner_id,
                                                                                            document_type)]
+
+    def file(self, owner_id: str, document_id: str, version: int | None = None) -> dict[str, Any]:
+        """The original file of a version (default: the one in use), for the owner to look at,
+        e.g. next to the values during review: {"data", "mime_type", "filename", "version"}.
+        Only a version that still holds its file: a replaced, refused or failed version's file was
+        removed, and a typed-in version never had one (fastapi-backend Phase 3)."""
+        with self.sessions.begin() as session:
+            document = owned_document(session, owner_id, document_id)
+            if document is None:
+                raise DocumentNotFoundException(document_id)  # also for someone else's document
+            if version is None:
+                chosen = current_version(document)
+            else:
+                chosen = next((item for item in document.versions if item.version == version), None)
+            if chosen is None:
+                raise NotFoundException("This document has no such version")
+            if chosen.entry == "manual":
+                raise NotFoundException("This version was typed in, so it has no file")
+            if not chosen.storage_key:
+                raise NotFoundException("This version's file is no longer kept")
+            found = {"mime_type": chosen.mime_type, "filename": chosen.filename, "version": chosen.version}
+            storage_key = chosen.storage_key
+            audit(session, owner_id, "document.file_viewed", document_id, version=chosen.version)
+        try:
+            found["data"] = self.files.read(storage_key)
+        except StoredFileError as exc:  # missing or damaged on disk; the message holds no values
+            logger.error("A stored file could not be read: %s", exc)
+            raise AppException(message="The stored file can't be read", error_code="STORED_FILE_UNREADABLE",
+                               status_code=500) from None
+        return found
 
     # ---- saving the outcome --------------------------------------------------------------
 

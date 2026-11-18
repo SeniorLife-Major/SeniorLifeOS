@@ -11,10 +11,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from sqlalchemy import select
+
 from backend.api import documents
 from backend.errors import register_global_error_handlers
 from backend.graphs.document_graph import MAX_UPLOAD_BYTES
+from backend.storage.models import AuditEvent, DocumentVersion
 from test_graph_ocr import AADHAAR
+from test_ocr import UNIT
+from test_privacy import FAKE_HASH_KEY, hash_key_env
 from test_storage_db import IDENTITY, OTHER_OWNER, OWNER, UNSURE_IDENTITY, DatabaseCase
 
 DOCUMENT = {"document_id": "d1", "filename": "card.png", "mime_type": "image/png", "size_bytes": 3,
@@ -238,6 +243,92 @@ class EndToEndTests(DatabaseCase, ApiCase):
         mine = self.client.get("/api/v1/documents", headers={"X-Actor-Id": OWNER}).json()["data"]
         self.assertEqual(len(mine), 1)
         self.assertEqual(mine[0]["status"], "confirmed")
+
+
+class FileTests(DatabaseCase, ApiCase):
+    """GET /api/v1/documents/{id}/file: the original file, for the owner only."""
+
+    def setUp(self):
+        DatabaseCase.setUp(self)
+        ApiCase.setUp(self)
+        self.app.dependency_overrides[documents.get_document_service] = lambda: self.service
+        self.jpg = (UNIT / "phone_rotated.jpg").read_bytes()
+
+    def send(self, path, lines, data, mime_type, filename):
+        with self.ocr(lines):
+            response = self.client.post(f"{path}?filename={filename}&claimedType=identity", content=data,
+                                        headers={"X-Actor-Id": OWNER, "Content-Type": mime_type})
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()["data"]
+
+    def get_file(self, document_id, owner=OWNER, version=None):
+        query = f"?version={version}" if version is not None else ""
+        return self.client.get(f"/api/v1/documents/{document_id}/file{query}", headers={"X-Actor-Id": owner})
+
+    def test_the_owner_sees_the_file_waiting_for_review(self):
+        document_id = self.send("/api/v1/documents", UNSURE_IDENTITY, self.png, "image/png", "card.png")["documentId"]
+        response = self.get_file(document_id)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, self.png)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertTrue(response.headers["content-disposition"].startswith('inline; filename="card.png"'))
+        stranger = self.get_file(document_id, owner=OTHER_OWNER)
+        self.assertEqual(stranger.status_code, 404)
+        self.assertNotEqual(stranger.content, self.png)
+        with self.engine.connect() as connection:
+            viewed = connection.execute(select(AuditEvent.detail).where(AuditEvent.action == "document.file_viewed"))
+            self.assertEqual([row[0] for row in viewed], [{"version": 1}])
+
+    def test_a_renewal_and_the_file_of_a_replaced_version(self):
+        document_id = self.send("/api/v1/documents", IDENTITY, self.png, "image/png", "card.png")["documentId"]
+        renewal = self.send(f"/api/v1/documents/{document_id}/versions", UNSURE_IDENTITY, self.jpg, "image/jpeg",
+                            "new.jpg")
+        self.assertEqual(renewal["replacement"]["status"], "needs_review")
+        self.assertEqual(self.get_file(document_id).content, self.png)  # the version in use
+        waiting = self.get_file(document_id, version=2)
+        self.assertEqual((waiting.content, waiting.headers["content-type"]), (self.jpg, "image/jpeg"))
+        with self.ocr(UNSURE_IDENTITY):
+            confirmed = self.client.post(f"/api/v1/documents/{document_id}/review", json={"action": "confirm"},
+                                         headers={"X-Actor-Id": OWNER})
+        self.assertEqual(confirmed.json()["data"]["version"], 2)
+        self.assertEqual(self.get_file(document_id).content, self.jpg)
+        replaced = self.get_file(document_id, version=1)
+        self.assertEqual(replaced.status_code, 404)
+        self.assertIn("no longer kept", replaced.json()["error"]["message"])
+        self.assertEqual(self.get_file(document_id, version=9).status_code, 404)
+        self.assertEqual(self.get_file(document_id, version=0).status_code, 422)
+
+    def test_a_typed_in_document_has_no_file(self):
+        with patch("backend.utils.privacy.find_env_file", return_value=None), hash_key_env(FAKE_HASH_KEY):
+            typed = self.client.post("/api/v1/documents/manual", headers={"X-Actor-Id": OWNER}, json={
+                "documentType": "identity", "fields": {"name": "Meera Rao", "date_of_birth": "1950-09-17"}})
+        self.assertEqual(typed.status_code, 201, typed.text)
+        response = self.get_file(typed.json()["data"]["documentId"])
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("typed in", response.json()["error"]["message"])
+
+    def test_a_missing_file_on_disk_is_a_plain_error(self):
+        document_id = self.send("/api/v1/documents", UNSURE_IDENTITY, self.png, "image/png", "card.png")["documentId"]
+        with self.engine.connect() as connection:
+            key = connection.execute(select(DocumentVersion.storage_key)
+                                     .where(DocumentVersion.document_id == document_id)).scalar_one()
+        self.files.delete(key)
+        with self.assertLogs("backend.storage.service", level="ERROR"):
+            response = self.get_file(document_id)
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["error"]["code"], "STORED_FILE_UNREADABLE")
+
+
+class DispositionTests(unittest.TestCase):
+    def test_any_stored_name_makes_a_safe_header(self):
+        self.assertEqual(documents.inline_disposition("card.png"),
+                         "inline; filename=\"card.png\"; filename*=UTF-8''card.png")
+        header = documents.inline_disposition('Meera "card"\\ ₹.pdf')
+        self.assertTrue(header.startswith('inline; filename="Meera _card__ _.pdf"'))
+        self.assertIn("filename*=UTF-8''Meera%20%22card%22%5C%20%E2%82%B9.pdf", header)
+        self.assertEqual(documents.inline_disposition(None), "inline; filename=\"document\"; filename*=UTF-8''document")
 
 
 if __name__ == "__main__":

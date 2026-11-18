@@ -236,6 +236,7 @@ Kept: the request text, name and phone location only in the encrypted checkpoint
 | `POST /api/v1/documents?filename=card.png&claimedType=identity` | upload; the file is the raw body, its type the `Content-Type` (PDF, PNG, JPEG, at most 5 MB). Options: `ownerName`, `cloudOcrConsent`, `medicalCloudConsent`, `useLlm` |
 | `GET /api/v1/documents?type=identity` | my documents (no field values) |
 | `GET /api/v1/documents/{id}` | one document with its confirmed fields (ID numbers masked) |
+| `GET /api/v1/documents/{id}/file` | the original file I uploaded (the version in use, or `?version=N`, e.g. a renewal waiting for review), shown in the browser; not cached. A typed-in version has no file, and a replaced or refused version's file is no longer kept (404) |
 | `GET /api/v1/documents/{id}/review` | the values waiting for my review, with full ID numbers so I can compare them with the card |
 | `POST /api/v1/documents/{id}/review` | `{"action": "confirm" or "reject", "edits": {...}}` |
 | `POST /api/v1/documents/manual` | type the details in, no file: `{"documentType": "identity", "fields": {...}, "ownerName": "..."}` (see below) |
