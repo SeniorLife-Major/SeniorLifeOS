@@ -14,6 +14,7 @@ export const MESSAGES = {
   oddAnswer: 'SeniorLife sent an answer we could not read. Please try again.',
   fieldErrors: 'Some details are not right. Please check them and try again.',
   serverProblem: 'Something went wrong on our side. Please try again in a little while.',
+  storageDown: 'Your documents cannot be opened right now. Please try again in a little while.',
 }
 
 export class ApiError extends Error {
@@ -56,25 +57,32 @@ function messageFor(body) {
   const { code, message, details } = body.error
   if (code === 'VALIDATION_FAILED' && Array.isArray(details)) return MESSAGES.fieldErrors // field-by-field check
   if (code === 'INTERNAL_SERVER_ERROR') return MESSAGES.serverProblem
+  if (code === 'STORAGE_UNAVAILABLE') return MESSAGES.storageDown // its message names server settings
   return message
 }
 
 /**
  * Calls the backend and gives back `data`, or throws an ApiError with a message to show.
- * options: method ('GET' unless given), body (sent as JSON), signal (to cancel the request).
+ * options: method ('GET' unless given), body (sent as JSON), file (a File or Blob sent as it is,
+ * with its own type as Content-Type; for uploads), signal (to cancel the request).
  */
 export async function api(path, options = {}) {
   const token = readToken()
   const headers = { Accept: 'application/json' }
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (options.file !== undefined) headers['Content-Type'] = options.file.type || 'application/octet-stream'
+  else if (options.body !== undefined) headers['Content-Type'] = 'application/json'
   if (token) headers.Authorization = `Bearer ${token}`
+
+  let body
+  if (options.file !== undefined) body = options.file
+  else if (options.body !== undefined) body = JSON.stringify(options.body)
 
   let response
   try {
     response = await fetch(`${API_ROOT}${path}`, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body,
       signal: options.signal,
       cache: 'no-store',
     })

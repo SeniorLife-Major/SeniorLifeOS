@@ -30,10 +30,13 @@ browser needs no CORS. Without the backend, `/api` calls answer 502.
 src/
   main.jsx            starts the app: fonts, styles, the router
   App.jsx             every screen and its address
-  api/                talking to the backend: client.js (every request), session.js (the token), auth.js
+  api/                talking to the backend: client.js (every request), session.js (the token), auth.js,
+                      profile.js, documents.js
   auth/               who is signed in (AuthProvider) and the guard for signed-in screens (RequireAuth)
   components/         shared pieces: Screen, BackLink, EmergencyStrip, Button, ButtonLink, Icon, Brand,
-                      TextField, PasswordField
+                      TextField, PasswordField, Switch
+  documents/          document types and status words, getting a photo ready to send, and loading
+                      (and checking again) while a document is being read
   hooks/              useWait (the wait after too many tries)
   pages/              one file per screen
   profile/            the profile for every screen (ProfileProvider), text size and contrast (display.js)
@@ -51,8 +54,14 @@ never ask Google for it.
 ## What works now
 
 Signing in, creating an account, signing out, the home screen, and Settings (text size, stronger
-contrast, home location, and what may go to AI services). Screens that are not built yet show
-"We could not find that page". Family Mode needs sharing in the backend first.
+contrast, home location, and what may go to AI services).
+
+My documents: the list (the ones that need you first), adding one photo or PDF, and following it
+while the backend reads it. A photo over 5 MB, or one the backend can't take (WebP, or HEIC where
+the browser can open it), is redrawn as a smaller JPEG on the phone before it is sent.
+
+Screens that are not built yet (checking a document's details, the doctor search) show "We could
+not find that page". Family Mode needs sharing in the backend first.
 
 The text size and contrast are also kept in `localStorage` (only those two values), so the app
 opens at the right size straight away.

@@ -140,3 +140,73 @@ export function serveProfile(backend, profile, places = {}) {
   })
   return store
 }
+
+/** A document as backend/api/documents.py sends it (DocumentDto): a saved income certificate unless changed. */
+export function makeDocument(changes = {}) {
+  return {
+    documentId: 'doc-1',
+    entry: 'upload',
+    filename: 'photo.jpg',
+    mimeType: 'image/jpeg',
+    sizeBytes: 120000,
+    documentType: 'income_certificate',
+    status: 'confirmed',
+    version: 1,
+    fileStored: true,
+    issueDate: null,
+    expiryDate: null,
+    createdAt: '2026-11-01T09:00:00Z',
+    updatedAt: '2026-11-01T09:00:00Z',
+    reviewFlags: [],
+    warnings: [],
+    errors: [],
+    fields: {},
+    replacement: null,
+    ...changes,
+  }
+}
+
+/**
+ * Serves the document routes like backend/api/documents.py: the list (newest first, without
+ * fields, flags, warnings or errors), one document (404 when it is not there), and uploads
+ * (background=true: 202 with a new document, still "processing"). Gives back the store:
+ *   current              — the documents as the fake backend holds them now, newest first
+ *   change(id, changes)  — e.g. the reader has finished: change('doc-1', { status: 'needs_review' })
+ */
+export function serveDocuments(backend, documents = []) {
+  let added = 0
+  const store = {
+    current: [...documents],
+    change(documentId, changes) {
+      store.current = store.current.map((document) =>
+        document.documentId === documentId ? { ...document, ...changes } : document,
+      )
+    },
+  }
+  const listed = (document) => ({ ...document, reviewFlags: [], warnings: [], errors: [], fields: {} })
+  const serveOne = (documentId) =>
+    backend.on(`GET /api/v1/documents/${documentId}`, () => {
+      const found = store.current.find((document) => document.documentId === documentId)
+      return found ? ok(found) : fail(404, 'NOT_FOUND', 'Document not found')
+    })
+
+  store.current.forEach((document) => serveOne(document.documentId))
+  backend.on('GET /api/v1/documents', () => ok(store.current.map(listed)))
+  backend.on('POST /api/v1/documents', ({ query, headers, body }) => {
+    added += 1
+    const document = makeDocument({
+      documentId: `doc-new-${added}`,
+      filename: query.get('filename'),
+      mimeType: headers.get('content-type'),
+      sizeBytes: body.size,
+      documentType: query.get('claimedType'),
+      status: 'processing',
+      createdAt: META.serverTime,
+      updatedAt: META.serverTime,
+    })
+    store.current = [document, ...store.current]
+    serveOne(document.documentId)
+    return ok(document, 202)
+  })
+  return store
+}

@@ -1,9 +1,30 @@
 // Line icons drawn on a 24 x 24 grid. They take the text colour around them.
 const PATHS = {
+  alertCircle: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </>
+  ),
   arrowLeft: (
     <>
       <line x1="19" y1="12" x2="5" y2="12" />
       <polyline points="12 19 5 12 12 5" />
+    </>
+  ),
+  camera: (
+    <>
+      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+      <circle cx="12" cy="13" r="4" />
+    </>
+  ),
+  check: <polyline points="20 6 9 17 4 12" />,
+  chevronRight: <polyline points="9 18 15 12 9 6" />,
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
     </>
   ),
   document: (
@@ -14,6 +35,7 @@ const PATHS = {
       <line x1="16" y1="17" x2="8" y2="17" />
     </>
   ),
+  folder: <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />,
   lock: (
     <>
       <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -29,6 +51,12 @@ const PATHS = {
   navigation: <polygon points="3 11 22 2 13 21 11 13 3 11" />,
   phone: (
     <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+  ),
+  plus: (
+    <>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </>
   ),
   settings: (
     <>
@@ -59,8 +87,9 @@ const PATHS = {
 }
 
 /**
- * name        — one of the icons above (arrowLeft, document, lock, mapPin, navigation, phone, settings,
- *               shieldCheck, stethoscope)
+ * name        — one of the icons above (alertCircle, arrowLeft, camera, check, chevronRight, clock,
+ *               document, folder, lock, mapPin, navigation, phone, plus, settings, shieldCheck,
+ *               stethoscope)
  * label       — only for an icon that means something on its own; most icons sit next to words
  *               and stay hidden from screen readers
  */

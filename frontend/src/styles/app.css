@@ -25,6 +25,10 @@
   --color-focus: #f2a900;
   --color-divider: #e3e8ee;
   --color-switch-off: #6b7885;
+  --color-ready-text: #1a6b3c;
+  --color-ready-soft: #e3f3e9;
+  --color-check-text: #9a4700;
+  --color-check-soft: #fdebd9;
 
   --radius-sm: 0.875rem;
   --radius-md: 1.125rem;
@@ -49,6 +53,8 @@
   --color-on-primary-muted: #ffffff;
   --color-placeholder: #3e4a56;
   --color-switch-off: #14202b;
+  --color-ready-text: #0d4526;
+  --color-check-text: #6b3100;
 
   --line: 3px;
   --line-thin: 2px;
@@ -718,4 +724,201 @@ body {
   font-size: 1.125rem;
   font-weight: 700;
   color: var(--color-muted);
+}
+
+/* ---------- documents ---------- */
+
+.doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.doc-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.125rem;
+  border-radius: 1.25rem;
+  background: var(--color-surface);
+  border: var(--line-thin) solid var(--color-border);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.doc-card:hover {
+  border-color: var(--color-primary);
+}
+
+.doc-card > svg {
+  flex: 0 0 auto;
+  color: var(--color-primary);
+}
+
+.doc-card__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.doc-card__title {
+  font-size: 1.375rem;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.doc-card__detail {
+  font-size: 1.0625rem;
+  line-height: 1.35;
+  color: var(--color-muted);
+}
+
+.chip {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 1.875rem;
+  padding: 0 0.75rem;
+  border-radius: 999px;
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.chip--ready {
+  background: var(--color-ready-soft);
+  color: var(--color-ready-text);
+}
+
+.chip--check {
+  background: var(--color-check-soft);
+  color: var(--color-check-text);
+}
+
+.chip--reading {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.chip--expired,
+.chip--problem {
+  background: var(--color-error-soft);
+  color: var(--color-error-text);
+}
+
+:root[data-contrast='high'] .chip {
+  border: var(--line-thin) solid currentColor;
+}
+
+.type-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.625rem;
+}
+
+.type-choice {
+  min-height: 3.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: var(--line) solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.type-choice[aria-pressed='true'] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.pick-buttons {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.625rem;
+}
+
+.picked {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-ready-text);
+  overflow-wrap: anywhere;
+}
+
+.picked:empty {
+  display: none;
+}
+
+.picked > svg {
+  flex: 0 0 auto;
+}
+
+.status-box {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 1rem 1.125rem;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: var(--line-thin) solid var(--color-border);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.status-box--working {
+  background: var(--color-primary-soft);
+  border-color: transparent;
+}
+
+.status-box__dot {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--color-primary);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-box__dot {
+    animation: none;
+  }
+}
+
+.steps {
+  margin: 0;
+  padding-left: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 1.125rem;
+  line-height: 1.4;
 }
