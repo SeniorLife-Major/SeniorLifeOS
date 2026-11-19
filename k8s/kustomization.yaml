@@ -6,7 +6,8 @@ namespace: seniorlifeos
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.yaml
+  # secret.yaml is a template only: the real secret, seniorlife-env, is created by hand with
+  # kubectl and never committed (README.md).
   - postgres-pvc.yaml
   - postgres-deployment.yaml
   - postgres-service.yaml

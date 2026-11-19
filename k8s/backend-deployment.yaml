@@ -61,7 +61,7 @@ spec:
             - configMapRef:
                 name: seniorlife-config
             - secretRef:
-                name: seniorlife-secrets
+                name: seniorlife-env
           resources:
             requests:
               cpu: 100m
@@ -81,7 +81,7 @@ spec:
             - configMapRef:
                 name: seniorlife-config
             - secretRef:
-                name: seniorlife-secrets
+                name: seniorlife-env
           volumeMounts:
             - name: document-vault
               mountPath: /app/var/documents

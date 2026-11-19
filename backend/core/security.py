@@ -29,7 +29,7 @@ SALT_BYTES = 16
 HASH_BYTES = 32
 ALGORITHM = "HS256"
 MIN_SECRET_CHARS = 32
-PLACEHOLDER_PREFIX = "change-me"  # the defaults in application.yml, .env.example and docker-compose
+PLACEHOLDER_PREFIX = "change-me"  # the defaults in application.yml and .env.example
 
 
 class TokenSecretError(RuntimeError):

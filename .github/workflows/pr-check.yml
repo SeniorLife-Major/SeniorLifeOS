@@ -1,0 +1,80 @@
+name: PR Check
+
+# Builds and tests a pull request into main, and nothing else: no image is published, no tag is
+# made, nothing is deployed (that is ci.yml, on a push to main). So a change to the Dockerfile,
+# the web app or the backend is checked on GitHub before it can reach the cluster.
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to the same pull request stops the older run.
+concurrency:
+  group: pr-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: seniorlifeos
+
+jobs:
+  web:
+    name: "Web App Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run Web App Tests and Build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+  image:
+    name: "Build Image & Backend Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the Image (web app stage included)
+        run: python ci/build.py
+
+      - name: Run Backend Tests in the Image
+        run: python ci/test.py
+
+      - name: The Image Serves the Web App
+        run: |
+          docker run -d --name web-check -p 8000:8000 -e APP_ENV=development "$IMAGE_NAME:latest"
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8000/api/v1/health > /dev/null && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8000/api/v1/health
+          curl -fsS http://localhost:8000/ | grep -q '<div id="root">'
+          curl -fsS http://localhost:8000/doctor/any-page | grep -q '<div id="root">'
+          curl -fsS -o /dev/null http://localhost:8000/favicon.svg
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/v1/no-such-thing)" = 404
+          echo "The image serves the web app and the API."
+
+      - name: Show the Server Log if Something Failed
+        if: failure()
+        run: docker logs web-check || true

@@ -1,16 +1,27 @@
-.venv/
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# "**/" so a pattern counts in every folder (a plain ".venv/" matches only at the top).
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/node_modules/
 .git/
 .gitignore
-.env
 .DS_Store
 .vscode/
 .idea/
-.pytest_cache/
-frontend/node_modules/
+.claude/
+**/.pytest_cache/
 backend/tests/datasets/
 ci/.version
+
+# Secrets and private data never go into an image (a local build sees them; CI's checkout doesn't).
+**/.env
+**/.env.*
+var/
+ideas/
+deployment/nginx/ssl/
+
+# Built inside the image (Dockerfile, stage 1) from the sources, never copied from this machine.
+frontend/dist/

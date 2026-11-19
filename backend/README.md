@@ -42,6 +42,8 @@ backend\.venv\Scripts\python.exe backend\run_server.py
 
 This starts FastAPI on port 8000 (`SERVER_PORT`). API docs are at `http://localhost:8000/docs`, and the demo routes are under `/api/v1/demo`. Settings come from `backend/config/application.yml`; each `${NAME:default}` there is read from the environment or `.env`. The `/actuator` admin routes are on by default (`ACTUATOR_ENABLED`) and have no login, so do not expose a development server outside your machine; with `APP_ENV=production` they are never on.
 
+**The web app.** When `frontend/dist` is built (`npm run build` in `frontend/`; the Docker image always builds it), this server also serves the web app (`api/web_app.py`): `/` and every page address (`/doctor/abc`) answer the app's `index.html`, `/assets/...` its files (kept a year: their names change with their content). It is the router's last step, so every API route, the 405 answer and the slash redirect come first, and `/api/...`, `/docs`, `/redoc`, `/actuator` never get the app: an unknown one stays a 404. Without a build, `/` opens the API docs as before. `SENIORLIFE_WEB_DIR` names another folder. In development use Vite (`npm run dev`, port 5173), which passes `/api` here.
+
 ## Direct `invoke()` examples
 
 The fixture functions in [demo_cases.py](demo/demo_cases.py) return ordinary dictionaries you can inspect and edit:

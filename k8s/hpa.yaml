@@ -11,8 +11,10 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: seniorlife-backend
+  # One copy only for now: the document vault volume is ReadWriteOnce, and the doctor list and its
+  # spending record are files inside each copy. Raise this once both are shared.
   minReplicas: 1
-  maxReplicas: 10
+  maxReplicas: 1
   metrics:
     - type: Resource
       resource:
