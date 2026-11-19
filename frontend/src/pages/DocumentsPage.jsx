@@ -61,6 +61,9 @@ export function DocumentsPage() {
       <ButtonLink to="/documents/add" icon="plus">
         Add a document
       </ButtonLink>
+      <ButtonLink to="/documents/checklist" variant="secondary" icon="check">
+        Do I have what I need?
+      </ButtonLink>
       {trouble && <p className="notice">We could not check for news just now. We will try again in a moment.</p>}
       {list}
       <div className="note">

@@ -1,9 +1,14 @@
+import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { ApiError, MESSAGES } from '../api/client'
+import { deleteDocument } from '../api/documents'
 import { Button, ButtonLink } from '../components/Button'
+import { FocusedTitle } from '../components/FocusedTitle'
 import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
-import { dateLine, formatDate, isExpired, isPdf, isWorking } from '../documents/status'
-import { isKnownType, typeLabel } from '../documents/types'
+import { FIELD_ORDER, fieldKind, fieldLabel, isBlank, showRow, showValue } from '../documents/fields'
+import { canAddNewCopy, dateLine, formatDate, isExpired, isPdf, isWorking, newCopyState } from '../documents/status'
+import { inSentence, isKnownType, typeLabel } from '../documents/types'
 import { useDocument } from '../documents/useDocuments'
 
 const BACK = { to: '/documents', label: 'My documents' }
@@ -16,6 +21,19 @@ function detailCount(document) {
 
 /** The heading and the sentence under it, for each status (see api/documents.js). */
 export function pageWords(document) {
+  switch (newCopyState(document)) {
+    case 'reading':
+      return { heading: 'Reading the new copy', text: 'Reading it now. This can take a minute. Your old copy is still in use.' }
+    case 'saving':
+      return { heading: 'Saving the new copy', text: 'The details are checked. Saving them now.' }
+    case 'check':
+      return {
+        heading: 'Ready for you to check',
+        text: 'Please check the details of the new copy before we save it. Your old copy is still in use.',
+      }
+    default:
+      break
+  }
   switch (document.status) {
     case 'processing':
       return { heading: 'Reading your document', text: 'Reading it now. This can take a minute.' }
@@ -59,13 +77,69 @@ function addAgainPath(document) {
 }
 
 function subtitle(document) {
-  if (document.entry !== 'upload') return typeLabel(document.documentType)
+  if (document.entry !== 'upload') return `${typeLabel(document.documentType)}, typed in`
   return `${typeLabel(document.documentType)}, ${isPdf(document) ? 'PDF' : 'photo'}`
+}
+
+/** The saved details in the order they are checked, then any others; ID numbers come masked. */
+function savedDetails(document) {
+  const fields = document.fields ?? {}
+  const order = FIELD_ORDER[document.documentType] ?? []
+  const keys = [...order.filter((key) => key in fields), ...Object.keys(fields).filter((key) => !order.includes(key))]
+  return keys.filter((key) => !isBlank(fields[key]?.value)).map((key) => ({ key, value: fields[key].value }))
+}
+
+function SavedDetails({ document }) {
+  const details = savedDetails(document)
+  if (details.length === 0) return null
+  return (
+    <section className="panel" aria-labelledby="saved-details">
+      <h2 id="saved-details" className="panel__title">
+        The details
+      </h2>
+      <dl className="details">
+        {details.map(({ key, value }) => (
+          <div key={key} className="details__item">
+            <dt className="details__label">{fieldLabel(key)}</dt>
+            <dd className="details__value">
+              {fieldKind(key) === 'rows' && Array.isArray(value) ? (
+                <ul className="summary__rows">
+                  {value.map((row, index) => (
+                    <li key={index}>{showRow(key, row)}</li>
+                  ))}
+                </ul>
+              ) : (
+                showValue(key, value)
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {document.entry === 'manual' && <p className="panel__hint">You typed these details in.</p>}
+    </section>
+  )
 }
 
 export function DocumentPage() {
   const { documentId } = useParams()
   const { document, problem, notFound, trouble, retry } = useDocument(documentId)
+  // shown → ask (delete?) → deleted
+  const [phase, setPhase] = useState('shown')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteProblem, setDeleteProblem] = useState(null)
+
+  if (phase === 'deleted') {
+    return (
+      <Screen title="Deleted" back={BACK}>
+        <span className="outcome-icon outcome-icon--ready">
+          <Icon name="check" size={40} strokeWidth={2.6} />
+        </span>
+        <FocusedTitle>Deleted</FocusedTitle>
+        <p className="lead">The document and its photo are removed for good.</p>
+        <ButtonLink to="/documents">Back to My documents</ButtonLink>
+      </Screen>
+    )
+  }
 
   if (notFound) {
     return (
@@ -97,8 +171,50 @@ export function DocumentPage() {
     )
   }
 
+  const name = inSentence(typeLabel(document.documentType))
+
+  async function remove() {
+    setDeleting(true)
+    setDeleteProblem(null)
+    try {
+      await deleteDocument(document.documentId)
+      setPhase('deleted')
+    } catch (error) {
+      setDeleteProblem(error instanceof ApiError ? error.message : MESSAGES.serverProblem)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  if (phase === 'ask') {
+    return (
+      <Screen title="Delete this document?" back={BACK}>
+        <FocusedTitle>Delete this document?</FocusedTitle>
+        <p className="lead">
+          Your {name} and its photo will be removed for good, with every copy of it. This cannot be undone.
+        </p>
+        {deleteProblem && (
+          <p className="alert" role="alert">
+            {deleteProblem}
+          </p>
+        )}
+        <div className="actions">
+          <Button className="button--danger" onClick={remove} disabled={deleting}>
+            {deleting ? 'Deleting…' : 'Yes, delete it'}
+          </Button>
+          <Button variant="secondary" onClick={() => setPhase('shown')} disabled={deleting}>
+            No, keep it
+          </Button>
+        </div>
+      </Screen>
+    )
+  }
+
   const words = pageWords(document)
   const working = isWorking(document)
+  const copy = newCopyState(document)
+  const expired = isExpired(document)
+  const newCopyPath = `/documents/${document.documentId}/new-copy`
 
   return (
     <Screen title={words.heading} back={BACK}>
@@ -112,6 +228,10 @@ export function DocumentPage() {
         {working && <span className="status-box__dot" aria-hidden="true" />}
         <span>{words.text}</span>
       </p>
+
+      {copy === 'refused' && (
+        <p className="notice">The new copy could not be read, so it was not kept. Your old copy is still in use.</p>
+      )}
 
       {working && (
         <>
@@ -139,10 +259,40 @@ export function DocumentPage() {
       {document.status === 'needs_review' && (
         <ButtonLink to={`/documents/${document.documentId}/review`}>Check the details</ButtonLink>
       )}
+      {copy === 'check' && (
+        <ButtonLink to={`/documents/${document.documentId}/review?version=${document.replacement.version}`}>
+          Check the new copy
+        </ButtonLink>
+      )}
       {ADD_AGAIN.has(document.status) && (
         <ButtonLink to={addAgainPath(document)} icon="plus">
           Add it again
         </ButtonLink>
+      )}
+      {canAddNewCopy(document) && expired && (
+        <ButtonLink to={newCopyPath} icon="plus">
+          Add the new copy
+        </ButtonLink>
+      )}
+
+      {document.status === 'confirmed' && <SavedDetails document={document} />}
+
+      {canAddNewCopy(document) && !expired && (
+        <ButtonLink to={newCopyPath} variant="secondary" icon="plus">
+          {copy === 'refused' ? 'Add the new copy again' : 'Got a renewed one? Add the new copy'}
+        </ButtonLink>
+      )}
+      {!working && (
+        <Button
+          variant="quiet"
+          className="button--muted"
+          onClick={() => {
+            setDeleteProblem(null)
+            setPhase('ask')
+          }}
+        >
+          Delete this document
+        </Button>
       )}
     </Screen>
   )

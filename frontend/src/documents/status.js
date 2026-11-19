@@ -5,9 +5,38 @@
 // The backend's own warnings and errors are not shown: many are written for developers and some
 // hold error details (backend/graphs/document_graph.py).
 
-/** Still being worked on, so the screen should look again in a moment. */
+const WORKING = new Set(['processing', 'reviewed'])
+const REFUSED = new Set(['needs_reupload', 'needs_classification', 'failed_tool'])
+
+/**
+ * What is happening to a newer copy of a saved document (see api/documents.js): 'reading',
+ * 'saving', 'check' (waiting for the person), 'refused' (it could not be read; the old copy is
+ * still in use), or null when there is none (or the person said not to keep it).
+ */
+export function newCopyState(document) {
+  const status = document?.replacement?.status
+  if (status === 'processing') return 'reading'
+  if (status === 'reviewed') return 'saving'
+  if (status === 'needs_review') return 'check'
+  if (REFUSED.has(status)) return 'refused'
+  return null
+}
+
+/**
+ * Can a newer copy be added now? Only to a saved document, and not while another new copy is
+ * being read or waits for a check (_replaceable in backend/storage/service.py).
+ */
+export function canAddNewCopy(document) {
+  if (document?.status !== 'confirmed') return false
+  const copy = newCopyState(document)
+  return copy === null || copy === 'refused'
+}
+
+/** Still being worked on (the document, or its new copy), so the screen should look again in a moment. */
 export function isWorking(document) {
-  return document?.status === 'processing' || document?.status === 'reviewed'
+  if (WORKING.has(document?.status)) return true
+  const copy = newCopyState(document)
+  return copy === 'reading' || copy === 'saving'
 }
 
 /** Today as "YYYY-MM-DD", on this phone's calendar. */
@@ -45,6 +74,16 @@ export function isPdf(document) {
 }
 
 export function statusOf(document, today = todayISO()) {
+  switch (newCopyState(document)) {
+    case 'reading':
+      return { kind: 'reading', chip: 'Reading', detail: 'The new copy is being read. The old one is still in use.' }
+    case 'saving':
+      return { kind: 'reading', chip: 'Saving', detail: 'The new copy is being saved.' }
+    case 'check':
+      return { kind: 'check', chip: 'Please check', detail: 'Waiting for you to check the new copy.' }
+    default:
+      break
+  }
   switch (document.status) {
     case 'processing':
       return { kind: 'reading', chip: 'Reading', detail: 'Being read. You can leave this screen.' }

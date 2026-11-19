@@ -34,9 +34,10 @@ src/
                       profile.js, documents.js
   auth/               who is signed in (AuthProvider) and the guard for signed-in screens (RequireAuth)
   components/         shared pieces: Screen, BackLink, EmergencyStrip, Button, ButtonLink, Icon, Brand,
-                      TextField, PasswordField, Switch
-  documents/          document types and status words, getting a photo ready to send, and loading
-                      (and checking again) while a document is being read
+                      TextField, PasswordField, Switch, FocusedTitle
+  documents/          document types and status words, getting a photo ready to send, loading (and
+                      checking again) while a document is being read, the details and their checks,
+                      typing a document in (typeIn.js), and what an office may ask for (proofs.js)
   hooks/              useWait (the wait after too many tries)
   pages/              one file per screen
   profile/            the profile for every screen (ProfileProvider), text size and contrast (display.js)
@@ -64,8 +65,19 @@ Checking a document's details: one at a time next to the photo (or a link to the
 or adding any of them, the rows of a lab report, prescription or bill, then saving it or saying not
 to keep it.
 
-Screens that are not built yet (typing a document in, renewing one, the doctor search) show "We
-could not find that page". Family Mode needs sharing in the backend first.
+Typing a document in with no photo ("No photo? Type the details in"): one form with every detail
+of that kind of document, checked on the phone and then by the backend, and saved straight away.
+
+A saved document shows its details (ID numbers hidden). It can get a new copy when the paper is
+renewed, as a photo or typed in; the old copy stays in use until the new one is checked. It can be
+deleted, after a question.
+
+"Do I have what I need?": tick what an office asked for (proof of age, income, address and so on)
+and see which of your documents are ready, waiting for a check, ended or missing, with what to do
+next.
+
+Screens that are not built yet (the doctor search) show "We could not find that page". Family Mode
+needs sharing in the backend first.
 
 The text size and contrast are also kept in `localStorage` (only those two values), so the app
 opens at the right size straight away.

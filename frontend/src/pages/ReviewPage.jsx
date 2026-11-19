@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { ApiError, MESSAGES } from '../api/client'
 import { getReview, sendReview } from '../api/documents'
 import { Button, ButtonLink } from '../components/Button'
+import { FocusedTitle } from '../components/FocusedTitle'
 import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
 import { DetailStep, RowsStep } from '../documents/DetailStep'
@@ -10,31 +11,13 @@ import { showRow, showValue } from '../documents/fields'
 import { Paper, usePaper } from '../documents/Paper'
 import { refusalOf } from '../documents/reviewNotes'
 import { buildSteps, editsFrom } from '../documents/reviewSteps'
-import { isKnownType, typeLabel } from '../documents/types'
+import { inSentence, isKnownType, typeLabel } from '../documents/types'
 
 const BACK = { to: '/documents', label: 'My documents' }
 const ID_FIELDS = ['aadhaar_number', 'pan_number', 'account_number', 'policy_number']
 
 function messageOf(error) {
   return error instanceof ApiError ? error.message : MESSAGES.serverProblem
-}
-
-/** "Income certificate" → "income certificate", but "ID card" stays "ID card". */
-function inSentence(label) {
-  return /^[A-Z][a-z]/.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label
-}
-
-/** A heading that takes the focus when it appears, so screen readers start there. */
-function FocusedTitle({ children }) {
-  const ref = useRef(null)
-  useEffect(() => {
-    ref.current?.focus()
-  }, [])
-  return (
-    <h1 ref={ref} tabIndex={-1} className="page-title">
-      {children}
-    </h1>
-  )
 }
 
 export function ReviewPage() {
@@ -99,7 +82,11 @@ export function ReviewPage() {
 
 function ReviewFlow({ documentId, review }) {
   const steps = useMemo(() => buildSteps(review), [review])
-  const paper = usePaper(documentId)
+  // ?version=N: a new copy of a saved document (its photo, not the one in use, is shown)
+  const [params] = useSearchParams()
+  const version = Number(params.get('version')) || undefined
+  const renewing = version !== undefined
+  const paper = usePaper(documentId, version)
   const [answers, setAnswers] = useState({})
   const [at, setAt] = useState(0)
   // steps → summary → saved; or summary/steps → reject → rejected
@@ -193,7 +180,9 @@ function ReviewFlow({ documentId, review }) {
         </span>
         <FocusedTitle>Saved</FocusedTitle>
         <p className="lead">
-          Your {inSentence(name)} is now in My documents. Only you can open it.
+          {renewing
+            ? `The new copy of your ${inSentence(name)} is saved. It is the one in use now.`
+            : `Your ${inSentence(name)} is now in My documents. Only you can open it.`}
           {hasId && ' ID numbers are hidden now; we show just the last 4 digits.'}
         </p>
         <ButtonLink to="/documents">Back to My documents</ButtonLink>
@@ -206,10 +195,19 @@ function ReviewFlow({ documentId, review }) {
     return (
       <Screen title="Not saved" back={BACK}>
         <FocusedTitle>Not saved</FocusedTitle>
-        <p className="lead">We will not keep this document. You can add the right one any time.</p>
-        <ButtonLink to={again} icon="plus">
-          Add a document
-        </ButtonLink>
+        {renewing ? (
+          <>
+            <p className="lead">We will not keep this new copy. Your old one is still in use.</p>
+            <ButtonLink to={`/documents/${documentId}`}>See the document</ButtonLink>
+          </>
+        ) : (
+          <>
+            <p className="lead">We will not keep this document. You can add the right one any time.</p>
+            <ButtonLink to={again} icon="plus">
+              Add a document
+            </ButtonLink>
+          </>
+        )}
         <ButtonLink to="/documents" variant="secondary">
           Back to My documents
         </ButtonLink>
@@ -229,9 +227,13 @@ function ReviewFlow({ documentId, review }) {
 
   if (phase === 'reject') {
     return (
-      <Screen title="Don't save this document?" back={BACK}>
-        <FocusedTitle>Don&apos;t save this document?</FocusedTitle>
-        <p className="lead">We will not keep it, and its photo is deleted. You can add it again any time.</p>
+      <Screen title={renewing ? "Don't save this new copy?" : "Don't save this document?"} back={BACK}>
+        <FocusedTitle>{renewing ? "Don't save this new copy?" : "Don't save this document?"}</FocusedTitle>
+        <p className="lead">
+          {renewing
+            ? 'We will not keep this new copy, and its photo is deleted. Your old one stays in use.'
+            : 'We will not keep it, and its photo is deleted. You can add it again any time.'}
+        </p>
         {problem && (
           <p className="alert" role="alert">
             {problem}

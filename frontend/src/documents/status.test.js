@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeDocument } from '../test/fakeBackend'
-import { formatDate, inAttentionOrder, isWorking, statusOf, todayISO } from './status'
+import { canAddNewCopy, formatDate, inAttentionOrder, isWorking, newCopyState, statusOf, todayISO } from './status'
 
 const TODAY = '2026-11-19'
 
@@ -91,5 +91,48 @@ describe('dates', () => {
   it("know today's date on this phone's calendar", () => {
     expect(todayISO(new Date(2026, 10, 19, 23, 59))).toBe('2026-11-19')
     expect(todayISO(new Date(2027, 0, 5))).toBe('2027-01-05')
+  })
+})
+
+describe('a new copy of a saved document', () => {
+  const withCopy = (status, changes = {}) =>
+    makeDocument({ status: 'confirmed', replacement: { version: 2, entry: 'upload', status }, ...changes })
+
+  it('is named by what is happening to it', () => {
+    expect(['processing', 'reviewed', 'needs_review', 'needs_reupload', 'failed_tool', 'rejected'].map((status) =>
+      newCopyState(withCopy(status)),
+    )).toEqual(['reading', 'saving', 'check', 'refused', 'refused', null])
+    expect(newCopyState(makeDocument())).toBeNull()
+  })
+
+  it('keeps the screen checking while it is read or saved, and not after', () => {
+    expect(isWorking(withCopy('processing'))).toBe(true)
+    expect(isWorking(withCopy('reviewed'))).toBe(true)
+    expect(isWorking(withCopy('needs_review'))).toBe(false)
+    expect(isWorking(withCopy('needs_reupload'))).toBe(false)
+  })
+
+  it('shows on the label while it needs the person or is being read; a refused one does not', () => {
+    const expired = { expiryDate: '2020-03-31' }
+    expect(statusOf(withCopy('processing', expired), TODAY)).toEqual({
+      kind: 'reading',
+      chip: 'Reading',
+      detail: 'The new copy is being read. The old one is still in use.',
+    })
+    expect(statusOf(withCopy('needs_review'), TODAY)).toEqual({
+      kind: 'check',
+      chip: 'Please check',
+      detail: 'Waiting for you to check the new copy.',
+    })
+    expect(statusOf(withCopy('needs_reupload', expired), TODAY).chip).toBe('Expired')
+  })
+
+  it('can be added only to a saved document with no other new copy on the way', () => {
+    expect(canAddNewCopy(makeDocument())).toBe(true)
+    expect(canAddNewCopy(withCopy('needs_reupload'))).toBe(true)
+    expect(canAddNewCopy(withCopy('rejected'))).toBe(true)
+    expect(canAddNewCopy(withCopy('processing'))).toBe(false)
+    expect(canAddNewCopy(withCopy('needs_review'))).toBe(false)
+    expect(canAddNewCopy(makeDocument({ status: 'needs_review' }))).toBe(false)
   })
 })

@@ -1150,3 +1150,175 @@ select.input {
   background: var(--color-ready-soft);
   color: var(--color-ready-text);
 }
+
+/* ---------- a saved document, typing one in, deleting (phase 6) ---------- */
+
+.button--danger {
+  background: var(--color-danger);
+  color: var(--color-on-primary);
+}
+
+.button--danger:hover {
+  background: var(--color-danger-strong);
+}
+
+.details {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.details__item {
+  padding: 0.625rem 0;
+}
+
+.details__item + .details__item {
+  border-top: var(--line-thin) solid var(--color-divider);
+}
+
+.details__label {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  color: var(--color-muted);
+}
+
+.details__value {
+  margin: 0.125rem 0 0;
+  font-size: 1.3125rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+/* a list (tests, medicines, bill items) on the typing form: a panel drawn as a fieldset */
+.type-in__list {
+  margin: 0;
+  min-width: 0;
+}
+
+.type-in__list > legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+}
+
+.type-in__list > legend + * {
+  clear: both;
+}
+
+/* ---------- Do I have what I need? ---------- */
+
+.need-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.need-choice__hint {
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.need-totals {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip--missing {
+  background: var(--color-divider);
+  color: var(--color-text);
+}
+
+.need-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.need {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+  padding: 1rem 1.125rem;
+  border-radius: 1.25rem;
+  background: var(--color-surface);
+  border: var(--line-thin) solid var(--color-border);
+}
+
+.need__dot {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--color-on-primary);
+  background: var(--color-muted);
+}
+
+.need__dot--ready {
+  background: var(--color-ready-text);
+}
+
+.need__dot--check {
+  background: var(--color-check-text);
+}
+
+.need__dot--reading {
+  background: var(--color-primary);
+}
+
+.need__dot--expired {
+  background: var(--color-error-text);
+}
+
+.need__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.need__title {
+  font-size: 1.375rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.need__status {
+  font-size: 1.125rem;
+  font-weight: 800;
+  color: var(--color-muted);
+}
+
+.need__status--ready {
+  color: var(--color-ready-text);
+}
+
+.need__status--check {
+  color: var(--color-check-text);
+}
+
+.need__status--reading {
+  color: var(--color-primary);
+}
+
+.need__status--expired {
+  color: var(--color-error-text);
+}
+
+.need__detail {
+  font-size: 1.0625rem;
+  line-height: 1.35;
+  color: var(--color-muted);
+}
+
+.need__text > .button {
+  margin-top: 0.5rem;
+}

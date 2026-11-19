@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { fail, fakeBackend, ok } from '../test/fakeBackend'
 import { ApiError, MESSAGES } from './client'
-import { getDocument, getDocumentFile, getReview, listDocuments, sendReview, uploadDocument } from './documents'
+import {
+  createManualDocument,
+  deleteDocument,
+  getDocument,
+  getDocumentFile,
+  getReview,
+  listDocuments,
+  matchProofs,
+  replaceDocument,
+  replaceManually,
+  sendReview,
+  uploadDocument,
+} from './documents'
 import { saveSession } from './session'
 
 const UPLOAD = 'POST /api/v1/documents'
@@ -150,5 +162,82 @@ describe('the review calls', () => {
     expect(error).toBeInstanceOf(ApiError)
     expect(error.status).toBe(404)
     expect(error.message).toBe("This version's file is no longer kept")
+  })
+})
+
+describe("the rest of a document's life", () => {
+  it("sends a new copy as a file to the document's versions, with the same choices and no type", async () => {
+    saveSession('token-meera', 3600)
+    const route = 'POST /api/v1/documents/doc%201/versions' // the id is encoded in the address
+    const backend = fakeBackend({ [route]: () => ok({ documentId: 'doc 1', status: 'confirmed' }, 202) })
+    const file = new File([new Uint8Array(10)], 'renewed.jpg', { type: 'image/jpeg' })
+
+    await replaceDocument('doc 1', file, { consents: CONSENTS })
+
+    const [request] = backend.sent(route)
+    expect(request.body).toBe(file)
+    expect(request.headers.get('Content-Type')).toBe('image/jpeg')
+    expect(Object.fromEntries(request.query)).toEqual({
+      filename: 'renewed.jpg',
+      cloudOcrConsent: 'true',
+      medicalCloudConsent: 'false',
+      useLlm: 'true',
+      background: 'true',
+    })
+  })
+
+  it('sends typed-in details as JSON, for a new document and for a new copy', async () => {
+    saveSession('token-meera', 3600)
+    const backend = fakeBackend({
+      'POST /api/v1/documents/manual': () => ok({ documentId: 'd-2', status: 'confirmed' }, 201),
+      'POST /api/v1/documents/d-1/versions/manual': () => ok({ documentId: 'd-1', status: 'confirmed' }, 201),
+    })
+
+    await createManualDocument('income_certificate', { name: 'Meera Rao', annual_income: '256000' })
+    await replaceManually('d-1', { name: 'Meera Rao' })
+
+    expect(backend.sent('POST /api/v1/documents/manual')[0].body).toEqual({
+      documentType: 'income_certificate',
+      fields: { name: 'Meera Rao', annual_income: '256000' },
+    })
+    expect(backend.sent('POST /api/v1/documents/d-1/versions/manual')[0].body).toEqual({ fields: { name: 'Meera Rao' } })
+  })
+
+  it("keeps the backend's reasons when typed-in details are refused", async () => {
+    saveSession('token-meera', 3600)
+    fakeBackend({
+      'POST /api/v1/documents/manual': () =>
+        fail(422, 'VALIDATION_FAILED', 'Some fields need correcting', { errors: ['aadhaar_number: not valid'] }),
+    })
+
+    const error = await failure(createManualDocument('identity', { name: 'Meera Rao' }))
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.status).toBe(422)
+    expect(error.details).toEqual({ errors: ['aadhaar_number: not valid'] })
+  })
+
+  it('deletes with DELETE, and asks which documents give the proofs', async () => {
+    saveSession('token-meera', 3600)
+    const answer = { asOf: '2026-11-19', matches: [], proofs: [] }
+    const backend = fakeBackend({
+      'DELETE /api/v1/documents/d-1': () => ok({ documentId: 'd-1', deleted: true }),
+      'POST /api/v1/documents/match': () => ok(answer),
+    })
+
+    expect(await deleteDocument('d-1')).toEqual({ documentId: 'd-1', deleted: true })
+    expect(await matchProofs(['proof_of_age', 'health_cover'])).toEqual(answer)
+    expect(backend.sent('POST /api/v1/documents/match')[0].body).toEqual({ proofs: ['proof_of_age', 'health_cover'] })
+  })
+
+  it('asks for the file of a new copy by its version', async () => {
+    saveSession('token-meera', 3600)
+    const route = 'GET /api/v1/documents/d-1/file'
+    const backend = fakeBackend({ [route]: () => ({ status: 200, bytes: new Uint8Array([1]), type: 'image/png' }) })
+
+    await getDocumentFile('d-1', undefined, 2)
+    await getDocumentFile('d-1')
+
+    expect(backend.sent(route).map((request) => request.query.get('version'))).toEqual(['2', null])
   })
 })

@@ -5,16 +5,17 @@ import { Icon } from '../components/Icon'
 /**
  * The document's photo or PDF, to compare the details with. The file needs the sign-in token, so
  * it is fetched here and shown from a temporary blob: address, which is let go when the screen
- * closes. Gives back { status: 'loading' | 'ready' | 'failed', url, isPdf }.
+ * closes. Gives back { status: 'loading' | 'ready' | 'failed', url, isPdf }. `version`: a new copy
+ * waiting for a check, instead of the copy in use.
  */
-export function usePaper(documentId) {
+export function usePaper(documentId, version) {
   const [paper, setPaper] = useState({ status: 'loading', url: null, isPdf: false })
 
   useEffect(() => {
     const controller = new AbortController()
     let url = null
     setPaper({ status: 'loading', url: null, isPdf: false })
-    getDocumentFile(documentId, controller.signal).then(
+    getDocumentFile(documentId, controller.signal, version).then(
       (blob) => {
         if (controller.signal.aborted) return
         if (typeof URL.createObjectURL !== 'function') {
@@ -32,7 +33,7 @@ export function usePaper(documentId) {
       controller.abort()
       if (url) URL.revokeObjectURL(url)
     }
-  }, [documentId])
+  }, [documentId, version])
 
   return paper
 }

@@ -74,15 +74,22 @@ function Header({ step, position, headingRef }) {
   )
 }
 
-function Box({ step, value, onChange, error, inputRef }) {
-  const id = `detail-${step.key}`
-  const label = ASK[step.state]
-  if (step.kind === 'state') {
+/**
+ * The box to type one detail in: a list of states, a date, or text (with the right keyboard).
+ * fieldKey names the detail; kind is fieldKind(fieldKey). Also used to type a document in.
+ */
+export function DetailBox({ id, fieldKey, kind, label, hint, value, onChange, error, inputRef }) {
+  if (kind === 'state') {
     return (
       <div className="field">
         <label htmlFor={id} className="field__label">
           {label}
         </label>
+        {hint && (
+          <p id={`${id}-hint`} className="field__hint">
+            {hint}
+          </p>
+        )}
         <select
           id={id}
           ref={inputRef}
@@ -90,7 +97,7 @@ function Box({ step, value, onChange, error, inputRef }) {
           value={value}
           onChange={(event) => onChange(event.target.value)}
           aria-invalid={error ? true : undefined}
-          aria-describedby={error ? `${id}-error` : undefined}
+          aria-describedby={[hint && `${id}-hint`, error && `${id}-error`].filter(Boolean).join(' ') || undefined}
         >
           <option value="">Choose the state</option>
           {STATES.map(([code, name]) => (
@@ -108,19 +115,20 @@ function Box({ step, value, onChange, error, inputRef }) {
     )
   }
   const extra =
-    step.kind === 'date'
-      ? { type: 'date', max: mustBePast(step.key) ? todayISO() : undefined }
+    kind === 'date'
+      ? { type: 'date', max: mustBePast(fieldKey) ? todayISO() : undefined }
       : { type: 'text', maxLength: TEXT_MAX }
   return (
     <TextField
       id={id}
       ref={inputRef}
       label={label}
+      hint={hint}
       error={error}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       {...extra}
-      {...KEYBOARD[step.kind]}
+      {...KEYBOARD[kind]}
     />
   )
 }
@@ -174,8 +182,11 @@ export function DetailStep({ step, answer, position, onAnswer }) {
         <>
           {step.state === 'read' && <p className="detail__was">Read as: {showValue(step.key, step.original)}</p>}
           <Notes notes={step.notes} />
-          <Box
-            step={step}
+          <DetailBox
+            id={`detail-${step.key}`}
+            fieldKey={step.key}
+            kind={step.kind}
+            label={ASK[step.state]}
             value={draft}
             onChange={(text) => {
               setDraft(text)
@@ -203,8 +214,53 @@ export function DetailStep({ step, answer, position, onAnswer }) {
   )
 }
 
+/**
+ * Every row of a list as boxes to type in, with "Remove" on each and "Add a …" at the end.
+ *   onType(index, part, text) — a part of a row was typed in
+ *   onRows(change)            — a row was added or removed (change: a function of the rows)
+ *   problems                  — { <row's place>: message } from checkRows
+ * Also used to type a document in; idPrefix keeps the boxes' ids apart from other lists.
+ */
+export function RowsEditor({ listKey, rows, problems, onRows, onType, idPrefix = listKey }) {
+  const word = rowWord(listKey)
+  const Word = word.charAt(0).toUpperCase() + word.slice(1)
+  return (
+    <>
+      {rows.map((row, index) => (
+        <fieldset key={index} className="row-edit">
+          <legend className="row-edit__title">
+            {Word} {index + 1}
+          </legend>
+          {ROW_PARTS[listKey].map(([name, label]) => (
+            <TextField
+              key={name}
+              id={`${idPrefix}-${index}-${name}`}
+              label={label}
+              value={row[name]}
+              maxLength={TEXT_MAX}
+              inputMode={name === 'amount' ? 'decimal' : undefined}
+              onChange={(event) => onType(index, name, event.target.value)}
+            />
+          ))}
+          {problems[index] && <p className="field__error">{problems[index]}</p>}
+          <Button
+            variant="quiet"
+            className="button--muted"
+            onClick={() => onRows((now) => now.filter((_, at) => at !== index))}
+          >
+            Remove {word} {index + 1}
+          </Button>
+        </fieldset>
+      ))}
+      <Button variant="secondary" icon="plus" onClick={() => onRows((now) => [...now, emptyRow(listKey)])}>
+        Add a {word}
+      </Button>
+    </>
+  )
+}
+
 /** One sentence for the rows to fix, said out loud: the list's own problem, or the first row's. */
-function rowProblem(problems, Word) {
+export function rowProblem(problems, Word) {
   if (problems.list) return problems.list
   const first = Object.keys(problems).map(Number).sort((a, b) => a - b)[0]
   return first === undefined ? null : `${Word} ${first + 1}: ${problems[first]}`
@@ -266,35 +322,7 @@ export function RowsStep({ step, answer, position, onAnswer }) {
         <>
           <p className="detail__was">{ASK[step.state === 'read' ? 'read' : step.state]}</p>
           <Notes notes={step.notes} />
-          {rows.map((row, index) => (
-            <fieldset key={index} className="row-edit">
-              <legend className="row-edit__title">
-                {Word} {index + 1}
-              </legend>
-              {ROW_PARTS[step.key].map(([name, label]) => (
-                <TextField
-                  key={name}
-                  id={`${step.key}-${index}-${name}`}
-                  label={label}
-                  value={row[name]}
-                  maxLength={TEXT_MAX}
-                  inputMode={name === 'amount' ? 'decimal' : undefined}
-                  onChange={(event) => change(index, name, event.target.value)}
-                />
-              ))}
-              {problems[index] && <p className="field__error">{problems[index]}</p>}
-              <Button
-                variant="quiet"
-                className="button--muted"
-                onClick={() => setRows((now) => now.filter((_, at) => at !== index))}
-              >
-                Remove {word} {index + 1}
-              </Button>
-            </fieldset>
-          ))}
-          <Button variant="secondary" icon="plus" onClick={() => setRows((now) => [...now, emptyRow(step.key)])}>
-            Add a {word}
-          </Button>
+          <RowsEditor listKey={step.key} rows={rows} problems={problems} onRows={setRows} onType={change} />
           {rowProblem(problems, Word) && (
             <p className="alert" role="alert">
               {rowProblem(problems, Word)}

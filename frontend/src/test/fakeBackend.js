@@ -172,8 +172,11 @@ export function makeDocument(changes = {}) {
 
 /**
  * Serves the document routes like backend/api/documents.py: the list (newest first, without
- * fields, flags, warnings or errors), one document (404 when it is not there), and uploads
- * (background=true: 202 with a new document, still "processing"). Gives back the store:
+ * fields, flags, warnings or errors; a replacement without its flags), one document (404 when it
+ * is not there), uploads (background=true: 202 with a new document, still "processing"), typing a
+ * document in (saved "confirmed" with the typed fields), a new copy (by upload: the document stays
+ * as it is, with replacement "processing"; typed in: the next version, "confirmed"; 409 unless the
+ * document is confirmed with no new copy being read or checked), and deleting. Gives back the store:
  *   current              — the documents as the fake backend holds them now, newest first
  *   change(id, changes)  — e.g. the reader has finished: change('doc-1', { status: 'needs_review' })
  */
@@ -187,12 +190,76 @@ export function serveDocuments(backend, documents = []) {
       )
     },
   }
-  const listed = (document) => ({ ...document, reviewFlags: [], warnings: [], errors: [], fields: {} })
-  const serveOne = (documentId) =>
-    backend.on(`GET /api/v1/documents/${documentId}`, () => {
-      const found = store.current.find((document) => document.documentId === documentId)
+  const listed = (document) => ({
+    ...document,
+    reviewFlags: [],
+    warnings: [],
+    errors: [],
+    fields: {},
+    replacement: document.replacement
+      ? { version: document.replacement.version, entry: document.replacement.entry, status: document.replacement.status }
+      : null,
+  })
+  const find = (documentId) => store.current.find((document) => document.documentId === documentId)
+  const typedFields = (fields) =>
+    Object.fromEntries(
+      Object.entries(fields).map(([key, value]) => [
+        key,
+        { value, sourceRef: 'entered_by_owner', reviewedBy: 'u-1', correctedByUser: false },
+      ]),
+    )
+  const notReplaceable = (document) => {
+    if (!document) return fail(404, 'NOT_FOUND', 'Document not found')
+    if (['processing', 'reviewed', 'needs_review'].includes(document.replacement?.status)) {
+      return fail(409, 'CONFLICT', 'A newer version is already being read or waiting for review; finish or reject it first')
+    }
+    if (document.status !== 'confirmed') {
+      return fail(409, 'CONFLICT', 'Only a confirmed document can be replaced; add it as a new document instead')
+    }
+    return null
+  }
+  const serveOne = (documentId) => {
+    const path = `/api/v1/documents/${documentId}`
+    backend.on(`GET ${path}`, () => {
+      const found = find(documentId)
       return found ? ok(found) : fail(404, 'NOT_FOUND', 'Document not found')
     })
+    backend.on(`DELETE ${path}`, () => {
+      if (!find(documentId)) return fail(404, 'NOT_FOUND', 'Document not found')
+      store.current = store.current.filter((document) => document.documentId !== documentId)
+      return ok({ documentId, deleted: true })
+    })
+    backend.on(`POST ${path}/versions`, () => {
+      const document = find(documentId)
+      const refused = notReplaceable(document)
+      if (refused) return refused
+      const replacement = {
+        version: document.version + 1,
+        entry: 'upload',
+        status: 'processing',
+        reviewFlags: [],
+        warnings: [],
+        errors: [],
+      }
+      store.change(documentId, { replacement })
+      return ok(find(documentId), 202)
+    })
+    backend.on(`POST ${path}/versions/manual`, ({ body }) => {
+      const document = find(documentId)
+      const refused = notReplaceable(document)
+      if (refused) return refused
+      store.change(documentId, {
+        entry: 'manual',
+        version: document.version + 1,
+        filename: null,
+        mimeType: null,
+        fileStored: false,
+        fields: typedFields(body.fields),
+        replacement: null,
+      })
+      return ok(find(documentId), 201)
+    })
+  }
 
   store.current.forEach((document) => serveOne(document.documentId))
   backend.on('GET /api/v1/documents', () => ok(store.current.map(listed)))
@@ -211,6 +278,25 @@ export function serveDocuments(backend, documents = []) {
     store.current = [document, ...store.current]
     serveOne(document.documentId)
     return ok(document, 202)
+  })
+  backend.on('POST /api/v1/documents/manual', ({ body }) => {
+    added += 1
+    const document = makeDocument({
+      documentId: `doc-new-${added}`,
+      entry: 'manual',
+      filename: null,
+      mimeType: null,
+      sizeBytes: null,
+      fileStored: false,
+      documentType: body.documentType,
+      status: 'confirmed',
+      fields: typedFields(body.fields),
+      createdAt: META.serverTime,
+      updatedAt: META.serverTime,
+    })
+    store.current = [document, ...store.current]
+    serveOne(document.documentId)
+    return ok(document, 201)
   })
   return store
 }

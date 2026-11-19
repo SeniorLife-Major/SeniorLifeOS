@@ -24,3 +24,8 @@ export function isKnownType(key) {
 export function typeLabel(key) {
   return DOCUMENT_TYPES.find((type) => type.key === key)?.label ?? 'Document'
 }
+
+/** A document's name inside a sentence: "Income certificate" → "income certificate", but "ID card" stays "ID card". */
+export function inSentence(label) {
+  return /^[A-Z][a-z]/.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label
+}
