@@ -69,3 +69,74 @@ export const MEERA = { userId: 'u-1', login: '+919876543210', displayName: 'Meer
 export function session(user = MEERA, token = 'token-meera') {
   return { user, accessToken: token, tokenType: 'bearer', expiresIn: 43200 }
 }
+
+/** A promise the test settles when it wants: to hold a fake answer back and see the screen meanwhile. */
+export function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
+}
+
+export function makeProfile(changes = {}) {
+  return {
+    language: 'en',
+    homeLocation: null,
+    accessibility: { fontScale: 1, highContrast: false, voice: false },
+    consents: { useLlm: false, medicalCloud: false, cloudOcr: false },
+    consentsUpdatedAt: null,
+    ...changes,
+  }
+}
+
+const round3 = (value) => Math.round(value * 1000) / 1000
+
+/**
+ * Serves GET and PATCH /api/v1/me/profile like backend/api/profile.py: only what is sent changes.
+ * A place name is looked up in `places`: one place ({ label, lat, lon }), or a list for a name that
+ * fits several (answered with the backend's 422 and its options). Gives back the store:
+ *   current — the profile as the fake backend holds it now
+ *   hold()  — the next PATCH waits until the test calls resolve() on what this gives back
+ */
+export function serveProfile(backend, profile, places = {}) {
+  const holds = []
+  const store = {
+    current: profile,
+    hold() {
+      const held = deferred()
+      holds.push(held)
+      return held
+    },
+  }
+  backend.on('GET /api/v1/me/profile', () => ok(store.current))
+  backend.on('PATCH /api/v1/me/profile', async ({ body }) => {
+    const held = holds.shift()
+    if (held) await held.promise
+    const next = { ...store.current }
+    if (body.accessibility) next.accessibility = { ...store.current.accessibility, ...body.accessibility }
+    if (body.consents) next.consents = { ...store.current.consents, ...body.consents }
+    if ('homeLocation' in body) {
+      const home = body.homeLocation
+      if (home === null) {
+        next.homeLocation = null
+      } else if (typeof home.lat === 'number') {
+        next.homeLocation = { label: home.place ?? null, lat: round3(home.lat), lon: round3(home.lon) }
+      } else {
+        const found = places[home.place]
+        if (!found) return fail(422, 'VALIDATION_FAILED', 'This place was not found; add the city, or share your location')
+        if (Array.isArray(found)) {
+          return fail(422, 'VALIDATION_FAILED', 'This name fits more than one place; choose one and send its lat and lon', {
+            options: found,
+          })
+        }
+        next.homeLocation = found
+      }
+    }
+    store.current = next
+    return ok(store.current)
+  })
+  return store
+}

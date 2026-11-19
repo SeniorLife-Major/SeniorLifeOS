@@ -36,6 +36,7 @@ src/
                       TextField, PasswordField
   hooks/              useWait (the wait after too many tries)
   pages/              one file per screen
+  profile/            the profile for every screen (ProfileProvider), text size and contrast (display.js)
   styles/app.css      colours and sizes (CSS variables) and the shared styles
   test/               test setup and fakeBackend.js, a pretend backend for tests
 ```
@@ -49,5 +50,9 @@ never ask Google for it.
 
 ## What works now
 
-Signing in, creating an account, signing out, and the home screen. Screens that are not built yet
-show "We could not find that page". Family Mode needs sharing in the backend first.
+Signing in, creating an account, signing out, the home screen, and Settings (text size, stronger
+contrast, home location, and what may go to AI services). Screens that are not built yet show
+"We could not find that page". Family Mode needs sharing in the backend first.
+
+The text size and contrast are also kept in `localStorage` (only those two values), so the app
+opens at the right size straight away.

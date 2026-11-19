@@ -13,4 +13,6 @@ afterEach(() => {
   clearSession()
   window.sessionStorage.clear()
   window.localStorage.clear()
+  document.documentElement.removeAttribute('style')
+  document.documentElement.removeAttribute('data-contrast')
 })
