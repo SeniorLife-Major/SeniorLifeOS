@@ -45,6 +45,8 @@ can't start (the old one keeps running) and a restarted postgres pod can't eithe
      only when its volume is first created), then change it as in step 4.
    - `SENIORLIFE_STORAGE_KEY` / `SENIORLIFE_CHECKPOINT_KEY`: documents and paused searches stored
      with the old (public) keys can't be opened with new ones. Treat them as test data.
+   - `GROQ_API_KEY`, `GEOAPIFY_API_KEY` and `APIFY_API`: doctor search needs all three. Every
+     search asks Practo live through Apify, and a new pod has no saved doctors to fall back on.
 2. Create it:
    ```bash
    kubectl -n seniorlifeos create secret generic seniorlife-env --from-env-file=seniorlife.env

@@ -106,7 +106,15 @@ def empty_view(run_id: str, status: str, notes: list[str] | None = None) -> dict
     return {"request_id": run_id, "status": status, "specialty": None, "doctor_fallback": None,
             "search_location": None, "search_radius_km": None, "doctors": [], "other_doctors": [],
             "is_top_choice": False, "answer": None, "notes": notes or [], "attribution": None,
-            "question": None, "options": [], "emergency": None}
+            "question": None, "options": [], "emergency": None, "doctor_source": None}
+
+
+def source_view(source: Any) -> dict[str, Any] | None:
+    """Where the doctors shown came from (graphs/health_graph.doctor_source): live from Practo
+    just now, or saved, with the newest date among them and why."""
+    if not isinstance(source, dict) or source.get("kind") not in ("live", "saved"):
+        return None
+    return {"kind": source["kind"], "reason": source.get("reason"), "checked_on": source.get("checked_on")}
 
 
 def emergency_view(details: dict[str, Any], source: str | None) -> dict[str, Any]:
@@ -135,7 +143,8 @@ def result_view(run_id: str, values: dict[str, Any], waiting: str | None = None,
         shown_ids = {doctor.get("doctor_id") for doctor in shown}
         view.update(search_radius_km=values.get("search_radius_km"), is_top_choice=bool(top),
                     answer=values.get("answer"), doctors=[doctor_view(doctor) for doctor in shown],
-                    other_doctors=[doctor_view(doctor) for doctor in ranked if doctor.get("doctor_id") not in shown_ids])
+                    other_doctors=[doctor_view(doctor) for doctor in ranked if doctor.get("doctor_id") not in shown_ids],
+                    doctor_source=source_view(values.get("doctor_source")))
     elif status == "no_doctors_nearby":
         view["search_radius_km"] = values.get("search_radius_km")
     elif status == "emergency":

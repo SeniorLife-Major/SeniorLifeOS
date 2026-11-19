@@ -91,6 +91,10 @@ services:
       # Places typed for a doctor search ("Malad West, Mumbai")
       GEOAPIFY_API_KEY: "${GEOAPIFY_API_KEY:?Set GEOAPIFY_API_KEY in deployment/.env}"
 
+      # Doctors asked live from Practo (through Apify) on every search; the day's budget in dollars
+      APIFY_API: "${APIFY_API:?Set APIFY_API in deployment/.env}"
+      DOCTOR_FETCH_DAILY_USD: "${DOCTOR_FETCH_DAILY_USD:-2.00}"
+
       # Cloud OCR (Optional)
       SENIORLIFE_CLOUD_OCR: "google"
       GOOGLE_VISION_API_KEY: "${GOOGLE_VISION_API_KEY:-}"

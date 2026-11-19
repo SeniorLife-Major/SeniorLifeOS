@@ -5,7 +5,7 @@
 export const STAGES = [
   'Checking for emergency signs',
   'Choosing the right kind of doctor',
-  'Looking for doctors nearby',
+  'Asking Practo for doctors nearby (live, via Apify)',
   'Checking registrations',
   'Picking the best three',
 ]
@@ -126,6 +126,28 @@ export function resultsHeading(result) {
 }
 
 const SEARCH_DATE = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short' })
+const SAVED_DATE = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+
+// Why the saved doctors were shown (backend graphs/health_graph.py SAVED_BECAUSE).
+const SAVED_BECAUSE = {
+  daily_limit: "Today's live searches on Practo are used up.",
+  none_live: 'Practo listed no doctor of this kind near here just now.',
+  not_asked: 'Practo was not asked live for this search.',
+}
+
+/** Where the doctors shown came from (the backend's doctorSource): live from Practo just now,
+ *  or saved from an earlier search, with why and when. Null when the backend did not say. */
+export function sourceWords(source) {
+  if (source?.kind === 'live') {
+    return { kind: 'live', chip: 'Live from Practo', text: 'Found on Practo just now, through Apify.' }
+  }
+  if (source?.kind !== 'saved') return null
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(source.checkedOn ?? '')
+  const day = match ? SAVED_DATE.format(new Date(Date.UTC(+match[1], +match[2] - 1, +match[3]))) : null
+  const why = SAVED_BECAUSE[source.reason] ?? 'Practo could not be reached just now.'
+  const when = day ? `These doctors were saved from Practo on ${day}.` : 'These doctors were saved from Practo earlier.'
+  return { kind: 'saved', chip: 'Saved list', text: `${why} ${when}` }
+}
 
 /** "19 Nov" in this phone's time zone; null for an odd date. */
 export function searchDate(value) {

@@ -31,11 +31,11 @@ anything else is asked (a request may name a place this machine can't recognise)
 in the profile (home_location) is used only when they mean home ("ghar ke paas", or "home" as the
 answer to the location question); it is offered in the question, never guessed.
 
-Doctors near the place (step 2d) come from the stored list. With medical consent, a search the
-list lacks or holds from more than 30 days ago is fetched from Practo first, unless the list
-already has 3 recent doctors of the specialty within 5 km (tools/doctor_refresh.py: Apify learns
-the specialty and the area, never the phone's location).
-Details fetched more than 30 days ago are still shown, with a note that they may have changed
+Doctors near the place (step 2d) come live from Practo: every search fetches its area and
+specialty through Apify first (tools/doctor_refresh.py, doctor-search Decision 22; Apify learns the
+specialty and the area, never the phone's location), and only the doctors that fetch brought are
+searched. The stored list is the backup, used and named as such (doctor_source) when the fetch
+can't be made or Practo listed nobody near. Details fetched more than 30 days ago are still shown, with a note that they may have changed
 (Decision 12). Each doctor found then gets their registration level and a note (step 2e,
 tools/doctor_verify.py): verified by Practo, or only listed; not checked by us on the NMC
 register. Then a fixed formula orders them and picks the top 3 (step 2f, tools/doctor_rank.py):
@@ -55,7 +55,8 @@ from langgraph.types import interrupt
 
 from ..tools.doctor_explain import explain_doctors
 from ..tools.doctor_rank import LOW_RATING_PERCENT, TOP, rank_doctors
-from ..tools.doctor_refresh import refresh_doctors
+from ..tools.doctor_refresh import LIVE, refresh_doctors
+from ..tools.provider_import import today_utc
 from ..tools.doctor_search import RADII_KM, DoctorListError, find_nearby, load_doctors
 from ..tools.doctor_verify import PRACTO_VERIFIED, registration_level, registration_note
 from ..tools.geocode import GeocodeError, device_location, find_place, search_near_from_text
@@ -155,7 +156,8 @@ class HealthState(TypedDict, total=False):
     search_radius_km: int
     relaxed_filters: list[str]  # the person's wishes that had to be dropped: max_fee, doctor_gender
     doctor_fallback: str | None  # general_physician when no doctor of the specialty was near
-    doctor_refresh: dict[str, Any]  # whether the area was fetched from Practo first: status, area, results, cost
+    doctor_refresh: dict[str, Any]  # the live fetch: status, area, results, cost, doctor_ids
+    doctor_source: dict[str, Any]  # where the doctors shown came from: kind (live, saved), reason, checked_on
     events: list[str]
     warnings: list[str]
     errors: list[str]
@@ -465,33 +467,55 @@ def _doctor_list() -> tuple[list[dict[str, Any]], DoctorListError | None]:
         return [], exc
 
 
+# Why saved doctors were shown instead of live ones (doctor_source.reason), from the fetch's status;
+# any other status (no key, no area name, Practo failed) is unreachable.
+SAVED_BECAUSE = {"over_budget": "daily_limit", "fetched": "none_live", "reused": "none_live",
+                 "no_consent": "not_asked"}
+
+
+def doctor_source(refresh: dict[str, Any], live: bool, shown: list[dict[str, Any]]) -> dict[str, Any]:
+    """Where the doctors shown came from: live (Practo, just now) or saved (the stored list, with
+    the newest date among them and why: daily_limit, none_live, not_asked, unreachable)."""
+    if live:
+        return {"kind": "live", "reason": None, "checked_on": today_utc().isoformat()}
+    dates = sorted(doctor["fetched_on"] for doctor in shown if isinstance(doctor.get("fetched_on"), str))
+    return {"kind": "saved", "reason": SAVED_BECAUSE.get(refresh["status"], "unreachable"),
+            "checked_on": dates[-1] if dates else None}
+
+
 def search_doctors(state: HealthState) -> dict[str, Any]:
-    """Doctors of the specialty near the place, nearest first (step 2d). With medical consent, a
-    search the stored list lacks or holds from more than 30 days ago is fetched first (Decision
-    13); without it, or if that fails, the stored list is used as it is. The person's wishes
-    (doctor's gender, highest fee) are kept while the search widens; dropped only if nobody is
-    found within 20 km, and then the answer says so. No doctor of the specialty within 20 km: the
-    nearest general physicians, who can see them first and refer them (Decision 9). Details
-    checked more than 30 days ago are shown with a note that they may have changed (Decision 12)."""
+    """Doctors of the specialty near the place, nearest first (step 2d). They are asked from
+    Practo live first (doctor-search Decision 22), and only the doctors that fetch brought are
+    searched; if it can't be made or none of them is near, the stored list is searched instead
+    and the answer says so (doctor_source). The person's wishes (doctor's gender, highest fee) are
+    kept while the search widens; dropped only if nobody is found within 20 km, and then the
+    answer says so. No doctor of the specialty within 20 km: the nearest general physicians, who
+    can see them first and refer them (Decision 9). Details checked more than 30 days ago are
+    shown with a note that they may have changed (Decision 12)."""
     warnings = list(state.get("warnings", []))
     specialty = state.get("specialty") if state.get("specialty") in SPECIALTIES else GENERAL_PHYSICIAN
     preferences = state.get("preferences") or {}
-    doctors, list_error = _doctor_list()
-    refresh = {"status": "no_consent"}
+    refresh = {"status": "no_consent", "doctor_ids": []}
     if state.get("medical_cloud_consent"):  # Apify would learn the specialty and the area
-        refresh = refresh_doctors(state["search_location"], specialty, doctors)
-        if refresh["status"] == "fetched":
-            doctors, list_error = _doctor_list()
+        refresh = refresh_doctors(state["search_location"], specialty)
+    doctors, list_error = _doctor_list()  # read after the fetch, which saves into it
     events = add_event(state, f"search_doctors:refresh:{refresh['status']}")
     if list_error is not None:
         return {"status": "search_unavailable", "doctors": [], "warnings": [*warnings, SEARCH_UNAVAILABLE],
                 "errors": [*state.get("errors", []), str(list_error)], "route": "done", "doctor_refresh": refresh,
                 "events": [*events, "search_doctors:no_list"]}
     wishes = {"gender": preferences.get("doctor_gender"), "max_fee": preferences.get("max_fee")}
-    found = find_nearby(doctors, specialty, state["search_location"], **wishes)
+    place = state["search_location"]
+    found, live = {"doctors": []}, False
+    live_ids = set(refresh.get("doctor_ids") or []) if refresh["status"] in LIVE else set()
+    if live_ids:
+        found = find_nearby([d for d in doctors if d["doctor_id"] in live_ids], specialty, place, **wishes)
+        live = bool(found["doctors"])
+    if not live:
+        found = find_nearby(doctors, specialty, place, **wishes)
     fallback = None
     if not found["doctors"] and specialty != GENERAL_PHYSICIAN:
-        first = find_nearby(doctors, GENERAL_PHYSICIAN, state["search_location"], **wishes)
+        first = find_nearby(doctors, GENERAL_PHYSICIAN, place, **wishes)
         if first["doctors"]:
             found, fallback = first, GENERAL_PHYSICIAN
             warnings.append(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES[specialty], km=FAR))
@@ -503,17 +527,19 @@ def search_doctors(state: HealthState) -> dict[str, Any]:
     if stale:  # the oldest date shown
         warnings.append(OLD_DETAILS.format(day=_day(stale[0])))
     count = len(found["doctors"])
+    source = doctor_source(refresh, live, found["doctors"])
     return {
         "doctors": found["doctors"],
         "search_radius_km": found["radius_km"],
         "relaxed_filters": found["relaxed"] if count else [],
         "doctor_fallback": fallback,
         "doctor_refresh": refresh,
+        "doctor_source": source,
         "status": "doctors_found" if count else "no_doctors_nearby",
         "warnings": warnings,
         "route": "verify" if count else "done",
         "events": [*events, f"search_doctors:{count}:{found['radius_km']}km"
-                   + (":general_physician" if fallback else "")],
+                   + (":general_physician" if fallback else "") + f":{source['kind']}"],
     }
 
 

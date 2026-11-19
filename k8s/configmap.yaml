@@ -21,5 +21,6 @@ data:
   SENIORLIFE_LLM_MODEL: "openai/gpt-oss-20b"
   SENIORLIFE_CLOUD_OCR: "google"
   SENIORLIFE_VIRUS_SCANNER: "none"
+  DOCTOR_FETCH_DAILY_USD: "2.00"  # the most live doctor searches (Apify) may cost in a day
   ACTUATOR_ENABLED: "true"
   LANGSMITH_TRACING: "false"

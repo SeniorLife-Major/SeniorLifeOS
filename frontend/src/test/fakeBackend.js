@@ -439,6 +439,7 @@ export function makeSearch(changes = {}) {
       }),
     ],
     otherDoctors: [],
+    doctorSource: { kind: 'live', reason: null, checkedOn: '2026-11-20' },
     isTopChoice: true,
     answer: 'Here are 2 orthopaedic doctors near your home.',
     notes: [],

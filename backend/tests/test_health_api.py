@@ -19,7 +19,7 @@ from backend.storage.health_service import HealthService
 from backend.tools.specialties import SPECIALTIES
 from backend.utils.checkpoints import close_checkpointer
 from test_auth_api import CONFIG_USERS, ApiCase, config
-from test_health_graph import FAKE_DOCTORS, IN_ANDHERI, FakeStructuredModel, already_fresh, no_network, reading
+from test_health_graph import FAKE_DOCTORS, IN_ANDHERI, FakeStructuredModel, not_fetched, no_network, reading
 from test_storage_db import URL, DatabaseCase
 
 HERE = {"lat": IN_ANDHERI["lat"], "lon": IN_ANDHERI["lon"]}
@@ -49,7 +49,7 @@ class HealthApiCase(ApiCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         for target, stand_in in (("find_place", no_network), ("load_doctors", lambda: FAKE_DOCTORS),
-                                 ("refresh_doctors", already_fresh)):
+                                 ("refresh_doctors", not_fetched)):
             patcher = patch(f"backend.graphs.health_graph.{target}", stand_in)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -101,9 +101,9 @@ class AskTests(HealthApiCase):
         fake = FakeStructuredModel(reading(search_near="current_location"))
         refreshed = []
 
-        def refresh(place, specialty, doctors):
+        def refresh(place, specialty):
             refreshed.append(specialty)
-            return already_fresh(place, specialty, doctors)
+            return not_fetched(place, specialty)
 
         with patch("backend.agents.llm_agents.structured_model", fake), \
                 patch("backend.graphs.health_graph.refresh_doctors", refresh):
@@ -224,10 +224,10 @@ class StreamTests(HealthApiCase):
     def test_the_search_finishes_and_is_saved_when_the_caller_goes_away(self):
         release, started = threading.Event(), threading.Event()
 
-        def slow_refresh(place, specialty, doctors):
+        def slow_refresh(place, specialty):
             started.set()
             release.wait(10)
-            return already_fresh(place, specialty, doctors)
+            return not_fetched(place, specialty)
 
         events = self.health.start("senior-meera", "heart doctor near me", current_location=HERE,
                                    medical_cloud_consent=True)  # consent: the refresh step runs

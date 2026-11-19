@@ -8,7 +8,7 @@ import { Screen } from '../components/Screen'
 import { DoctorCard } from '../doctor/DoctorCard'
 import { EmergencyView } from '../doctor/EmergencyView'
 import { Question } from '../doctor/Question'
-import { doneWhenAsked, endWords, QUESTIONS, resultsHeading } from '../doctor/search'
+import { doneWhenAsked, endWords, QUESTIONS, resultsHeading, sourceWords } from '../doctor/search'
 import { SearchProgress } from '../doctor/SearchProgress'
 import { useSearchRun } from '../doctor/useSearchRun'
 
@@ -131,12 +131,19 @@ function Doctors({ result }) {
   const [showOthers, setShowOthers] = useState(false)
   const others = result.otherDoctors ?? []
   const heading = resultsHeading(result)
+  const source = sourceWords(result.doctorSource)
   return (
     <Screen title={heading} back={BACK}>
       <div className="intro">
         <FocusedTitle>{heading}</FocusedTitle>
         {result.specialty && <p className="lead">{result.specialty.label}</p>}
       </div>
+      {source && (
+        <p className="doctor-source">
+          <span className={`chip ${source.kind === 'live' ? 'chip--ready' : 'chip--check'}`}>{source.chip}</span>
+          <span>{source.text}</span>
+        </p>
+      )}
       <Notes notes={result.notes} />
       {result.doctors.map((doctor, index) => (
         <DoctorCard key={doctor.doctorId ?? index} doctor={doctor} id={`doctor-${index}`} />

@@ -135,6 +135,12 @@ class EmergencyDto(CamelModel):
     source: str | None = None  # rules, rules+model, model, person; None while it asks
 
 
+class DoctorSourceDto(CamelModel):
+    kind: str  # live: asked from Practo just now; saved: from the stored list
+    reason: str | None = None  # saved only: daily_limit, none_live, not_asked, unreachable
+    checked_on: str | None = None  # live: today; saved: the newest date among those shown
+
+
 class HealthResultDto(CamelModel):
     request_id: str
     status: str
@@ -151,6 +157,7 @@ class HealthResultDto(CamelModel):
     question: str | None = None
     options: list[str] = []
     emergency: EmergencyDto | None = None
+    doctor_source: DoctorSourceDto | None = None  # with doctors_found only
 
 
 class HealthRequestSummaryDto(CamelModel):
