@@ -31,17 +31,17 @@ spec:
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: seniorlife-secrets
+                  name: seniorlife-env
                   key: POSTGRES_DB
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: seniorlife-secrets
+                  name: seniorlife-env
                   key: POSTGRES_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: seniorlife-secrets
+                  name: seniorlife-env
                   key: POSTGRES_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata

@@ -6,8 +6,10 @@ name: seniorlifeos
 # Standalone Docker Compose specification for server environments.
 # Uses prebuilt production container images from GHCR and Docker Hub.
 # Includes Nginx handling HTTP (port 80) redirection and HTTPS (port 443).
-# All environment variables are set directly with their explicit values.
-# No external .env file or variable expansion is required.
+# The backend image also serves the web app, so nginx sends everything to it.
+# Settings are written here; secrets and API keys are not. They come from deployment/.env on the
+# server (copy .env.example; never committed), and compose refuses to start while a required one
+# is missing.
 # ==============================================================================
 
 services:
@@ -67,28 +69,31 @@ services:
       SERVER_HOST: "0.0.0.0"
       SERVER_PORT: "8000"
 
-      # Database Configuration
-      DATABASE_URL: "postgresql+asyncpg://postgres:postgres@db:5432/seniorlife_os"
+      # Database Configuration (the password: letters and digits only, it sits inside this URL)
+      DATABASE_URL: "postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deployment/.env}@db:5432/seniorlife_os"
       DATABASE_ECHO: "false"
       DATABASE_POOL_SIZE: "10"
       DATABASE_MAX_OVERFLOW: "20"
 
-      # Cryptography & Security Keys
-      JWT_SECRET: "change-me-to-a-secure-random-32-character-secret-in-production"
-      SENIORLIFE_HASH_KEY: "change-me-to-a-secure-salt-key-minimum-32-chars-long"
-      SENIORLIFE_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-      SENIORLIFE_CHECKPOINT_KEY: "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+      # Cryptography & Security Keys (deployment/.env; see .env.example for how to make them)
+      JWT_SECRET: "${JWT_SECRET:?Set JWT_SECRET in deployment/.env}"
+      SENIORLIFE_HASH_KEY: "${SENIORLIFE_HASH_KEY:?Set SENIORLIFE_HASH_KEY in deployment/.env}"
+      SENIORLIFE_STORAGE_KEY: "${SENIORLIFE_STORAGE_KEY:?Set SENIORLIFE_STORAGE_KEY in deployment/.env}"
+      SENIORLIFE_CHECKPOINT_KEY: "${SENIORLIFE_CHECKPOINT_KEY:?Set SENIORLIFE_CHECKPOINT_KEY in deployment/.env}"
       SENIORLIFE_STORAGE_DIR: "/app/var/documents"
 
-      # AI & LLM Providers (Groq / OpenAI)
+      # AI & LLM Providers (Groq / OpenAI). Doctor search always uses the AI model.
       SENIORLIFE_LLM_PROVIDER: "groq"
       SENIORLIFE_LLM_MODEL: "openai/gpt-oss-20b"
-      GROQ_API_KEY: ""
-      OPENAI_API_KEY: ""
+      GROQ_API_KEY: "${GROQ_API_KEY:?Set GROQ_API_KEY in deployment/.env}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+
+      # Places typed for a doctor search ("Malad West, Mumbai")
+      GEOAPIFY_API_KEY: "${GEOAPIFY_API_KEY:?Set GEOAPIFY_API_KEY in deployment/.env}"
 
       # Cloud OCR (Optional)
       SENIORLIFE_CLOUD_OCR: "google"
-      GOOGLE_VISION_API_KEY: ""
+      GOOGLE_VISION_API_KEY: "${GOOGLE_VISION_API_KEY:-}"
 
       # Virus Scanning (Optional)
       SENIORLIFE_VIRUS_SCANNER: "none"
@@ -98,7 +103,7 @@ services:
       # Monitoring & Tracing
       ACTUATOR_ENABLED: "true"
       LANGSMITH_TRACING: "false"
-      LANGSMITH_API_KEY: ""
+      LANGSMITH_API_KEY: "${LANGSMITH_API_KEY:-}"
     volumes:
       - document_vault_data:/app/var/documents
     healthcheck:
@@ -120,7 +125,7 @@ services:
     environment:
       POSTGRES_DB: seniorlife_os
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deployment/.env}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

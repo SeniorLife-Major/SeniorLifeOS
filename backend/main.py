@@ -19,6 +19,7 @@ from fastapi.responses import RedirectResponse
 
 from backend.api import auth_router, demo_router, documents_router, health_requests_router, profile_router
 from backend.api.deps import is_production
+from backend.api.web_app import app_page, built_web_app, install_web_app
 from backend.common.schemas import ApiResponse, CamelModel
 from backend.core.config import get_config
 from backend.errors import BadRequestException, NotFoundException, register_global_error_handlers
@@ -163,10 +164,15 @@ def page_fixtures_only(state: dict[str, Any]) -> None:
 RAW_WORKFLOWS_LISTED = config.app.demo_mode and not is_production(config)
 
 
+WEB_APP = built_web_app()  # frontend/dist when it is built here (the Docker image), else None
+
+
 # 6. Standard Routes
 @app.get("/", include_in_schema=False)
 def root():
-    """Redirect root to Swagger OpenAPI documentation."""
+    """The web app when it is built here (api/web_app.py), else the Swagger OpenAPI documentation."""
+    if WEB_APP is not None:
+        return app_page(WEB_APP)
     return RedirectResponse(url="/docs")
 
 
@@ -220,3 +226,8 @@ def run_benefits_case(request: WorkflowTriggerRequest) -> ApiResponse[dict[str, 
     graph = build_benefits_graph()
     result = graph.invoke(request.state)
     return ApiResponse.of(data=result, version=config.app.version)
+
+
+# 7. The web app at every address left over: last, so every API route above comes first.
+if install_web_app(app, WEB_APP):
+    logger.info("Serving the web app from %s", WEB_APP)

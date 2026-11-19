@@ -2,7 +2,7 @@
 
 This folder contains the standalone **Docker Compose** deployment configuration for deploying **SeniorLife OS** directly to a production server with an **Nginx HTTPS Reverse Proxy** handling ports 80 and 443.
 
-All environment variables, service dependencies, container images, and volumes are **set directly** in `docker-compose.yml`. No `.env` file or variable expansion is required.
+Service dependencies, container images, volumes and settings are written in `docker-compose.yml`. Secrets and API keys are not: they come from `deployment/.env` on the server (Step 2), never committed. The backend image also serves the web app, so the site and its API are one address: `https://<SERVER_IP>/`.
 
 ---
 
@@ -41,7 +41,8 @@ flowchart TD
 
 ```
 deployment/
-├── docker-compose.yml        # Self-contained compose manifest (images, values & volumes)
+├── docker-compose.yml        # Compose manifest (images, settings & volumes)
+├── .env.example              # The secrets to put in deployment/.env on the server (never committed)
 ├── README.md                 # This deployment guide
 └── nginx/
     ├── nginx.conf            # Reverse proxy & SSL termination configuration
@@ -70,25 +71,38 @@ cd deployment
 # scp -r deployment user@server:/opt/seniorlifeos/
 ```
 
-### Step 2: Configure Production Values in `docker-compose.yml`
+### Step 2: Put the Secrets in `deployment/.env`
 
-Open `docker-compose.yml` and directly set your production values under `backend.environment:`:
+Settings are written in `docker-compose.yml`; secrets and API keys never are. They live in
+`deployment/.env` on the server only (git ignores it). Compose reads it by itself and **refuses to
+start** while a required value is missing, so a placeholder can never go live.
 
 ```bash
-nano docker-compose.yml
+cp .env.example .env
+nano .env        # fill every value; .env.example says what each one is
+chmod 600 .env
 ```
 
-Key values to configure directly in `docker-compose.yml`:
-- **`GROQ_API_KEY`** or **`OPENAI_API_KEY`**: Your LLM provider API key.
-- **`JWT_SECRET`**: A random 32+ character string.
-- **`SENIORLIFE_HASH_KEY`**: A random 32+ character salt key for Aadhaar/PAN hashing.
-- **`SENIORLIFE_STORAGE_KEY`**: A 64-hex character (32 bytes) AES encryption key for stored files:
+Make each random value on the server:
+```bash
+openssl rand -hex 32       # SENIORLIFE_STORAGE_KEY, SENIORLIFE_CHECKPOINT_KEY (64 hex characters)
+openssl rand -base64 48    # JWT_SECRET, SENIORLIFE_HASH_KEY
+openssl rand -hex 16       # POSTGRES_PASSWORD (letters and digits only: it goes inside DATABASE_URL)
+```
+
+- **Required:** `POSTGRES_PASSWORD`, `JWT_SECRET`, `SENIORLIFE_HASH_KEY`, `SENIORLIFE_STORAGE_KEY`,
+  `SENIORLIFE_CHECKPOINT_KEY`, `GROQ_API_KEY` (doctor search always uses the AI model),
+  `GEOAPIFY_API_KEY` (places typed for a doctor search).
+- **Optional:** `OPENAI_API_KEY`, `GOOGLE_VISION_API_KEY`, `LANGSMITH_API_KEY`.
+- **Never change `SENIORLIFE_STORAGE_KEY` or `SENIORLIFE_CHECKPOINT_KEY`** once documents are stored:
+  what was stored with one key can't be opened with another. Keep a copy of `.env` somewhere safe.
+- **`POSTGRES_PASSWORD` is taken only when the database volume is first created.** On a server that
+  already ran with the old committed password (`postgres`), change it in the database first, then
+  in `.env`, then restart the backend:
   ```bash
-  python3 -c "import secrets; print(secrets.token_hex(32))"
+  docker compose exec db psql -U postgres -c "ALTER USER postgres PASSWORD '<the new one>'"
+  docker compose up -d
   ```
-  *(Never change this key once documents have been uploaded, or stored files cannot be decrypted!)*
-- **`SENIORLIFE_CHECKPOINT_KEY`**: Another 64-hex character key for LangGraph paused workflow state.
-- **`POSTGRES_PASSWORD`**: Strong password for PostgreSQL (update both `db.environment.POSTGRES_PASSWORD` and `backend.environment.DATABASE_URL`).
 
 ### Step 3: Start the Containers
 
@@ -167,6 +181,9 @@ curl -I http://localhost/
 # Output: HTTP/1.1 301 Moved Permanently
 # Location: https://localhost/
 ```
+
+The web app:
+- Open `https://<SERVER_IP>/` in your browser (any page address, e.g. `/doctor`, opens the app).
 
 Interactive Swagger documentation:
 - Open `https://<SERVER_IP>/docs` in your browser.
