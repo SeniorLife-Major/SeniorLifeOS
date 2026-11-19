@@ -60,8 +60,12 @@ My documents: the list (the ones that need you first), adding one photo or PDF, 
 while the backend reads it. A photo over 5 MB, or one the backend can't take (WebP, or HEIC where
 the browser can open it), is redrawn as a smaller JPEG on the phone before it is sent.
 
-Screens that are not built yet (checking a document's details, the doctor search) show "We could
-not find that page". Family Mode needs sharing in the backend first.
+Checking a document's details: one at a time next to the photo (or a link to the PDF), changing
+or adding any of them, the rows of a lab report, prescription or bill, then saving it or saying not
+to keep it.
+
+Screens that are not built yet (typing a document in, renewing one, the doctor search) show "We
+could not find that page". Family Mode needs sharing in the backend first.
 
 The text size and contrast are also kept in `localStorage` (only those two values), so the app
 opens at the right size straight away.

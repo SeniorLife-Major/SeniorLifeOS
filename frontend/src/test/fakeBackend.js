@@ -8,6 +8,7 @@ import { vi } from 'vitest'
 // (body is the JSON body, parsed; anything else as sent), and gives back a reply:
 //   { status, body }  body is sent as JSON
 //   { status, text }  text is sent as it is (e.g. an HTML error page from a proxy)
+//   { status, bytes, type }  a file (bytes: a Uint8Array) with that Content-Type
 
 const META = { serverTime: '2026-11-19T10:00:00Z', version: 'test', requestId: 'req-test' }
 
@@ -42,6 +43,9 @@ export function fakeBackend(routes = {}) {
 
     const handler = table.get(`${method} ${url.pathname}`)
     const reply = handler ? await handler(request) : fail(404, 'NOT_FOUND', `The fake backend has no ${method} ${url.pathname}`)
+    if (reply.bytes !== undefined) {
+      return new Response(reply.bytes, { status: reply.status ?? 200, headers: { 'Content-Type': reply.type } })
+    }
     const text = reply.text ?? JSON.stringify(reply.body ?? null)
     return new Response(text, {
       status: reply.status ?? 200,
@@ -209,4 +213,41 @@ export function serveDocuments(backend, documents = []) {
     return ok(document, 202)
   })
   return store
+}
+
+/** What GET /documents/{id}/review gives (ReviewDto): an income certificate with every detail read, unless changed. */
+export function makeReview(changes = {}) {
+  return {
+    documentId: 'doc-1',
+    documentType: 'income_certificate',
+    candidates: { name: 'Meera Rao', annual_income: 256000, issue_date: '2025-12-23' },
+    missingFields: [],
+    optionalFields: [],
+    flags: [],
+    errors: [],
+    ...changes,
+  }
+}
+
+/**
+ * Serves one document's review routes like backend/api/documents.py: GET .../review, GET .../file
+ * (`file`: { bytes, type }, or null for "no file kept", a 404), and POST .../review, which answers
+ * with the document "confirmed" or "rejected". Tests replace a route with backend.on to answer
+ * otherwise.
+ */
+export function serveReview(backend, review, { file = { bytes: new Uint8Array([255, 216, 255]), type: 'image/jpeg' } } = {}) {
+  const path = `/api/v1/documents/${review.documentId}`
+  backend.on(`GET ${path}/review`, () => ok(review))
+  backend.on(`GET ${path}/file`, () =>
+    file ? { status: 200, ...file } : fail(404, 'NOT_FOUND', "This version's file is no longer kept"),
+  )
+  backend.on(`POST ${path}/review`, ({ body }) =>
+    ok(
+      makeDocument({
+        documentId: review.documentId,
+        documentType: review.documentType,
+        status: body.action === 'confirm' ? 'confirmed' : 'rejected',
+      }),
+    ),
+  )
 }

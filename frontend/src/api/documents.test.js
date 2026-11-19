@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fail, fakeBackend, ok } from '../test/fakeBackend'
 import { ApiError, MESSAGES } from './client'
-import { getDocument, listDocuments, uploadDocument } from './documents'
+import { getDocument, getDocumentFile, getReview, listDocuments, sendReview, uploadDocument } from './documents'
 import { saveSession } from './session'
 
 const UPLOAD = 'POST /api/v1/documents'
@@ -107,5 +107,48 @@ describe('listDocuments and getDocument', () => {
     const error = await failure(listDocuments())
     expect(error.message).toBe(MESSAGES.storageDown)
     expect(error.status).toBe(503)
+  })
+})
+
+describe('the review calls', () => {
+  it('ask for what is waiting, and send the decision with only the changed details', async () => {
+    const backend = fakeBackend({
+      'GET /api/v1/documents/d-1/review': () => ok({ documentId: 'd-1', candidates: { name: 'Meera' } }),
+      'POST /api/v1/documents/d-1/review': () => ok({ documentId: 'd-1', status: 'confirmed' }),
+    })
+
+    expect(await getReview('d-1')).toEqual({ documentId: 'd-1', candidates: { name: 'Meera' } })
+    expect(await sendReview('d-1', 'confirm', { annual_income: '266000' })).toEqual({ documentId: 'd-1', status: 'confirmed' })
+    await sendReview('d-1', 'reject')
+
+    const sent = backend.sent('POST /api/v1/documents/d-1/review')
+    expect(sent.map((request) => request.body)).toEqual([
+      { action: 'confirm', edits: { annual_income: '266000' } },
+      { action: 'reject', edits: {} },
+    ])
+    expect(sent[0].headers.get('Content-Type')).toBe('application/json')
+  })
+
+  it('fetch the file with the sign-in token, as a file and not as JSON', async () => {
+    saveSession('token-meera', 3600)
+    const backend = fakeBackend({
+      'GET /api/v1/documents/d-1/file': () => ({ status: 200, bytes: new Uint8Array([1, 2, 3]), type: 'image/png' }),
+    })
+
+    const blob = await getDocumentFile('d-1')
+    expect(blob.type).toBe('image/png')
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
+    expect(backend.sent('GET /api/v1/documents/d-1/file')[0].headers.get('Authorization')).toBe('Bearer token-meera')
+  })
+
+  it("still give the backend's message when the file is not there", async () => {
+    fakeBackend({
+      'GET /api/v1/documents/d-1/file': () => fail(404, 'NOT_FOUND', "This version's file is no longer kept"),
+    })
+
+    const error = await failure(getDocumentFile('d-1'))
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.status).toBe(404)
+    expect(error.message).toBe("This version's file is no longer kept")
   })
 })

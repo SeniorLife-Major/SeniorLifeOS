@@ -64,7 +64,8 @@ function messageFor(body) {
 /**
  * Calls the backend and gives back `data`, or throws an ApiError with a message to show.
  * options: method ('GET' unless given), body (sent as JSON), file (a File or Blob sent as it is,
- * with its own type as Content-Type; for uploads), signal (to cancel the request).
+ * with its own type as Content-Type; for uploads), as ('blob' when the answer is a file, not the
+ * envelope; errors still come in the envelope), signal (to cancel the request).
  */
 export async function api(path, options = {}) {
   const token = readToken()
@@ -90,6 +91,8 @@ export async function api(path, options = {}) {
     if (error?.name === 'AbortError') throw error // the screen stopped waiting
     throw new ApiError(MESSAGES.offline, 'OFFLINE', 0)
   }
+
+  if (options.as === 'blob' && response.ok) return response.blob()
 
   let parsed = undefined
   try {

@@ -8,6 +8,7 @@ import { HomeLocationPage } from './pages/HomeLocationPage'
 import { HomePage } from './pages/HomePage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { RegisterPage } from './pages/RegisterPage'
+import { ReviewPage } from './pages/ReviewPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SignInPage } from './pages/SignInPage'
 import { ProfileProvider } from './profile/ProfileProvider'
@@ -41,6 +42,7 @@ export function App() {
             <Route path="/documents" element={<DocumentsPage />} />
             <Route path="/documents/add" element={<AddDocumentPage />} />
             <Route path="/documents/:documentId" element={<DocumentPage />} />
+            <Route path="/documents/:documentId/review" element={<ReviewPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

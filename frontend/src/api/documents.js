@@ -29,6 +29,29 @@ export function getDocument(documentId, signal) {
   return api(`/documents/${encodeURIComponent(documentId)}`, { signal })
 }
 
+/**
+ * What is waiting for the owner's check (ReviewDto): documentId, documentType, candidates (each
+ * detail as read, full ID numbers included), missingFields (required, not read), optionalFields
+ * (may be added), flags (the reader's notes) and errors. 409 when nothing is waiting.
+ */
+export function getReview(documentId, signal) {
+  return api(`/documents/${encodeURIComponent(documentId)}/review`, { signal })
+}
+
+/**
+ * action: 'confirm' (with edits: { field: new value }) or 'reject'. Gives back the document: its
+ * status is "confirmed" or "rejected", or still "needs_review" with errors when the backend
+ * refused the details.
+ */
+export function sendReview(documentId, action, edits = {}) {
+  return api(`/documents/${encodeURIComponent(documentId)}/review`, { method: 'POST', body: { action, edits } })
+}
+
+/** The document's file (photo or PDF) as a Blob; it needs the sign-in token, so it can't be a plain link. */
+export function getDocumentFile(documentId, signal) {
+  return api(`/documents/${encodeURIComponent(documentId)}/file`, { signal, as: 'blob' })
+}
+
 const NAMELESS = { 'application/pdf': 'document.pdf', 'image/png': 'photo.png' }
 
 /** The file's name for the backend (1 to 255 characters); the end is kept, as it holds the extension. */
