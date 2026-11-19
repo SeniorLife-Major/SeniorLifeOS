@@ -11,8 +11,7 @@ const MATCH = 'POST /api/v1/documents/match'
 const DOCUMENTS = [
   makeDocument({ documentId: 'id', documentType: 'identity' }),
   makeDocument({ documentId: 'income', status: 'needs_review' }),
-  makeDocument({ documentId: 'home', documentType: 'residence_proof', expiryDate: '2026-03-31' }),
-  makeDocument({ documentId: 'cover', documentType: 'health_insurance', expiryDate: '2029-08-28' }),
+  makeDocument({ documentId: 'cover', documentType: 'health_insurance', expiryDate: '2026-03-31' }),
   makeDocument({ documentId: 'bank', documentType: 'bank_passbook', status: 'processing' }),
 ]
 
@@ -20,9 +19,7 @@ const DOCUMENTS = [
 const ANSWERS = {
   proof_of_age: { documentType: 'identity', documentId: 'id', status: 'usable' },
   proof_of_income: { documentType: 'income_certificate', documentId: 'income', status: 'unconfirmed' },
-  proof_of_residence: { documentType: 'residence_proof', documentId: 'home', status: 'expired' },
-  proof_of_disability: { documentType: null, documentId: null, status: 'missing' },
-  health_cover: { documentType: 'health_insurance', documentId: 'cover', status: 'usable' },
+  health_cover: { documentType: 'health_insurance', documentId: 'cover', status: 'expired' },
   bank_details: { documentType: 'bank_passbook', documentId: 'bank', status: 'unconfirmed' },
 }
 
@@ -73,7 +70,7 @@ describe('Do I have what I need?', () => {
   it('shows what is ready, to check, ended or missing, with what to do next', async () => {
     signedIn()
     renderApp(
-      '/documents/checklist?need=proof_of_age,proof_of_income,proof_of_residence,health_cover,proof_of_disability,bank_details',
+      '/documents/checklist?need=proof_of_age,proof_of_income,health_cover,bank_details',
     )
 
     const list = await screen.findByRole('list', { name: 'What the office asked for' })
@@ -81,19 +78,39 @@ describe('Do I have what I need?', () => {
     expect(lines.map((line) => line.textContent)).toEqual([
       'Proof of ageReadyID card, added 1 Nov 2026',
       'Proof of incomeNeeds your checkIncome certificate, waiting for you to check itCheck it now',
-      'Proof of addressExpiredResidence proof ended on 31 Mar 2026Add the new copy',
-      'Proof of disabilityNot in your documentsA disability certificate. Add it if the office needs it.Add it',
-      'Health coverReadyHealth insurance, valid till 28 Aug 2029',
+      'Health coverExpiredHealth insurance ended on 31 Mar 2026Add the new copy',
       'Bank detailsBeing readBank passbook, being read nowSee it',
     ])
     expect(within(lines[1]).getByRole('link')).toHaveAttribute('href', '/documents/income/review')
-    expect(within(lines[2]).getByRole('link')).toHaveAttribute('href', '/documents/home/new-copy')
-    expect(within(lines[3]).getByRole('link')).toHaveAttribute('href', '/documents/add?type=disability_certificate')
-    expect(within(lines[5]).getByRole('link')).toHaveAttribute('href', '/documents/bank')
-    expect(screen.getByText('2 ready')).toBeInTheDocument()
+    expect(within(lines[2]).getByRole('link')).toHaveAttribute('href', '/documents/cover/new-copy')
+    expect(within(lines[3]).getByRole('link')).toHaveAttribute('href', '/documents/bank')
+    expect(screen.getByText('1 ready')).toBeInTheDocument()
     expect(screen.getByText('2 to check')).toBeInTheDocument()
     expect(screen.getByText('1 expired')).toBeInTheDocument()
+  })
+
+  it('says what is missing, with a way to add it', async () => {
+    const backend = signedIn()
+    backend.on(MATCH, () =>
+      ok({ asOf: '2026-11-19', matches: [], proofs: [{ proof: 'proof_of_identity', documentType: null, documentId: null, status: 'missing' }] }),
+    )
+    renderApp('/documents/checklist?need=proof_of_identity')
+
+    const list = await screen.findByRole('list', { name: 'What the office asked for' })
+    const [line] = within(list).getAllByRole('listitem')
+    expect(line).toHaveTextContent('Proof of identityNot in your documentsAn ID card, such as Aadhaar. Add it if the office needs it.Add it')
+    expect(within(line).getByRole('link')).toHaveAttribute('href', '/documents/add?type=identity')
     expect(screen.getByText('1 missing')).toBeInTheDocument()
+  })
+
+  it('does not offer proof of address or of disability (Decision 74)', async () => {
+    const backend = signedIn()
+    renderApp('/documents/checklist')
+    await screen.findByRole('heading', { level: 1, name: 'Do I have what I need?' })
+    expect(screen.queryByRole('button', { name: /^Proof of address/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Proof of disability/ })).toBeNull()
+    expect(choice('Proof of income')).toBeInTheDocument()
+    expect(backend.sent(MATCH)).toEqual([])
   })
 
   it('sends a new copy waiting for a check to its own check', async () => {

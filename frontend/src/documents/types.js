@@ -20,6 +20,17 @@ export function isKnownType(key) {
   return DOCUMENT_TYPES.some((type) => type.key === key)
 }
 
+// Kinds the app no longer offers to add (the owner's choice, Decision 74). They stay in the list
+// above, so ones already saved, or found by the reader after "I don't know", still show their name.
+const NOT_OFFERED = new Set(['residence_proof', 'disability_certificate'])
+
+/** The kinds offered on "Add a document" and "Type the details in". */
+export const ADDABLE_TYPES = DOCUMENT_TYPES.filter((type) => !NOT_OFFERED.has(type.key))
+
+export function canAdd(key) {
+  return ADDABLE_TYPES.some((type) => type.key === key)
+}
+
 /** The document's name, e.g. "Income certificate"; "Document" while the kind is not known. */
 export function typeLabel(key) {
   return DOCUMENT_TYPES.find((type) => type.key === key)?.label ?? 'Document'

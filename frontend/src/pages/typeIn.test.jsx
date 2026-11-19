@@ -70,6 +70,22 @@ describe('Typing a document in', () => {
     expect(screen.getByRole('button', { name: 'ID card (Aadhaar, PAN)' })).toBeInTheDocument()
   })
 
+  it('does not offer a residence proof or a disability certificate, even from an old link (Decision 74)', async () => {
+    signedIn()
+    renderApp('/documents/type-in?type=residence_proof')
+
+    const group = await screen.findByRole('group', { name: 'What is it?' })
+    expect(within(group).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'ID card (Aadhaar, PAN)',
+      'Income certificate',
+      'Health insurance',
+      'Bank passbook',
+      'Prescription',
+      'Lab report',
+      'Medical bill',
+    ])
+  })
+
   it('checks every detail before sending, and moves to the first one to fix', async () => {
     const user = userEvent.setup()
     const { backend } = signedIn()

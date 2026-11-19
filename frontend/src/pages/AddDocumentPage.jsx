@@ -7,14 +7,14 @@ import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
 import { Switch } from '../components/Switch'
 import { checkPicked, FileProblem, prepareUpload } from '../documents/prepareFile'
-import { DOCUMENT_TYPES, inSentence, isKnownType, MEDICAL_TYPES, typeLabel } from '../documents/types'
+import { ADDABLE_TYPES, canAdd, inSentence, MEDICAL_TYPES, typeLabel } from '../documents/types'
 import { useWait } from '../hooks/useWait'
 import { useProfile } from '../profile/ProfileProvider'
 import { ProfileStatus } from '../profile/ProfileStatus'
 
 const BACK = { to: '/documents', label: 'My documents' }
 const UNKNOWN = 'unknown' // "I don't know": the backend works out the type
-const CHOICES = [...DOCUMENT_TYPES, { key: UNKNOWN, label: "I don't know" }]
+const CHOICES = [...ADDABLE_TYPES, { key: UNKNOWN, label: "I don't know" }]
 
 /**
  * /documents/add: a new document. With `renew` (a saved document, from NewCopyPage) it adds the
@@ -43,7 +43,7 @@ function AddDocumentForm({ consents, renew, title, back }) {
   // "Add it again" opens this screen with ?type=… so the person does not have to choose again.
   const [picked, setPicked] = useState(() => {
     if (renew) return renew.documentType
-    return isKnownType(params.get('type')) ? params.get('type') : null
+    return canAdd(params.get('type')) ? params.get('type') : null
   })
   const [file, setFile] = useState(null)
   const [fileProblem, setFileProblem] = useState(null)
@@ -231,5 +231,5 @@ function AddDocumentForm({ consents, renew, title, back }) {
 /** Where "No photo? Type the details in" goes: the kind already chosen comes along. */
 function typeInPath(renew, picked) {
   if (renew) return `/documents/${renew.documentId}/new-copy/type-in`
-  return isKnownType(picked) ? `/documents/type-in?type=${picked}` : '/documents/type-in'
+  return canAdd(picked) ? `/documents/type-in?type=${picked}` : '/documents/type-in'
 }
