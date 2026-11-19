@@ -9,7 +9,6 @@ import { problemText } from '../doctor/Question'
 import { searchChip, searchDate } from '../doctor/search'
 import { SearchProgress } from '../doctor/SearchProgress'
 import { useSearchRun } from '../doctor/useSearchRun'
-import { useProfile } from '../profile/ProfileProvider'
 
 const HOME = { to: '/', label: 'Home' }
 export const QUERY_MAX = 2000 // MAX_QUERY_CHARS in backend/graphs/health_graph.py
@@ -20,7 +19,6 @@ const EXAMPLES = ['Knee pain', 'Sugar check-up', 'Eye problem', 'Ghutno mein dar
 
 export function DoctorPage() {
   const navigate = useNavigate()
-  const { profile } = useProfile()
   const [text, setText] = useState('')
   const run = useSearchRun()
   const ready = text.trim().length > 0
@@ -44,9 +42,6 @@ export function DoctorPage() {
       </Screen>
     )
   }
-
-  const consents = profile?.consents
-  const aiReads = consents ? consents.useLlm && consents.medicalCloud : null
 
   return (
     <Screen title="Find a doctor" back={HOME}>
@@ -83,15 +78,11 @@ export function DoctorPage() {
           {ready ? 'Find doctors' : 'Tell us the problem first'}
         </Button>
       </form>
-      {aiReads !== null && (
-        <p className="fine-print">
-          <Icon name="lock" size={18} />{' '}
-          {aiReads
-            ? 'An AI service reads your words to choose the right kind of doctor. Your name is never sent.'
-            : 'No AI service reads your words; simple word rules choose the kind of doctor.'}{' '}
-          <Link to="/settings">Change this in Settings</Link>
-        </p>
-      )}
+      {/* Always: doctor search always uses the AI (Decision 73); the Settings switches are for documents. */}
+      <p className="fine-print">
+        <Icon name="lock" size={18} /> An AI service reads your words to choose the right kind of doctor. Your name is
+        hidden from it.
+      </p>
       <RecentSearches />
     </Screen>
   )

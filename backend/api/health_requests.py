@@ -1,9 +1,10 @@
 """Doctor search (fastapi-backend Phase 2): ask for a doctor in your own words, answer the one
 question it may ask, and see the result again for 30 days (storage/health_service.py).
 
-The AI model reads the request only with the person's consent (use_llm and medical cloud): the
-saved profile choices, unless the request says otherwise. The person's name is hidden from the
-model. The phone's location is used for this search only and never stored. The home saved in the
+The AI model always reads the request, and the doctor list may be refreshed for it (the owner's
+choice, frontend Decision 73: doctor search needs the model). The saved consents in the profile
+are for documents only. A request can still say useLlm / medicalCloudConsent false (tests, API
+callers); the app never does. The person's name is hidden from the model. The phone's location is used for this search only and never stored. The home saved in the
 profile is used when the person means home ("ghar ke paas"); the result calls it "your home".
 
 With "Accept: text/event-stream" the answer comes as server-sent events: one "step" event per
@@ -50,8 +51,8 @@ class LocationDto(CamelModel):
 class HealthRequestCreate(CamelModel):
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)  # in the person's own words
     current_location: LocationDto | None = None  # the phone's, shared with permission
-    use_llm: StrictBool | None = None  # None: the saved consent
-    medical_cloud_consent: StrictBool | None = None  # None: the saved consent
+    use_llm: StrictBool | None = None  # None: yes (doctor search always uses the model)
+    medical_cloud_consent: StrictBool | None = None  # None: yes
 
 
 class HealthAnswer(CamelModel):
@@ -229,15 +230,13 @@ def respond(events: Iterator[tuple[str, dict[str, Any]]], request: Request, resp
              summary="Find a doctor: describe the need in your own words")
 def create_health_request(body: HealthRequestCreate, request: Request, response: Response, actor: Actor,
                           health: Health, accounts: Accounts) -> Any:
-    saved = accounts.saved_choices(actor)
-    consents = saved["consents"]
+    saved = accounts.saved_choices(actor)  # the home and the name; its consents are for documents
     events = health.start(
         actor, body.query,
         current_location=body.current_location.model_dump() if body.current_location else None,
         home_location=saved["home"],
-        use_llm=consents["use_llm"] if body.use_llm is None else body.use_llm,
-        medical_cloud_consent=consents["medical_cloud"] if body.medical_cloud_consent is None
-        else body.medical_cloud_consent,
+        use_llm=True if body.use_llm is None else body.use_llm,
+        medical_cloud_consent=True if body.medical_cloud_consent is None else body.medical_cloud_consent,
         owner_name=saved["display_name"])
     return respond(events, request, response, status.HTTP_201_CREATED)
 

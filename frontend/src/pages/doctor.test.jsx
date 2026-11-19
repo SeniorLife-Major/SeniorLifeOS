@@ -273,6 +273,8 @@ describe('An emergency', () => {
     expect(within(signs).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['Chest pain', 'Hard to breathe'])
     expect(screen.queryByRole('link', { name: 'Emergency? Call 112' })).toBeNull() // it has its own buttons
     expect(screen.getByRole('link', { name: 'I am safe now. Find a doctor instead' })).toHaveAttribute('href', '/doctor')
+    // Same words would be flagged again, so the screen says how to look for something else.
+    expect(screen.getByText('If you are safe and need a doctor for something else, describe that other problem. Naming these signs again, even with "no", brings back this screen.')).toBeInTheDocument()
   })
 
   it('puts the mental health line first when the words speak of self-harm', async () => {
@@ -292,6 +294,7 @@ describe('An emergency', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'You do not have to face this alone' })).toBeInTheDocument()
     const calls = screen.getAllByRole('link', { name: /^Call / })
     expect(calls.map((link) => link.getAttribute('href'))).toEqual(['tel:14416', 'tel:112', 'tel:108'])
+    expect(screen.queryByText(/describe that other problem/)).toBeNull() // not asked to change their words
   })
 
   it('asks first when the danger sign may not be happening now, and goes on only on "No"', async () => {
@@ -382,18 +385,17 @@ describe('Recent searches and the AI note', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'One question' })).toBeInTheDocument()
   })
 
-  it('says whether an AI service reads the words, from the saved choices', async () => {
-    signedIn(makeProfile({ consents: { useLlm: true, medicalCloud: true, cloudOcr: false } }))
+  it('always says an AI service reads the words, whatever the document switches say', async () => {
+    const note = /An AI service reads your words to choose the right kind of doctor\. Your name is hidden from it\./
+    signedIn(makeProfile({ consents: { useLlm: false, medicalCloud: false, cloudOcr: false } }))
     const { unmount } = renderApp('/doctor')
-    expect(
-      await screen.findByText(/An AI service reads your words to choose the right kind of doctor\. Your name is never sent\./),
-    ).toBeInTheDocument()
+    expect(await screen.findByText(note)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Change this in Settings' })).toBeNull() // Settings can't change it
     unmount()
 
-    signedIn(makeProfile({ consents: { useLlm: true, medicalCloud: false, cloudOcr: true } }))
+    signedIn(makeProfile({ consents: { useLlm: true, medicalCloud: true, cloudOcr: true } }))
     renderApp('/doctor')
-    expect(await screen.findByText(/No AI service reads your words/)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Change this in Settings' })).toHaveAttribute('href', '/settings')
+    expect(await screen.findByText(note)).toBeInTheDocument()
   })
 })
 

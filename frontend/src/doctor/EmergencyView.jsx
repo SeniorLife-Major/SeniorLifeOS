@@ -37,6 +37,15 @@ export function EmergencyView({ emergency }) {
         </section>
       )}
       <p className="emergency__stay">If someone is with you, ask them to stay with you.</p>
+      {/* The backend's rules flag these signs whenever they are named, even with "no", so the same
+          words would bring this screen back (Decision 64). Not shown for self-harm: there the
+          person is not asked to change their words. */}
+      {!selfHarm && (
+        <p className="emergency__stay">
+          If you are safe and need a doctor for something else, describe that other problem. Naming these signs
+          again, even with &quot;no&quot;, brings back this screen.
+        </p>
+      )}
       <ButtonLink to="/doctor" variant="secondary">
         I am safe now. Find a doctor instead
       </ButtonLink>

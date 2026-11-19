@@ -208,7 +208,7 @@ Uploads are kept in PostgreSQL plus an encrypted file folder, and paused reviews
 | `POST /api/v1/auth/login` | `{"login", "password"}` → `{"user", "accessToken", "tokenType": "bearer", "expiresIn"}` (seconds; `JWT_TTL_MINUTES`, 12 hours by default) |
 | `POST /api/v1/auth/logout` | ends every token of the account at once |
 | `GET /api/v1/auth/me` | who is signed in |
-| `GET /api/v1/me/profile` | language, home, accessibility (`fontScale`, `highContrast`, `voice`), consents (`useLlm`, `medicalCloud`, `cloudOcr`) |
+| `GET /api/v1/me/profile` | language, home, accessibility (`fontScale`, `highContrast`, `voice`), consents (`useLlm`, `medicalCloud`, `cloudOcr`), used for documents only (doctor search always uses the model) |
 | `PATCH /api/v1/me/profile` | change only what is sent. Home: `{"homeLocation": {"place": "Andheri West, Mumbai"}}` (looked up with place search, needs `GEOAPIFY_API_KEY`) or `{"homeLocation": {"lat": .., "lon": ..}}` from the phone; kept rounded to about 100 m. A name that fits far-apart places answers 422 with `details.options` to choose from; `"homeLocation": null` forgets it |
 
 Every other call sends the token: `Authorization: Bearer <accessToken>`. A wrong password and an unknown login get the same answer.
@@ -217,7 +217,7 @@ Every other call sends the token: `Authorization: Bearer <accessToken>`. A wrong
 
 | Call | What it does |
 |---|---|
-| `POST /api/v1/health-requests` | `{"query": "mujhe dil ke doctor ko dikhana hai", "currentLocation": {"lat", "lon"}}` (location optional). The AI model reads it only with consent: the profile's `useLlm` and `medicalCloud`, unless the request sends `useLlm` / `medicalCloudConsent`. The account's name is hidden from the model. "Near my home" / "ghar ke paas" (or answering "home") uses the profile's home, shown as "your home"; it is never guessed when nothing was said about where |
+| `POST /api/v1/health-requests` | `{"query": "mujhe dil ke doctor ko dikhana hai", "currentLocation": {"lat", "lon"}}` (location optional). The AI model always reads it, and the doctor list may be refreshed for it: the profile's consents are for documents only. A request may still send `useLlm` / `medicalCloudConsent` false (the app never does). The account's name is hidden from the model. "Near my home" / "ghar ke paas" (or answering "home") uses the profile's home, shown as "your home"; it is never guessed when nothing was said about where |
 | `POST /api/v1/health-requests/{id}/answer` | the one question it asked: `{"callEmergency": false}`, `{"clarification": "knee pain"}`, or `{"location": "Andheri West, Mumbai"}` / `{"location": {"lat", "lon"}}`. Applied once (409 after); the wrong kind answers 422 with `details.waitingFor` |
 | `GET /api/v1/health-requests/{id}` | the request's latest result |
 | `GET /api/v1/health-requests?limit=20` | my requests from the last 30 days, newest first |

@@ -25,6 +25,10 @@ from test_storage_db import URL, DatabaseCase
 HERE = {"lat": IN_ANDHERI["lat"], "lon": IN_ANDHERI["lon"]}
 
 
+def no_model(*args, **kwargs):
+    raise RuntimeError("no model in tests")
+
+
 def sse_events(text):
     events = []
     for block in text.strip().split("\n\n"):
@@ -49,6 +53,12 @@ class HealthApiCase(ApiCase):
             patcher = patch(f"backend.graphs.health_graph.{target}", stand_in)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Doctor search always asks the model now; no test may reach the real one (a key in .env
+        # would be used). Without it the request is read on this machine, as before. A test that
+        # wants the model patches its own fake over this.
+        patcher = patch("backend.agents.llm_agents.structured_model", no_model)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.app.include_router(health_requests.router)
         self.app.dependency_overrides[deps.get_health_service] = lambda: self.health
         self.headers = self.bearer(self.token())
@@ -87,20 +97,32 @@ class AskTests(HealthApiCase):
         self.assertEqual(data["emergency"]["numbers"][0], {"number": "112",
                                                            "for": "Any emergency (police, fire, ambulance)"})
 
-    def test_saved_consents_are_used_and_the_name_is_hidden_from_the_model(self):
+    def test_the_model_always_reads_the_request_and_the_name_is_hidden_from_it(self):
         fake = FakeStructuredModel(reading(search_near="current_location"))
-        with patch("backend.agents.llm_agents.structured_model", fake):
-            self.ask({"query": "I am Meera Rao, I need a heart doctor near me", "currentLocation": HERE})
-            self.assertEqual(fake.prompts, [])  # nothing saved yet: all consents off
-            self.client.patch("/api/v1/me/profile", json={"consents": {"useLlm": True, "medicalCloud": True}},
-                              headers=self.headers)
+        refreshed = []
+
+        def refresh(place, specialty, doctors):
+            refreshed.append(specialty)
+            return already_fresh(place, specialty, doctors)
+
+        with patch("backend.agents.llm_agents.structured_model", fake), \
+                patch("backend.graphs.health_graph.refresh_doctors", refresh):
+            # Nothing saved: every consent is off, and still the model reads it (they are for documents).
             data = self.ask({"query": "I am Meera Rao, I need a heart doctor near me",
                              "currentLocation": HERE}).json()["data"]
             self.assertEqual(data["status"], "doctors_found")
             self.assertEqual(len(fake.prompts), 1)
             self.assertNotIn("Meera", str(fake.prompts[0]))  # the account's name is hidden
+            self.assertEqual(refreshed, ["cardiologist"])  # the doctor list may be refreshed too
+            self.client.patch("/api/v1/me/profile", json={"consents": {"useLlm": False, "medicalCloud": False}},
+                              headers=self.headers)
+            self.ask({"query": "heart doctor near me", "currentLocation": HERE})
+            self.assertEqual(len(fake.prompts), 2)  # the document switches don't stop it
             self.ask({"query": "heart doctor near me", "currentLocation": HERE, "useLlm": False})
-            self.assertEqual(len(fake.prompts), 1)  # this request said no
+            self.assertEqual(len(fake.prompts), 2)  # only a request that says no itself (the app never does)
+            self.assertEqual(refreshed, ["cardiologist", "cardiologist", "cardiologist"])  # it said no to the model only
+            self.ask({"query": "heart doctor near me", "currentLocation": HERE, "medicalCloudConsent": False})
+            self.assertEqual(len(refreshed), 3)  # no refresh when the request says no to it
 
     def test_near_my_home_uses_the_home_saved_in_the_profile(self):
         asked = self.ask({"query": "heart doctor near my home"}).json()["data"]

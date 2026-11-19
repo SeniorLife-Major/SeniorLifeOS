@@ -75,8 +75,12 @@ describe('Settings', () => {
     expect(screen.getByText('Andheri West, Mumbai')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Change my home' })).toHaveAttribute('href', '/settings/home')
     expect(screen.getByRole('switch', { name: 'Read my document photos with a cloud service' })).toBeChecked()
-    expect(screen.getByRole('switch', { name: 'My health papers and questions may go to a cloud AI' })).not.toBeChecked()
-    expect(screen.getByRole('switch', { name: 'An AI may read my words and the text of my papers' })).toBeChecked()
+    expect(screen.getByRole('switch', { name: 'My health papers may go to a cloud AI' })).not.toBeChecked()
+    expect(screen.getByRole('switch', { name: 'An AI may read the text of my papers' })).toBeChecked()
+    // The switches are for documents; doctor search always uses the AI (Decision 73), and it says so.
+    expect(
+      screen.getByText('Find a doctor always uses an AI service to understand the problem you describe. Your name is hidden from it.'),
+    ).toBeInTheDocument()
   })
 
   it('says when no home is set yet', async () => {
@@ -126,7 +130,7 @@ describe('Settings', () => {
 
     await user.click(screen.getByRole('switch', { name: 'Read my document photos with a cloud service' }))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saved.'))
-    await user.click(screen.getByRole('switch', { name: 'An AI may read my words and the text of my papers' }))
+    await user.click(screen.getByRole('switch', { name: 'An AI may read the text of my papers' }))
     await waitFor(() => expect(backend.sent(PATCH)).toHaveLength(2))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saved.'))
 
@@ -135,7 +139,7 @@ describe('Settings', () => {
       { consents: { useLlm: true } },
     ])
     expect(store.current.consents).toEqual({ useLlm: true, medicalCloud: false, cloudOcr: true })
-    expect(screen.getByRole('switch', { name: 'My health papers and questions may go to a cloud AI' })).not.toBeChecked()
+    expect(screen.getByRole('switch', { name: 'My health papers may go to a cloud AI' })).not.toBeChecked()
   })
 
   it('puts a change back and says so when it cannot be saved', async () => {

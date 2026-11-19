@@ -48,7 +48,7 @@ class AccessibilityDto(CamelModel):
 
 class ConsentsDto(CamelModel):
     use_llm: bool  # an AI model may read what the person types
-    medical_cloud: bool  # health questions may go to a cloud AI model
+    medical_cloud: bool  # medical papers may go to a cloud AI model (doctor search always uses it)
     cloud_ocr: bool  # document photos may be read by a cloud service
 
 

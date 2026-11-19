@@ -13,7 +13,8 @@ const SIZES = [
   { scale: 1.5, label: 'A++', words: 'largest' },
 ]
 
-// What each choice allows, as the backend uses it (graphs/document_graph.py, api/health_requests.py).
+// What each choice allows, as the backend uses it (graphs/document_graph.py). They are for documents
+// only: doctor search always uses the AI (api/health_requests.py, Decision 73).
 const CONSENTS = [
   {
     key: 'cloudOcr',
@@ -22,13 +23,13 @@ const CONSENTS = [
   },
   {
     key: 'medicalCloud',
-    label: 'My health papers and questions may go to a cloud AI',
-    hint: 'Needed to read prescriptions, lab reports and bills, and to understand health questions.',
+    label: 'My health papers may go to a cloud AI',
+    hint: 'Needed to read prescriptions, lab reports and bills.',
   },
   {
     key: 'useLlm',
-    label: 'An AI may read my words and the text of my papers',
-    hint: 'Helps when what I type is unclear, or a detail on a paper is hard to find.',
+    label: 'An AI may read the text of my papers',
+    hint: 'Helps to find what kind of paper it is, or a detail that is hard to find.',
   },
 ]
 
@@ -137,8 +138,11 @@ export function SettingsPage() {
           What may go to AI services
         </h2>
         <p className="panel__hint">
-          You can change these any time. Before a photo or a paper&apos;s text is sent, we black out the ID numbers,
-          faces and QR codes we can find.
+          For your documents. You can change these any time. Before a photo or a paper&apos;s text is sent, we black
+          out the ID numbers, faces and QR codes we can find.
+        </p>
+        <p className="panel__hint">
+          Find a doctor always uses an AI service to understand the problem you describe. Your name is hidden from it.
         </p>
         <div className="switch-list">
           {CONSENTS.map((consent) => (
