@@ -197,6 +197,7 @@ class ImportTests(unittest.TestCase):
         self.assertEqual((report["results"], report["kept"], report["clinic_records"]), (2, 2, 4))
         self.assertEqual(report["cost_usd"], 2 * PRICE_PER_RESULT)
         stored = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual(report["doctor_ids"], sorted({d["doctor_id"] for d in stored["doctors"]}))  # this import's
         self.assertEqual({(d["doctor_id"], d["gender"]) for d in stored["doctors"]},
                          {("practo:1", "female"), ("practo:2", "male")})
         self.assertEqual(report["searched"], ["cardiologist"])

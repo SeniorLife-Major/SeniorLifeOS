@@ -16,12 +16,12 @@ from backend.errors import NotFoundException, ValidationException
 from backend.errors.exceptions import ConflictException
 from backend.graphs.health_graph import CALL_QUESTION, CLARIFYING_QUESTION, LOCATION_QUESTIONS, NO_DOCTORS
 from backend.storage.db import make_sessions
-from backend.storage.health_service import EXPIRED, FAILED, HealthService, now
+from backend.storage.health_service import EXPIRED, FAILED, HealthService, now, source_view
 from backend.storage.models import AuditEvent, GraphRun
 from backend.storage.service import WorkflowFailed, run_config
 from backend.tools.geocode import GeocodeError
 from test_health_graph import (
-    FAKE_DOCTORS, IN_ANDHERI, PUNE, FakePlaces, FakeStructuredModel, already_fresh, found, no_network, reading,
+    FAKE_DOCTORS, IN_ANDHERI, PUNE, FakePlaces, FakeStructuredModel, not_fetched, found, no_network, reading,
 )
 from test_storage_db import OTHER_OWNER, OWNER, DatabaseCase
 
@@ -44,7 +44,7 @@ class HealthCase(DatabaseCase):
     def setUp(self):
         super().setUp()
         for target, stand_in in (("find_place", no_network), ("load_doctors", lambda: FAKE_DOCTORS),
-                                 ("refresh_doctors", already_fresh)):
+                                 ("refresh_doctors", not_fetched)):
             patcher = patch(f"backend.graphs.health_graph.{target}", stand_in)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -74,6 +74,9 @@ class AskingTests(HealthCase):
         self.assertEqual(result["search_location"], {"label": "your current location", "source": "phone"})
         self.assertTrue(result["doctors"])
         self.assertTrue(result["answer"].startswith("Cardiologist (heart) near your current location"))
+        # Without consent Practo is not asked live: the saved doctors are shown, and named so.
+        self.assertEqual(result["doctor_source"], {"kind": "saved", "reason": "not_asked",
+                                                   "checked_on": FAKE_DOCTORS[0]["fetched_on"]})
         self.assertEqual(self.health.get(OWNER, result["request_id"]), result)
         row = self.run_row(result["request_id"])
         self.assertEqual((row.status, row.outcome), ("ended", "doctors_found"))
@@ -151,6 +154,14 @@ class AnswerTests(HealthCase):
         self.assertEqual(result["search_location"]["label"], PUNE["label"])
         self.assertEqual(result["attribution"], PUNE["attribution"])
         self.assertIn(NO_DOCTORS.format(km=20), result["notes"])
+        self.assertIsNone(result["doctor_source"])  # only with doctors shown
+
+    def test_where_the_doctors_came_from_is_passed_on_and_nothing_else(self):
+        live = {"kind": "live", "reason": None, "checked_on": "2026-11-20"}
+        self.assertEqual(source_view({**live, "doctor_ids": ["practo:1"], "cost_usd": 0.05}), live)
+        for junk in (None, "live", {}, {"kind": "cached"}):
+            with self.subTest(junk=junk):
+                self.assertIsNone(source_view(junk))
 
     def test_technical_warnings_are_not_shown(self):
         _, asked = final(self.health.start(OWNER, "knee doctor"))

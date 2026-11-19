@@ -247,11 +247,15 @@ def run_search(client: httpx.Client, key: str, city: str, locality: str | None, 
 
 def load_list(path: Path) -> dict[str, Any]:
     """The stored list, or an empty one. A file that can't be read stops the import: it is never
-    overwritten by accident."""
+    overwritten by accident. A file with nothing in it counts as missing: there is nothing to
+    protect, and refusing it stopped every doctor search (seen live: a 0-byte list)."""
     if not path.exists():
         return {"source": SOURCE, "doctors": []}
     try:
-        stored = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            return {"source": SOURCE, "doctors": []}
+        stored = json.loads(text)
         if not isinstance(stored, dict) or not isinstance(stored.get("doctors"), list):
             raise ValueError
     except ValueError:
@@ -390,6 +394,7 @@ def import_doctors(city: str, locality: str | None = None, specialties: list[str
     report["cost_usd"] = round(report["results"] * PRICE_PER_RESULT, 4)  # charged per result
     report["kept"] = len({record["doctor_id"] + record["specialty"] for record in records})
     report["clinic_records"] = len(records)
+    report["doctor_ids"] = sorted({record["doctor_id"] for record in records})  # who this import brought
     worked = {(row["specialty"], row["gender"]) for row in report["searches"] if not row["error"]}
     report["searched"] = [s for s in specialties if all((s, gender) in worked for gender in GENDERS)]
     fetched_on = today_utc().isoformat()

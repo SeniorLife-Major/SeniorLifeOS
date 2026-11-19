@@ -92,8 +92,10 @@ openssl rand -hex 16       # POSTGRES_PASSWORD (letters and digits only: it goes
 
 - **Required:** `POSTGRES_PASSWORD`, `JWT_SECRET`, `SENIORLIFE_HASH_KEY`, `SENIORLIFE_STORAGE_KEY`,
   `SENIORLIFE_CHECKPOINT_KEY`, `GROQ_API_KEY` (doctor search always uses the AI model),
-  `GEOAPIFY_API_KEY` (places typed for a doctor search).
-- **Optional:** `OPENAI_API_KEY`, `GOOGLE_VISION_API_KEY`, `LANGSMITH_API_KEY`.
+  `GEOAPIFY_API_KEY` (places typed for a doctor search), `APIFY_API` (every doctor search asks
+  Practo live through Apify, about $0.05 each).
+- **Optional:** `OPENAI_API_KEY`, `GOOGLE_VISION_API_KEY`, `LANGSMITH_API_KEY`, and
+  `DOCTOR_FETCH_DAILY_USD` (the day's budget for live doctor searches, default `2.00`).
 - **Never change `SENIORLIFE_STORAGE_KEY` or `SENIORLIFE_CHECKPOINT_KEY`** once documents are stored:
   what was stored with one key can't be opened with another. Keep a copy of `.env` somewhere safe.
 - **`POSTGRES_PASSWORD` is taken only when the database volume is first created.** On a server that

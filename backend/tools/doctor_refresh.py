@@ -1,26 +1,26 @@
-"""Fetch a missing or out-of-date search from Practo while the person waits (doctor-search
-Decision 13, part B of the cache plan).
+"""Ask Practo (through Apify) for doctors live, on every search, while the person waits
+(doctor-search Decision 22; it replaced the 30-day cache of Decision 13).
 
-The stored list (tools/provider_import.py) is a cache. When it already holds MIN_DOCTORS doctors
-of the specialty, checked within FRESH_DAYS, within RADII_KM[0] of the place, nothing is done
-(covered): the search finds them without widening. Otherwise each Apify search the list holds is
-remembered by city, area and specialty ("searches" in the list). When a request needs a search that is not
-there, or was made more than FRESH_DAYS ago, it is made now: one Apify search per gender, both at
-the same time, FETCH_PER_SEARCH doctors each (at most WORST_COST_USD), saved like an import. If the fetch can't
-be made or fails, the search goes on with what is stored (older details are marked by
-tools/doctor_search.py).
+Each search fetches its area and specialty now: one Apify search per gender, both at the same
+time, FETCH_PER_SEARCH doctors each (at most WORST_COST_USD), saved into the stored list like an
+import. The answer names the doctors this fetch brought (doctor_ids), so the search can show live
+doctors only. The stored list is the backup: when the fetch can't be made (no key, no area name,
+Practo failed, the day's budget is used) the search shows saved doctors and says so
+(graphs/health_graph.py).
 
-Privacy: only with the person's medical consent (the graph checks it), because Apify learns the
-specialty and the area name. Covered: nothing is sent. Otherwise, for "near me", Geoapify names
-the area from the phone's location rounded to about 1 km (tools/geocode.area_near, Decision 14).
-The name never comes from a stored clinic: Practo spells its clinics' areas its own way, and a
-differently spelled area is a different search (seen live, Decision 15: "Koramangala, Bengaluru"
-fetched, then "Koramangala 5 Block, Bangalore" paid for again). Apify never gets coordinates.
+Not paid for twice: a search fetched less than REUSE_SECONDS ago (a second request for the same
+thing while the first was fetching, a double tap) is answered with that fetch ("reused"), and a
+search that failed is not tried again for RETRY_AFTER_SECONDS.
 
-Spending: at most DAILY_LIMIT_USD a day. The worst case is written down before each fetch
-(var/providers/fetch_spend.json) and corrected after, so a crash can't hide spending. A search
-that failed is not tried again for RETRY_AFTER_SECONDS. Fetches run one at a time, so two
-requests never pay for the same search.
+Privacy: Apify learns the specialty and the area name, never coordinates. For "near me", Geoapify
+names the area from the phone's location rounded to about 1 km (tools/geocode.area_near,
+Decision 14). The name never comes from a stored clinic: Practo spells its clinics' areas its own
+way (seen live, Decision 15).
+
+Spending: at most daily_limit_usd() a day (DOCTOR_FETCH_DAILY_USD, default $2.00, about 40
+searches). The worst case is written down before each fetch (var/providers/fetch_spend.json) and
+corrected after, so a crash can't hide spending. Fetches run one at a time, so the budget check
+and the record can't race.
 """
 
 from __future__ import annotations
@@ -36,43 +36,41 @@ from typing import Any
 
 import httpx
 
-from .doctor_search import CLOCK_SLACK_DAYS, FRESH_DAYS, MIN_DOCTORS, RADII_KM
-from .geocode import GeocodeError, area_near, distance_km
+from .geocode import GeocodeError, area_near
 from .provider_import import (
-    DEFAULT_LIST, GENDERS, PRICE_PER_RESULT, ProviderImportError, apify_key, fetched_date, import_doctors,
-    load_list, search_key, today_utc,
+    DEFAULT_LIST, GENDERS, PRICE_PER_RESULT, ProviderImportError, apify_key, import_doctors, search_key, today_utc,
 )
 
 FETCH_PER_SEARCH = 10
 WORST_COST_USD = round(len(GENDERS) * FETCH_PER_SEARCH * PRICE_PER_RESULT, 4)  # $0.05
-DAILY_LIMIT_USD = 1.00
+DAILY_LIMIT_SETTING = "DOCTOR_FETCH_DAILY_USD"
+DEFAULT_DAILY_LIMIT_USD = 2.00
 FETCH_TIMEOUT_SECONDS = 60  # per Apify run; the person is waiting
 RETRY_AFTER_SECONDS = 30 * 60
+REUSE_SECONDS = 60
 SPEND_FILE = DEFAULT_LIST.parent / "fetch_spend.json"
+LIVE = ("fetched", "reused")  # statuses whose doctor_ids came from Practo just now
 
 _lock = threading.Lock()
 _failed_at: dict[str, float] = {}  # search key -> when it last failed (time.monotonic)
+_fetched: dict[str, tuple[float, list[str]]] = {}  # search key -> (when, the doctors it brought)
 
 
-def _recent(fetched: date | None, today: date) -> bool:
-    return fetched is not None and -CLOCK_SLACK_DAYS <= (today - fetched).days <= FRESH_DAYS
-
-
-def covered(place: dict[str, Any], specialty: str, doctors: list[dict[str, Any]], today: date) -> bool:
-    """The list already holds MIN_DOCTORS doctors of the specialty, checked within FRESH_DAYS,
-    within the search's first circle (RADII_KM[0]) of the place: the search finds them without
-    widening, so a fetch would mostly bring the same doctors again."""
-    near = {doctor["doctor_id"] for doctor in doctors
-            if doctor["specialty"] == specialty and _recent(fetched_date(doctor), today)
-            and distance_km(doctor["clinic"], place) <= RADII_KM[0]}
-    return len(near) >= MIN_DOCTORS
+def daily_limit_usd() -> float:
+    """The day's budget for live fetches, from DOCTOR_FETCH_DAILY_USD; the default if it is not a
+    number of dollars from 0 up."""
+    try:
+        limit = float(os.environ.get(DAILY_LIMIT_SETTING, "").strip())
+    except ValueError:
+        return DEFAULT_DAILY_LIMIT_USD
+    return limit if 0 <= limit < float("inf") else DEFAULT_DAILY_LIMIT_USD
 
 
 def area_of(place: dict[str, Any]) -> tuple[str, str | None] | None:
     """(city, neighbourhood or None) to search Practo by, or None if not known. A looked-up place
     has its own names (tools/geocode.py). For the phone's location: the nearest suburb, town or
     village Geoapify knows (the location rounded to about 1 km), else the city alone. Always the
-    same source, so the same spot gets the same name and its search is found again."""
+    same source, so the same spot gets the same name."""
     city, area = place.get("city"), place.get("area")
     if isinstance(city, str) and city.strip():
         return city.strip(), (area.strip() if isinstance(area, str) and area.strip() else None)
@@ -81,11 +79,6 @@ def area_of(place: dict[str, Any]) -> tuple[str, str | None] | None:
     except GeocodeError:  # no key, network, service error: not fetched this time
         return None
     return (found["city"], found["area"]) if found else None
-
-
-def _fresh(stored: dict[str, Any], key: str, today: date) -> bool:
-    searches = stored.get("searches") if isinstance(stored.get("searches"), dict) else {}
-    return _recent(fetched_date(searches.get(key)), today)
 
 
 def spent_today(path: Path, today: date) -> float:
@@ -99,7 +92,7 @@ def spent_today(path: Path, today: date) -> float:
         if usd < 0:
             raise ValueError
     except (OSError, ValueError, KeyError, TypeError):
-        return DAILY_LIMIT_USD
+        return daily_limit_usd()
     return usd if spend.get("day") == today.isoformat() else 0.0
 
 
@@ -115,35 +108,33 @@ def _write_spend(path: Path, today: date, usd: float) -> None:
             os.remove(temp)
 
 
-def refresh_doctors(place: dict[str, Any], specialty: str, doctors: list[dict[str, Any]],
-                    path: Path | None = None, spend_file: Path | None = None, today: date | None = None,
+def refresh_doctors(place: dict[str, Any], specialty: str, path: Path | None = None,
+                    spend_file: Path | None = None, today: date | None = None,
                     client: httpx.Client | None = None) -> dict[str, Any]:
-    """Make sure the stored list holds a recent search for this specialty near the place.
+    """Fetch this search from Practo now.
 
-    {"status": ..., "area": "Koregaon Park, Pune" or None, "results": n, "cost_usd": x}; status is
-    covered or fresh (nothing to do), fetched, no_area, no_key, over_budget, failed or
-    failed_recently."""
+    {"status": ..., "area": "Koregaon Park, Pune" or None, "results": n, "cost_usd": x,
+    "doctor_ids": [...]}; status is fetched or reused (doctor_ids: who Practo listed, live), or
+    no_area, no_key, over_budget, failed or failed_recently (doctor_ids empty: show saved ones)."""
     path, spend_file, today = Path(path or DEFAULT_LIST), Path(spend_file or SPEND_FILE), today or today_utc()
-    if covered(place, specialty, doctors, today):  # most requests end here: nothing sent, no waiting
-        return {"status": "covered", "area": None, "results": 0, "cost_usd": 0.0}
     found = area_of(place)
     if found is None:
-        return {"status": "no_area", "area": None, "results": 0, "cost_usd": 0.0}
+        return {"status": "no_area", "area": None, "results": 0, "cost_usd": 0.0, "doctor_ids": []}
     city, locality = found
     key = search_key(city, locality, specialty)
-    answer = {"area": ", ".join(part for part in (locality, city) if part), "results": 0, "cost_usd": 0.0}
+    answer = {"area": ", ".join(part for part in (locality, city) if part), "results": 0, "cost_usd": 0.0,
+              "doctor_ids": []}
     try:
-        if _fresh(load_list(path), key, today):  # searched lately, Practo had fewer doctors there
-            return {**answer, "status": "fresh"}
         with _lock:
-            if _fresh(load_list(path), key, today):  # fetched by a request that held the lock
-                return {**answer, "status": "fresh"}
+            fetched = _fetched.get(key)
+            if fetched and time.monotonic() - fetched[0] < REUSE_SECONDS:  # fetched just now for another request
+                return {**answer, "status": "reused", "doctor_ids": list(fetched[1])}
             if time.monotonic() - _failed_at.get(key, float("-inf")) < RETRY_AFTER_SECONDS:
                 return {**answer, "status": "failed_recently"}
             if not apify_key():
                 return {**answer, "status": "no_key"}
             spent = spent_today(spend_file, today)
-            if spent + WORST_COST_USD > DAILY_LIMIT_USD + 1e-9:
+            if spent + WORST_COST_USD > daily_limit_usd() + 1e-9:
                 return {**answer, "status": "over_budget"}
             _write_spend(spend_file, today, spent + WORST_COST_USD)  # before: a crash can't hide spending
             report = None
@@ -164,6 +155,8 @@ def refresh_doctors(place: dict[str, Any], specialty: str, doctors: list[dict[st
                 return {**answer, "status": "failed", "results": report["results"] if report else 0,
                         "cost_usd": report["cost_usd"] if report else WORST_COST_USD}
             _failed_at.pop(key, None)
-            return {**answer, "status": "fetched", "results": report["results"], "cost_usd": report["cost_usd"]}
+            _fetched[key] = (time.monotonic(), list(report["doctor_ids"]))
+            return {**answer, "status": "fetched", "results": report["results"], "cost_usd": report["cost_usd"],
+                    "doctor_ids": list(report["doctor_ids"])}
     except (OSError, ProviderImportError):  # the list or the spending record can't be read or written
         return {**answer, "status": "failed"}
