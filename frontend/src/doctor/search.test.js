@@ -9,6 +9,7 @@ import {
   safeLink,
   searchChip,
   signsOf,
+  sourceWords,
   STAGES,
   stagesDone,
 } from './search'
@@ -67,6 +68,24 @@ describe('words for a search', () => {
   it('count the doctors and name the place in the heading', () => {
     expect(resultsHeading(makeSearch())).toBe('2 doctors near your home')
     expect(resultsHeading(makeSearch({ doctors: [makeSearch().doctors[0]], searchLocation: null }))).toBe('1 doctor')
+  })
+
+  it('say the doctors came live from Practo, or from the saved list with why and when', () => {
+    expect(sourceWords({ kind: 'live', reason: null, checkedOn: '2026-11-20' })).toEqual({
+      kind: 'live',
+      chip: 'Live from Practo',
+      text: 'Found on Practo just now, through Apify.',
+    })
+    const saved = (reason, checkedOn = '2026-11-03') => sourceWords({ kind: 'saved', reason, checkedOn }).text
+    expect(saved('daily_limit')).toBe("Today's live searches on Practo are used up. These doctors were saved from Practo on 3 Nov 2026.")
+    expect(saved('none_live')).toBe('Practo listed no doctor of this kind near here just now. These doctors were saved from Practo on 3 Nov 2026.')
+    expect(saved('not_asked')).toMatch(/^Practo was not asked live for this search\. /)
+    expect(saved('unreachable')).toMatch(/^Practo could not be reached just now\. /)
+    expect(saved('something new')).toMatch(/^Practo could not be reached just now\. /)
+    expect(saved('daily_limit', null)).toBe("Today's live searches on Practo are used up. These doctors were saved from Practo earlier.")
+    expect(saved('daily_limit', '3 Nov')).toMatch(/saved from Practo earlier\.$/)
+    expect(sourceWords({ kind: 'saved', reason: 'none_live' }).chip).toBe('Saved list')
+    for (const odd of [null, undefined, {}, { kind: 'cached' }]) expect(sourceWords(odd)).toBeNull()
   })
 
   it('mark recent searches by how they ended', () => {

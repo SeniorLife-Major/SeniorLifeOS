@@ -113,6 +113,8 @@ describe('Find a doctor', () => {
     hold.resolve()
     await focusOn('2 doctors near your home')
     expect(screen.getByText('Orthopaedic doctor (bones and joints)')).toBeInTheDocument()
+    expect(screen.getByText('Live from Practo')).toBeInTheDocument()
+    expect(screen.getByText('Found on Practo just now, through Apify.')).toBeInTheDocument()
     const first = screen.getByRole('article', { name: 'Dr. Asha Menon' })
     expect(within(first).getByText('Nearest')).toBeInTheDocument()
     expect(within(first).getByText('Demo Bone and Joint Clinic, Andheri West')).toBeInTheDocument()
@@ -174,7 +176,7 @@ describe('Find a doctor', () => {
 
     // The stages done before the question stay done.
     expect(await findStage('Choosing the right kind of doctor, done')).toBeInTheDocument()
-    expect(stage('Looking for doctors nearby')).toHaveTextContent('doing now')
+    expect(stage('Asking Practo for doctors nearby (live, via Apify)')).toHaveTextContent('doing now')
     hold.resolve()
     expect(await screen.findByRole('heading', { level: 1, name: '2 doctors near your home' })).toBeInTheDocument()
     expect(backend.sent(ANSWER).map((request) => request.body)).toEqual([{ location: 'Andheri East, Mumbai' }])
@@ -399,6 +401,27 @@ describe('Recent searches and the AI note', () => {
   })
 })
 
+describe('Where the doctors came from', () => {
+  it('says when the doctors are from the saved list and why, and says nothing when the backend did not say', async () => {
+    const saved = makeSearch({ doctorSource: { kind: 'saved', reason: 'daily_limit', checkedOn: '2026-11-03' } })
+    signedIn(makeProfile(), [saved])
+    const { unmount } = renderApp(`/doctor/${saved.requestId}`)
+    expect(await screen.findByText('Saved list')).toBeInTheDocument()
+    expect(
+      screen.getByText("Today's live searches on Practo are used up. These doctors were saved from Practo on 3 Nov 2026."),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Live from Practo')).toBeNull()
+    unmount()
+
+    const older = makeSearch({ doctorSource: null })
+    signedIn(makeProfile(), [older])
+    renderApp(`/doctor/${older.requestId}`)
+    await focusOn('2 doctors near your home')
+    expect(screen.queryByText('Live from Practo')).toBeNull()
+    expect(screen.queryByText('Saved list')).toBeNull()
+  })
+})
+
 describe('A result as the real backend sends it (test/realDoctorStreams.json)', () => {
   it('shows every doctor with its reasons, warnings and registration note', async () => {
     const block = REAL.found.split('\n\n').find((part) => part.startsWith('event: result'))
@@ -408,6 +431,7 @@ describe('A result as the real backend sends it (test/realDoctorStreams.json)', 
 
     expect(await screen.findByRole('heading', { level: 1, name: '3 doctors near your current location' })).toBeInTheDocument()
     expect(screen.getByText('Cardiologist (heart)')).toBeInTheDocument()
+    expect(screen.getByText('Live from Practo')).toBeInTheDocument()
     const cards = screen.getAllByRole('article')
     expect(cards.map((card) => within(card).getByRole('heading').textContent)).toEqual(
       real.doctors.map((doctor) => doctor.name),
