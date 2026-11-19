@@ -1,16 +1,28 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth, useUser } from '../auth/AuthProvider'
+import { Button } from '../components/Button'
 import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
 
 export function HomePage() {
+  const user = useUser()
+  const { signOut } = useAuth()
+  const [signingOut, setSigningOut] = useState(false)
+
+  async function leave() {
+    setSigningOut(true)
+    await signOut() // never fails here; afterwards the sign-in screen takes over
+  }
+
   return (
     <Screen title="Home">
       <div className="home__top">
         <div>
           <p className="home__hello" lang="hi">
-            नमस्ते
+            नमस्ते,
           </p>
-          <h1 className="page-title">Welcome</h1>
+          <h1 className="page-title">{user.displayName}</h1>
         </div>
         <Link to="/settings" className="icon-button" aria-label="Settings">
           <Icon name="settings" size={28} />
@@ -36,6 +48,10 @@ export function HomePage() {
           <span className="tile__hint">Tell us what is wrong, in your own words</span>
         </span>
       </Link>
+
+      <Button variant="quiet" className="button--muted" onClick={leave} disabled={signingOut}>
+        {signingOut ? 'Signing out…' : 'Sign out'}
+      </Button>
     </Screen>
   )
 }

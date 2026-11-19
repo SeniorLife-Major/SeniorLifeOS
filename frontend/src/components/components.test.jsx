@@ -1,13 +1,13 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ReactElement } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { Button, ButtonLink } from './Button'
+import { PasswordField, TextField } from './Field'
 import { Icon } from './Icon'
 import { Screen } from './Screen'
 
-function inRouter(ui: ReactElement) {
+function inRouter(ui) {
   return render(<MemoryRouter>{ui}</MemoryRouter>)
 }
 
@@ -69,6 +69,48 @@ describe('Screen', () => {
       </Screen>,
     )
     expect(screen.queryByRole('link', { name: /Call 112/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('TextField', () => {
+  it('ties the label, hint and error to the box for screen readers', () => {
+    const { rerender } = render(<TextField id="name" label="Your name" hint="We will greet you by this name." />)
+
+    const box = screen.getByLabelText('Your name')
+    expect(box).toHaveAccessibleDescription('We will greet you by this name.')
+    expect(box).not.toHaveAttribute('aria-invalid')
+
+    rerender(<TextField id="name" label="Your name" hint="We will greet you by this name." error="Please enter your name." />)
+    expect(box).toHaveAttribute('aria-invalid', 'true')
+    expect(box).toHaveAccessibleDescription('We will greet you by this name. Please enter your name.')
+  })
+})
+
+describe('PasswordField', () => {
+  it('hides the password until Show is pressed, and hides it again with Hide', async () => {
+    const user = userEvent.setup()
+    render(<PasswordField id="password" label="Password" />)
+
+    const box = screen.getByLabelText('Password')
+    expect(box).toHaveAttribute('type', 'password')
+
+    await user.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(box).toHaveAttribute('type', 'text')
+
+    await user.click(screen.getByRole('button', { name: 'Hide password' }))
+    expect(box).toHaveAttribute('type', 'password')
+  })
+
+  it('does not send the form when Show is pressed', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn((event) => event.preventDefault())
+    render(
+      <form onSubmit={(event) => onSubmit(event.nativeEvent)}>
+        <PasswordField id="password" label="Password" />
+      </form>,
+    )
+    await user.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })
 

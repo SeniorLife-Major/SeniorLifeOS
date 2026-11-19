@@ -1,11 +1,11 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Icon } from './Icon'
 
 export const APP_NAME = 'SeniorLife'
 export const EMERGENCY_NUMBER = '112'
 
-export function BackLink({ to, label }: { to: string; label: string }) {
+export function BackLink({ to, label }) {
   return (
     <Link to={to} className="back-link">
       <Icon name="arrowLeft" size={26} strokeWidth={2.4} />
@@ -24,15 +24,13 @@ export function EmergencyStrip() {
   )
 }
 
-interface ScreenProps {
-  /** Names the screen in the browser tab and for screen readers. */
-  title: string
-  back?: { to: string; label: string }
-  emergency?: boolean
-  children: ReactNode
-}
-
-export function Screen({ title, back, emergency = true, children }: ScreenProps) {
+/**
+ * The frame of every screen.
+ *   title     — names the screen in the browser tab and for screen readers
+ *   back      — { to, label } for the back link at the top, if any
+ *   emergency — false only on the emergency screen, which has its own call buttons
+ */
+export function Screen({ title, back, emergency = true, children }) {
   useEffect(() => {
     document.title = `${title} · ${APP_NAME}`
   }, [title])

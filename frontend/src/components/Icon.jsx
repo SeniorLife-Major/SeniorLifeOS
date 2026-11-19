@@ -1,5 +1,3 @@
-import type { ReactNode } from 'react'
-
 // Line icons drawn on a 24 x 24 grid. They take the text colour around them.
 const PATHS = {
   arrowLeft: (
@@ -14,6 +12,12 @@ const PATHS = {
       <polyline points="14 2 14 8 20 8" />
       <line x1="16" y1="13" x2="8" y2="13" />
       <line x1="16" y1="17" x2="8" y2="17" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
     </>
   ),
   phone: (
@@ -32,6 +36,12 @@ const PATHS = {
       <line x1="17" y1="16" x2="23" y2="16" />
     </>
   ),
+  shieldCheck: (
+    <>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <polyline points="9 12 11 14 15 10" />
+    </>
+  ),
   stethoscope: (
     <>
       <path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6 6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.2.2 0 1 0 .3.3" />
@@ -39,19 +49,14 @@ const PATHS = {
       <circle cx="20" cy="10" r="2" />
     </>
   ),
-} satisfies Record<string, ReactNode>
-
-export type IconName = keyof typeof PATHS
-
-interface IconProps {
-  name: IconName
-  size?: number
-  strokeWidth?: number
-  /** Only for an icon that means something on its own; most icons sit next to words and stay hidden. */
-  label?: string
 }
 
-export function Icon({ name, size = 24, strokeWidth = 2.2, label }: IconProps) {
+/**
+ * name        — one of the icons above (arrowLeft, document, lock, phone, settings, shieldCheck, stethoscope)
+ * label       — only for an icon that means something on its own; most icons sit next to words
+ *               and stay hidden from screen readers
+ */
+export function Icon({ name, size = 24, strokeWidth = 2.2, label }) {
   return (
     <svg
       width={size}

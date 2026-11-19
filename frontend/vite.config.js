@@ -11,7 +11,7 @@ export default defineConfig({
   preview: { port: 4173, strictPort: true, proxy: api },
   test: {
     environment: 'jsdom',
-    setupFiles: ['./src/test/setup.ts'],
+    setupFiles: ['./src/test/setup.js'],
     css: false,
   },
 })
