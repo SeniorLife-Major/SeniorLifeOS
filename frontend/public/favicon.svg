@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The tab icon: the sign-in screen's mark (components/Brand.jsx), the shieldCheck icon on the app's blue. -->
+  <rect width="64" height="64" rx="14" fill="#0B5CAD"/>
+  <g transform="translate(10 10) scale(1.8333)" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    <polyline points="9 12 11 14 15 10"/>
+  </g>
+</svg>

@@ -9,7 +9,7 @@ import { Screen } from '../components/Screen'
 import { DetailBox, RowsEditor, rowProblem } from '../documents/DetailStep'
 import { rowWord } from '../documents/fields'
 import { checkTypeIn, emptyTypeIn, typeInFields, typeInRefusal } from '../documents/typeIn'
-import { DOCUMENT_TYPES, inSentence, isKnownType, typeLabel } from '../documents/types'
+import { ADDABLE_TYPES, canAdd, inSentence, typeLabel } from '../documents/types'
 import { NewCopyGate } from './NewCopyPage'
 
 const BACK = { to: '/documents', label: 'My documents' }
@@ -18,7 +18,7 @@ const ID_FIELDS = new Set(['aadhaar_number', 'pan_number', 'account_number', 'po
 /** /documents/type-in(?type=…): a new document typed in, with no photo. */
 export function TypeInPage() {
   const [params] = useSearchParams()
-  const [documentType, setDocumentType] = useState(() => (isKnownType(params.get('type')) ? params.get('type') : null))
+  const [documentType, setDocumentType] = useState(() => (canAdd(params.get('type')) ? params.get('type') : null))
 
   if (!documentType) {
     return (
@@ -30,7 +30,7 @@ export function TypeInPage() {
             What is it?
           </h2>
           <div className="type-choices" role="group" aria-labelledby="which-paper">
-            {DOCUMENT_TYPES.map((type) => (
+            {ADDABLE_TYPES.map((type) => (
               <button key={type.key} type="button" className="type-choice" onClick={() => setDocumentType(type.key)}>
                 {type.choice ?? type.label}
               </button>

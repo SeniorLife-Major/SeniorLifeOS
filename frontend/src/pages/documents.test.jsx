@@ -224,6 +224,31 @@ describe('Add a document', () => {
     }
   })
 
+  it('does not offer a residence proof or a disability certificate (Decision 74)', async () => {
+    signedIn()
+    const { unmount } = renderApp('/documents/add')
+    const group = await screen.findByRole('group', { name: '1. What is it?' })
+    expect(within(group).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'ID card (Aadhaar, PAN)',
+      'Income certificate',
+      'Health insurance',
+      'Bank passbook',
+      'Prescription',
+      'Lab report',
+      'Medical bill',
+      "I don't know",
+    ])
+    unmount()
+
+    // An old link that names one of them chooses nothing.
+    renderApp('/documents/add?type=disability_certificate')
+    for (const button of within(await screen.findByRole('group', { name: '1. What is it?' })).getAllByRole('button')) {
+      expect(button).toHaveAttribute('aria-pressed', 'false')
+    }
+    expect(screen.getByRole('button', { name: 'Choose what it is first' })).toBeDisabled()
+    expect(screen.getByRole('link', { name: 'No photo? Type the details in' })).toHaveAttribute('href', '/documents/type-in')
+  })
+
   it('says in plain words why a file cannot be sent, and sends nothing', async () => {
     const user = userEvent.setup({ applyAccept: false })
     const { backend } = signedIn()
