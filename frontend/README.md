@@ -35,6 +35,8 @@ src/
   auth/               who is signed in (AuthProvider) and the guard for signed-in screens (RequireAuth)
   components/         shared pieces: Screen, BackLink, EmergencyStrip, Button, ButtonLink, Icon, Brand,
                       TextField, PasswordField, Switch, FocusedTitle
+  doctor/             doctor search: the stages and words (search.js), following a search
+                      (useSearchRun), the doctor card, the question, the emergency screen
   documents/          document types and status words, getting a photo ready to send, loading (and
                       checking again) while a document is being read, the details and their checks,
                       typing a document in (typeIn.js), and what an office may ask for (proofs.js)
@@ -76,8 +78,14 @@ deleted, after a question.
 and see which of your documents are ready, waiting for a check, ended or missing, with what to do
 next.
 
-Screens that are not built yet (the doctor search) show "We could not find that page". Family Mode
-needs sharing in the backend first.
+Find a doctor: say what is wrong in your own words (or tap an example). The screen ticks off the
+backend's real steps as it works, answers its one question if it asks (where to look: near me,
+near my home, a place it offers or a typed one; what kind of help; or whether to call emergency
+services), and shows the doctors with why each was picked, directions and their page. An emergency
+shows big call buttons. Your recent searches (30 days) open again.
+
+Speaking instead of typing is not built yet (see ideas/frontend/Decision.md #68). Family Mode needs
+sharing in the backend first.
 
 The text size and contrast are also kept in `localStorage` (only those two values), so the app
 opens at the right size straight away.

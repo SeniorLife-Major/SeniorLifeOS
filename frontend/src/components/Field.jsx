@@ -5,17 +5,19 @@ import { useState } from 'react'
  *   hint   — shown under the label, before the person types
  *   error  — shown under the box in red; the box is marked as wrong for screen readers too
  *   action — something next to the box, such as the password's Show button
+ *   multiline — a box of several lines (a <textarea>), for words in the person's own words
  * Everything else (value, onChange, ref, autoComplete, …) goes to the <input>.
  */
-export function TextField({ id, label, hint, error, action, ...input }) {
+export function TextField({ id, label, hint, error, action, multiline = false, ...input }) {
+  const Box = multiline ? 'textarea' : 'input'
   const hintId = hint ? `${id}-hint` : undefined
   const errorId = error ? `${id}-error` : undefined
   const describedBy = [hintId, errorId].filter(Boolean).join(' ') || undefined
 
   const box = (
-    <input
+    <Box
       id={id}
-      className="input"
+      className={multiline ? 'input input--multiline' : 'input'}
       aria-invalid={error ? true : undefined}
       aria-describedby={describedBy}
       {...input}

@@ -28,15 +28,16 @@ export function EmergencyStrip() {
  * The frame of every screen.
  *   title     — names the screen in the browser tab and for screen readers
  *   back      — { to, label } for the back link at the top, if any
- *   emergency — false only on the emergency screen, which has its own call buttons
+ *   emergency — false only on the emergency screens, which have their own call buttons
+ *   tone      — 'emergency' turns the whole screen red (the emergency screen)
  */
-export function Screen({ title, back, emergency = true, children }) {
+export function Screen({ title, back, emergency = true, tone, children }) {
   useEffect(() => {
     document.title = `${title} · ${APP_NAME}`
   }, [title])
 
   return (
-    <div className="screen">
+    <div className={tone ? `screen screen--${tone}` : 'screen'}>
       {back && (
         <header className="screen__top">
           <BackLink to={back.to} label={back.label} />

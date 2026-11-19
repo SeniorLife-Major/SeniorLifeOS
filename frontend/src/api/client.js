@@ -15,6 +15,8 @@ export const MESSAGES = {
   fieldErrors: 'Some details are not right. Please check them and try again.',
   serverProblem: 'Something went wrong on our side. Please try again in a little while.',
   storageDown: 'Your documents cannot be opened right now. Please try again in a little while.',
+  streamLost:
+    'The connection was lost while we were working. It may still finish: look for it under "Your recent searches".',
 }
 
 export class ApiError extends Error {
@@ -61,15 +63,68 @@ function messageFor(body) {
   return message
 }
 
+/** One server-sent event ("event: step" and "data: {...}" lines) as { name, data }; data is parsed JSON or undefined. */
+function parseEvent(block) {
+  let name = 'message'
+  const data = []
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith('event:')) name = line.slice(6).trim()
+    else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
+  }
+  try {
+    return { name, data: JSON.parse(data.join('\n')) }
+  } catch {
+    return { name, data: undefined }
+  }
+}
+
+/**
+ * Reads an answer sent as server-sent events (backend/api/health_requests.py): onStep(step) for
+ * each "step" event, then the "result" event's data is given back, or the "error" event thrown.
+ * An answer cut off before its result throws MESSAGES.streamLost (the backend still finishes it).
+ */
+async function readEvents(response, onStep) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    let chunk
+    try {
+      chunk = await reader.read()
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error
+      throw new ApiError(MESSAGES.streamLost, 'STREAM_LOST', response.status)
+    }
+    if (chunk.done) break
+    buffer += decoder.decode(chunk.value, { stream: true })
+    const blocks = buffer.split(/\r?\n\r?\n/)
+    buffer = blocks.pop()
+    for (const block of blocks) {
+      const { name, data } = parseEvent(block)
+      if (name === 'step' && typeof data?.step === 'string') onStep(data.step)
+      else if (name === 'result' && isSuccessBody(data)) {
+        reader.cancel().catch(() => {})
+        return data.data
+      } else if (name === 'error' && isErrorBody(data)) {
+        reader.cancel().catch(() => {})
+        throw new ApiError(messageFor(data), data.error.code, 500, data.error.details, data.meta?.requestId)
+      }
+    }
+  }
+  throw new ApiError(MESSAGES.streamLost, 'STREAM_LOST', response.status)
+}
+
 /**
  * Calls the backend and gives back `data`, or throws an ApiError with a message to show.
  * options: method ('GET' unless given), body (sent as JSON), file (a File or Blob sent as it is,
  * with its own type as Content-Type; for uploads), as ('blob' when the answer is a file, not the
- * envelope; errors still come in the envelope), signal (to cancel the request).
+ * envelope; errors still come in the envelope), signal (to cancel the request), onStep (asks for
+ * the answer as server-sent events and is called with each step's name as it finishes; a refusal
+ * before the work starts still comes as the usual envelope).
  */
 export async function api(path, options = {}) {
   const token = readToken()
-  const headers = { Accept: 'application/json' }
+  const headers = { Accept: options.onStep ? 'text/event-stream' : 'application/json' }
   if (options.file !== undefined) headers['Content-Type'] = options.file.type || 'application/octet-stream'
   else if (options.body !== undefined) headers['Content-Type'] = 'application/json'
   if (token) headers.Authorization = `Bearer ${token}`
@@ -93,6 +148,9 @@ export async function api(path, options = {}) {
   }
 
   if (options.as === 'blob' && response.ok) return response.blob()
+  if (options.onStep && response.ok && (response.headers.get('Content-Type') ?? '').includes('text/event-stream')) {
+    return readEvents(response, options.onStep)
+  }
 
   let parsed = undefined
   try {

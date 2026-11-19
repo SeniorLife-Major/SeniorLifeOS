@@ -1322,3 +1322,351 @@ select.input {
 .need__text > .button {
   margin-top: 0.5rem;
 }
+
+/* ---------- Find a doctor ---------- */
+
+.input--multiline {
+  height: auto;
+  min-height: 8rem;
+  padding: 0.875rem 1.125rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.quote {
+  overflow-wrap: anywhere;
+}
+
+.examples {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.fine-print {
+  margin: 0;
+  font-size: 1.0625rem;
+  line-height: 1.45;
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
+.fine-print > svg {
+  vertical-align: -0.15em;
+}
+
+.search-steps {
+  list-style: none;
+  margin: 0;
+  padding: 1rem 1.125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  background: var(--color-surface);
+  border: var(--line-thin) solid var(--color-border);
+  border-radius: 1.25rem;
+}
+
+.search-step {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+}
+
+.search-step__mark {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 0.1875rem solid var(--color-border-strong);
+}
+
+.search-step--done .search-step__mark {
+  border-color: var(--color-ready-text);
+  background: var(--color-ready-text);
+  color: var(--color-on-primary);
+}
+
+.search-step--now .search-step__mark {
+  border-color: var(--color-primary);
+}
+
+.search-step__dot {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 999px;
+  background: var(--color-primary);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-step__dot {
+    animation: none;
+  }
+}
+
+.search-step__label {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.search-step--now .search-step__label {
+  font-weight: 800;
+}
+
+.search-step--later .search-step__label {
+  color: var(--color-muted);
+}
+
+.place-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.recent-list > li + li {
+  border-top: var(--line-thin) solid var(--color-divider);
+}
+
+.recent {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 4rem;
+  padding: 0.5rem 0;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.recent__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.recent__title {
+  font-size: 1.1875rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.recent__date {
+  flex: 0 0 auto;
+  font-size: 1.0625rem;
+  color: var(--color-muted);
+}
+
+.recent > svg {
+  flex: 0 0 auto;
+  color: var(--color-primary);
+}
+
+.notice__title {
+  margin: 0 0 0.375rem;
+  font-size: 1.1875rem;
+  font-weight: 800;
+}
+
+.notice__list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  line-height: 1.4;
+}
+
+.doctor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.125rem;
+  border-radius: 1.375rem;
+  background: var(--color-surface);
+  border: var(--line-thin) solid var(--color-border);
+}
+
+.doctor__labels {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.chip--best {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.doctor__who {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.doctor__name {
+  margin: 0;
+  font-size: 1.5625rem;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.doctor__clinic {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.35;
+  color: var(--color-muted);
+}
+
+.doctor__facts {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: 0.75rem;
+  background: var(--color-ground);
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.doctor__points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.doctor__points > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  font-size: 1.125rem;
+  line-height: 1.35;
+}
+
+.doctor__points > li > svg {
+  flex: 0 0 auto;
+  margin-top: 0.125rem;
+  color: var(--color-ready-text);
+}
+
+.doctor__points--flags > li > svg {
+  color: var(--color-check-text);
+}
+
+.doctor__links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.5rem;
+}
+
+/* The emergency screen: all red, white call buttons (the mockup's Emergency screen). */
+.screen--emergency {
+  background: var(--color-danger);
+  color: var(--color-on-primary);
+  box-shadow: 0 0 0 100vmax var(--color-danger);
+  clip-path: inset(0 -100vmax);
+}
+
+.screen--emergency .back-link,
+.screen--emergency .lead {
+  color: var(--color-on-primary);
+}
+
+.emergency__icon {
+  width: 5.25rem;
+  height: 5.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-danger);
+}
+
+.call-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.call-button {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  min-height: 5.25rem;
+  padding: 0.5rem 1.125rem;
+  border-radius: 1.25rem;
+  background: var(--color-surface);
+  color: var(--color-danger-strong);
+  border: var(--line) solid var(--color-danger);
+  text-decoration: none;
+}
+
+.call-button__text {
+  display: flex;
+  flex-direction: column;
+}
+
+.call-button__number {
+  font-size: 1.625rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.call-button__for {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.emergency__signs-title {
+  margin: 0 0 0.375rem;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.emergency__signs ul {
+  margin: 0;
+  padding-left: 1.5rem;
+  font-size: 1.1875rem;
+  line-height: 1.45;
+}
+
+.emergency__stay {
+  margin: 0;
+  font-size: 1.1875rem;
+  line-height: 1.4;
+}
+
+.doctor__note {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--color-muted);
+}

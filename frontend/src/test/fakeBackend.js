@@ -9,6 +9,7 @@ import { vi } from 'vitest'
 //   { status, body }  body is sent as JSON
 //   { status, text }  text is sent as it is (e.g. an HTML error page from a proxy)
 //   { status, bytes, type }  a file (bytes: a Uint8Array) with that Content-Type
+//   { status, events }  server-sent events: [[name, data], …] (see streamed() below)
 
 const META = { serverTime: '2026-11-19T10:00:00Z', version: 'test', requestId: 'req-test' }
 
@@ -43,6 +44,28 @@ export function fakeBackend(routes = {}) {
 
     const handler = table.get(`${method} ${url.pathname}`)
     const reply = handler ? await handler(request) : fail(404, 'NOT_FOUND', `The fake backend has no ${method} ${url.pathname}`)
+    if (reply.events !== undefined) {
+      // Server-sent events, each split in two pieces as a network may deliver them. An item that
+      // is a promise holds the rest back until the test settles it.
+      const encoder = new TextEncoder()
+      const stream = new ReadableStream({
+        async start(controller) {
+          for (const item of reply.events) {
+            if (typeof item?.then === 'function') {
+              await item
+              continue
+            }
+            const [name, data] = item
+            const text = `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
+            const half = Math.floor(text.length / 2)
+            controller.enqueue(encoder.encode(text.slice(0, half)))
+            controller.enqueue(encoder.encode(text.slice(half)))
+          }
+          controller.close()
+        },
+      })
+      return new Response(stream, { status: reply.status ?? 200, headers: { 'Content-Type': 'text/event-stream' } })
+    }
     if (reply.bytes !== undefined) {
       return new Response(reply.bytes, { status: reply.status ?? 200, headers: { 'Content-Type': reply.type } })
     }
@@ -336,4 +359,111 @@ export function serveReview(backend, review, { file = { bytes: new Uint8Array([2
       }),
     ),
   )
+}
+
+// ---- doctor search (backend/api/health_requests.py) ----
+
+/** Every step of a search that finds doctors, in the order graphs/health_graph.py runs them. */
+export const ALL_STEPS = [
+  'validate_request',
+  'safety_check',
+  'understand_request',
+  'map_specialty',
+  'locate',
+  'search_doctors',
+  'verify',
+  'rank',
+  'explain',
+]
+
+/** A reply sent as server-sent events: each step, then the result (in the envelope). */
+export function streamed(result, steps = ALL_STEPS, status = 201) {
+  return { status, events: [...steps.map((step) => ['step', { step }]), ['result', ok(result).body]] }
+}
+
+export function makeDoctor(changes = {}) {
+  return {
+    doctorId: 'dr-1',
+    name: 'Dr. Asha Menon',
+    gender: 'female',
+    specialty: 'Orthopaedic',
+    qualifications: 'MBBS, MS Ortho',
+    experienceYears: 14,
+    languages: ['Hindi', 'English'],
+    fee: 700,
+    clinic: {
+      name: 'Demo Bone and Joint Clinic',
+      locality: 'Andheri West',
+      address: '12 Demo Road',
+      city: 'Mumbai',
+      hours: 'Today 10 am to 1 pm',
+      lat: 19.1197,
+      lon: 72.8464,
+    },
+    distanceKm: 1.2,
+    registrationLevel: 'practo_verified',
+    registrationNote: null,
+    recommendPercent: 88,
+    patientStories: 64,
+    score: 0.81,
+    heldBack: null,
+    reasons: ['88% recommend (64 patient stories)', '14 years as a specialist (MBBS, MS Ortho)', 'Fee ₹700'],
+    labels: ['Nearest'],
+    flags: [],
+    profileUrl: 'https://www.practo.com/mumbai/doctor/demo-asha-menon',
+    fetchedOn: '2026-11-12',
+    stale: false,
+    ...changes,
+  }
+}
+
+/** A search as the backend gives it back (HealthResultDto); by default doctors were found. */
+export function makeSearch(changes = {}) {
+  return {
+    requestId: 'search-1',
+    status: 'doctors_found',
+    specialty: { key: 'orthopedic', label: 'Orthopaedic doctor (bones and joints)' },
+    doctorFallback: null,
+    searchLocation: { label: 'your home', source: 'home' },
+    searchRadiusKm: 5,
+    doctors: [
+      makeDoctor(),
+      makeDoctor({
+        doctorId: 'dr-2',
+        name: 'Dr. Vikram Joshi',
+        clinic: { name: 'Demo Ortho Care', locality: 'Jogeshwari West', hours: 'Today 5 pm to 8 pm', lat: 19.13, lon: 72.85 },
+        distanceKm: 2.8,
+        labels: ['Most recommended'],
+        reasons: ['97% recommend (212 patient stories)', 'Fee ₹1,000'],
+        profileUrl: null,
+      }),
+    ],
+    otherDoctors: [],
+    isTopChoice: true,
+    answer: 'Here are 2 orthopaedic doctors near your home.',
+    notes: [],
+    attribution: null,
+    question: null,
+    options: [],
+    emergency: null,
+    ...changes,
+  }
+}
+
+/** Serves the list of recent searches and each one by its id (404 for any other id). */
+export function serveSearches(backend, searches = [], summaries) {
+  backend.on('GET /api/v1/health-requests', () =>
+    ok(
+      summaries ??
+        searches.map((search) => ({
+          requestId: search.requestId,
+          status: search.status,
+          specialty: search.specialty,
+          createdAt: '2026-11-19T04:30:00Z',
+        })),
+    ),
+  )
+  for (const search of searches) {
+    backend.on(`GET /api/v1/health-requests/${search.requestId}`, () => ok(search))
+  }
 }
