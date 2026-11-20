@@ -1,14 +1,15 @@
 """Document intake graph: validate -> check file -> read file -> classify -> extract -> gate -> review -> protect -> publish.
 
-Pages come from a real file (document.file_path, read by local OCR in tools/ocr.py)
-or from handwritten page fixtures (document.pages). Neither needs an API key. The
-review node supports both a prefilled decision for one-call demos and a real
-LangGraph interrupt when built with a checkpointer.
+Pages come from a real file (document.file_path, opened in tools/ocr.py) or from handwritten
+page fixtures (document.pages). A PDF that stores its text is read on this machine, exactly. A
+photo or a scanned page is not read on this machine at all: with consent, the vision model reads
+it, with QR codes and faces blacked out (vision_extract, Decision #41; medical documents also
+need medical consent; vision-only session). Without consent, or without GROQ_API_KEY, the owner
+types the details in at review. The review node supports both a prefilled decision for one-call
+demos and a real LangGraph interrupt when built with a checkpointer.
 
-With consent, a scanned or photographed document of any type is read by a vision model after
-local OCR, with identifiers, QR codes and faces blacked out (vision_extract, Decision #41;
-medical documents also need medical consent). A document can also be typed in by its owner with no
-file (manual_fields -> take_manual_entry, Decision #42).
+A document can also be typed in by its owner with no file (manual_fields -> take_manual_entry,
+Decision #42).
 """
 
 from __future__ import annotations
@@ -25,9 +26,9 @@ from ..tools.document_type import type_from_text
 from ..tools.medical import (
     LIST_FIELDS, MEDICAL_TYPES, extract_lists, heading_fields, looks_medical,
 )
-from ..tools.ocr import OcrEngineError, OcrError, read_document
-from ..tools.cloud_ocr import ENGINES, CloudOcrError, cloud_engine, engine_key, engine_label, read_document_in_cloud
-from ..tools.vision_extract import extract_with_vision
+from ..tools.ocr import IMAGE_ENGINE, OcrError, read_document
+from ..tools.cloud_ocr import GROQ_KEY_NAME, CloudOcrError, groq_api_key
+from ..tools.vision_extract import classify_with_vision, extract_with_vision
 from ..tools.file_safety import check_file as check_uploaded_file
 from ..tools.free_text import FREE_TEXT_FIELDS, comparable, free_text_problems
 from ..tools.ocr_postprocess import clean_line, clean_page, lookalike_key, repair_value
@@ -51,7 +52,6 @@ ALLOWED_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 CONFIDENCE_THRESHOLD = 0.9
 AUTO_REVIEWER_ID = "system:confidence_gate"
 MAX_UPLOAD_BYTES = 5_000_000
-OCR_MAX_ATTEMPTS = 3
 
 
 class DocumentState(TypedDict, total=False):
@@ -67,11 +67,10 @@ class DocumentState(TypedDict, total=False):
     vault_identifier_hashes: dict[str, str]  # keyed hash -> document_id already in the vault
     vault_organization_names: dict[str, list[str]]  # field -> names on the owner's earlier confirmed documents
     medical_cloud_consent: bool  # the senior allows the cloud model to read medical documents
-    cloud_ocr_consent: bool  # the senior allows the cloud OCR engine to read unclear pages again
-    cloud_ocr_used: bool
-    cloud_disagreements: list[str]  # organization fields the cloud read differently (local value kept)
-    local_disagreements: list[str]  # fields local OCR read differently from the vision model (vision value kept)
-    vision_not_on_page: list[str]  # vision values that are nowhere in the page text read on this machine
+    cloud_ocr_consent: bool  # the senior allows the vision model to read document photos
+    cloud_ocr_used: bool  # the vision model has read this document (only once)
+    local_disagreements: list[str]  # fields a PDF's stored text says differently from the vision model
+    vision_not_on_page: list[str]  # vision values that are nowhere in the text stored in the PDF
     manual_fields: dict[str, Any]  # typed in by the owner, no file (Decision #42); emptied once taken
 
     # Graph outputs / control
@@ -165,27 +164,14 @@ def check_file(state: DocumentState) -> dict[str, Any]:
 
 
 def read_file(state: DocumentState) -> dict[str, Any]:
-    """Turn an uploaded file into page text with local OCR. Page fixtures skip this."""
+    """Turn an uploaded file into pages: a PDF's stored text, or a picture page for each photo or
+    scanned page (read later by the vision model). Page fixtures skip this."""
     document = state["document"]
     if not document.get("file_path"):
         return {"route": "continue", "events": add_event(state, "read_file:fixture")}
     attempts = state.get("ocr_attempts", 0) + 1
     try:
         pages = read_document(document["file_path"], document["mime_type"])
-    except OcrEngineError:
-        if attempts < OCR_MAX_ATTEMPTS:
-            return {
-                "ocr_attempts": attempts,
-                "route": "retry",
-                "events": add_event(state, f"read_file:retry_{attempts}"),
-            }
-        return {
-            "ocr_attempts": attempts,
-            "status": "failed_tool",
-            "route": "stop",
-            "errors": [f"The OCR engine failed {attempts} times"],
-            "events": add_event(state, "read_file:engine_failed"),
-        }
     except OcrError as exc:
         # The file itself is the problem (broken, wrong type, too many pages): retrying won't help.
         return {
@@ -196,7 +182,7 @@ def read_file(state: DocumentState) -> dict[str, Any]:
             "events": add_event(state, "read_file:unreadable"),
         }
     pages = [clean_page(page) for page in pages]
-    if not any(page["text"].strip() for page in pages):
+    if not any(page["text"].strip() or page.get("engine") == IMAGE_ENGINE for page in pages):
         return {
             "ocr_attempts": attempts,
             "status": "needs_reupload",
@@ -227,17 +213,43 @@ def guess_type_locally(filename: str, page_text: str) -> str | None:
     return type_from_text(page_text)
 
 
+def vision_may_classify(state: DocumentState) -> bool:
+    """Ask the vision model what a photo is? Only with cloud consent and medical consent too
+    (the photo may be a medical paper, Decision #29), and only with GROQ_API_KEY set."""
+    return bool(state["document"].get("file_path") and state.get("cloud_ocr_consent")
+                and state.get("medical_cloud_consent") and groq_api_key())
+
+
 def classify_document(state: DocumentState) -> dict[str, Any]:
     claimed = state.get("claimed_type") or state["document"].get("claimed_type")
     filename = state["document"].get("filename", "").lower()
     guessed = claimed
     page_text = "\n".join(page.get("text", "") for page in state["document"]["pages"])
+    pictures_only = not page_text.strip()
+    if not guessed and pictures_only:
+        # Nothing was read on this machine, so there is no text for the rules or the text model.
+        # The file name, then the vision model.
+        guessed = guess_type_locally(filename, "")
+        if not guessed and vision_may_classify(state):
+            document = state["document"]
+            try:
+                guessed = classify_with_vision(document["file_path"], document["mime_type"], groq_api_key())
+            except (CloudOcrError, OcrError) as exc:
+                return {
+                    "status": "needs_classification",
+                    "route": "stop",
+                    "warnings": [f"The vision model could not tell the document type ({exc})",
+                                 f"Choose one of: {', '.join(REQUIRED_FIELDS)}"],
+                    "events": add_event(state, "classify_document:vision_failed"),
+                }
     # A page that looks medical goes to the cloud model only with consent (Decision #29),
     # even just to learn its type; without consent it is classified on this machine.
     cloud_allowed = not looks_medical(page_text) or state.get("medical_cloud_consent")
-    if not guessed and state.get("use_llm") and not cloud_allowed:
+    if guessed or pictures_only:
+        pass
+    elif state.get("use_llm") and not cloud_allowed:
         guessed = guess_type_locally(filename, page_text)
-    elif not guessed and state.get("use_llm"):
+    elif state.get("use_llm"):
         try:
             from ..agents.llm_agents import choose_document_type
 
@@ -279,8 +291,8 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
         }
     pages = state["document"]["pages"]
     vision = vision_possible(state)
-    # Low OCR confidence on handwriting is no reason to stop when the vision model will read
-    # the page; a blurry photo still is (its ID numbers can't be found to black them out).
+    # A page fixture read with low confidence stops here unless the vision model will read the
+    # file. A picture page is never below 0.5 (1.0, or 0.85 when blurred).
     if any(page.get("quality", 1.0) < 0.5 and (not vision or page.get("blurry")) for page in pages):
         return {
             "route": "stop",
@@ -292,12 +304,21 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
     fields.update(extract_lists(pages, state["document_type"]))  # lab tests, medicines, bill items
     fields.update(heading_fields(pages, state["document_type"], fields))
     if vision:
-        # The local reading is kept to find ID numbers to black out and to compare with.
+        # A PDF's stored text, if any, is kept to compare with.
         return {
             "extracted_fields": fields,
             "retry_count": retries,
             "route": "vision",
             "events": add_event(state, "extract_content:to_vision"),
+        }
+    if any(page.get("engine") == IMAGE_ENGINE for page in pages):
+        # Nothing on this machine reads a photo: the owner types the details in at review.
+        return {
+            "extracted_fields": fields,
+            "retry_count": retries,
+            "route": "continue",
+            "warnings": [*state.get("warnings", []), photo_not_read(state)],
+            "events": add_event(state, "extract_content:photo_not_read"),
         }
     missing = [key for key in sorted(REQUIRED_FIELDS[state["document_type"]]) if key not in fields]
     # Medical documents go to the cloud model only with the senior's consent (Decision #29).
@@ -336,6 +357,21 @@ def extract_content(state: DocumentState) -> dict[str, Any]:
 
 
 NO_KNOWN_LABELS = "The page is clear, but none of its labels are known yet; please type in the details"
+PHOTO_NOT_READ = ("This photo was not read: photos and scanned pages are read only by the AI vision model, "
+                  "{reason}; please type in the details")
+
+
+def photo_not_read(state: DocumentState) -> str:
+    """Why the vision model did not read this photo, for the owner who now types the details in."""
+    if not state.get("cloud_ocr_consent"):
+        reason = "and you have not allowed it to read document photos"
+    elif state.get("document_type") in MEDICAL_TYPES and not state.get("medical_cloud_consent"):
+        reason = "and you have not allowed it to read medical documents"
+    elif not groq_api_key():
+        reason = f"which is not set up ({GROQ_KEY_NAME} is not set)"
+    else:
+        reason = "which has already read this document"
+    return PHOTO_NOT_READ.format(reason=reason)
 
 
 def pages_clear(pages: list[dict[str, Any]]) -> bool:
@@ -487,9 +523,8 @@ def llm_extract(state: DocumentState) -> dict[str, Any]:
 def vision_possible(state: DocumentState) -> bool:
     """Read the document with the vision model (Decision #41; every type since full-test-review
     Decision 14)? Only an uploaded scan or photo, only with cloud consent (a medical document also
-    needs medical consent), and only once. A PDF whose text is stored in it is read exactly on this
-    machine and never sent. Other types also need the Groq key, so a setup with only a Google Vision
-    key keeps re-reading unsure fields with cloud OCR as before."""
+    needs medical consent), only with GROQ_API_KEY set, and only once. A PDF whose text is stored
+    in it is read exactly on this machine and never sent."""
     document = state["document"]
     document_type = state.get("document_type")
     if document_type not in REQUIRED_FIELDS or not document.get("file_path"):
@@ -498,13 +533,13 @@ def vision_possible(state: DocumentState) -> bool:
         return False
     if document_type in MEDICAL_TYPES and not state.get("medical_cloud_consent"):
         return False
-    if document_type not in MEDICAL_TYPES and not engine_key("groq"):
+    if not groq_api_key():
         return False
     return not all(page.get("engine") == "pdf_text" for page in document.get("pages", []))
 
 
 def on_page(value: Any, pages: list[dict[str, Any]]) -> bool:
-    """Is this value written in the page text read on this machine (case and spacing ignored,
+    """Is this value written in the page text stored in the file (case and spacing ignored,
     raw or cleaned text, across line breaks)? The value gets the same clean-up as the text, so
     "Rs. 2,56,000" is found where the cleaned text says "₹2,56,000"."""
     def plain(text: str) -> str:
@@ -531,53 +566,49 @@ def same_reading(key: str, first: Any, second: Any) -> bool:
 
 
 def vision_extract(state: DocumentState) -> dict[str, Any]:
-    """Read the document with the Groq vision model, identifiers, QR codes and faces blacked out
-    first. Its values are used, and every one is reviewed by the owner; where local OCR read the
-    same field differently, or the value is nowhere in the local text, the owner is told. An ID
-    card whose number local OCR could not find is not sent (nothing to black out). If the model
-    can't be used, the local reading carries on as before."""
-    done = {"cloud_ocr_used": True}  # one cloud reading per document
+    """Read the document with the Groq vision model, QR codes and faces blacked out first. Its
+    values are used, ID numbers too, and every one is reviewed by the owner. Where a PDF's stored
+    text has the same field read differently, or does not hold the value at all, the owner is
+    told; an ID number from stored text is kept over the model's. If the model can't be used, the
+    owner types the details in at review (a blurred photo is asked for again)."""
+    done = {"cloud_ocr_used": True}  # one vision reading per document
     document = state["document"]
     local = state.get("extracted_fields", {})
     warnings = list(state.get("warnings", []))
 
-    def local_only(warning: str, event: str) -> dict[str, Any]:
+    def without_vision(warning: str, event: str) -> dict[str, Any]:
         update = {**done, "warnings": [*warnings, warning], "events": add_event(state, event)}
-        if any(page.get("quality", 1.0) < 0.5 for page in document["pages"]) or not local:
+        pages = document["pages"]
+        if any(page.get("quality", 1.0) < 0.5 for page in pages) or (not local and not pages_clear(pages)):
             return {**update, "route": "stop", "status": "needs_reupload",
                     "warnings": [*update["warnings"], "The page could not be read reliably on this machine"]}
         return {**update, "route": "continue"}
 
-    if id_not_located(state["document_type"], local):
-        return local_only("Vision reading skipped: the ID number on this document could not be found on the page "
-                          "to black it out", "vision_extract:id_not_located")
-    key = engine_key("groq")
+    key = groq_api_key()
     if not key:
-        return local_only(f"Vision reading skipped: {ENGINES['groq'][2]} is not set", "vision_extract:no_key")
-    boxes: dict[int, list[list[int]]] = {}
-    for field in ID_FIELDS:
-        if field in local and local[field].get("box"):
-            boxes.setdefault(local[field]["page"], []).append(local[field]["box"])
+        return without_vision(f"Vision reading skipped: {GROQ_KEY_NAME} is not set", "vision_extract:no_key")
     try:  # more than 3 pages is refused before anything is sent
-        found = extract_with_vision(document["file_path"], document["mime_type"], document["pages"], boxes,
-                                    state["document_type"], key, generic_codes=has_id_number(state["document_type"]))
+        found = extract_with_vision(document["file_path"], document["mime_type"], state["document_type"], key)
     except (CloudOcrError, OcrError) as exc:
-        return local_only(f"Vision reading unavailable ({exc})", "vision_extract:failed")
+        return without_vision(f"Vision reading unavailable ({exc})", "vision_extract:failed")
     fields = {name: dict(item) for name, item in local.items()}
+    stored_text = any(page.get("text", "").strip() for page in document["pages"])
     disagreements = []
     not_on_page = []
-    for name, value in found.items():  # only this type's fields in SHAPES: never an ID field
+    for name, value in found.items():  # only this type's fields in SHAPES
         if name in fields and not same_reading(name, fields[name]["value"], value):
             disagreements.append(name)
-        elif name not in fields and not isinstance(value, list) and not on_page(value, document["pages"]):
-            not_on_page.append(name)  # nothing local to compare with, and not even in the local text
+        elif name not in fields and stored_text and not isinstance(value, list) and not on_page(value, document["pages"]):
+            not_on_page.append(name)  # nothing stored to compare with, and not even in the stored text
+        if name in ID_FIELDS and name in fields:
+            continue  # the number as stored in the PDF is exact: kept
         if isinstance(value, list):
             value = [{**row, "source_ref": "vision_model", "confidence": 0.0, "box": None} for row in value]
         # Confidence 0.0: the model gives none, so every value goes to review.
         fields[name] = {"value": value, "confidence": 0.0, "source": "vision_model", "source_ref": "vision_model",
                         "layout": "vision", "box": None}
     if not found:
-        return local_only("The vision model found no fields", "vision_extract:no_fields")
+        return without_vision("The vision model found no fields", "vision_extract:no_fields")
     return {
         **done,
         "extracted_fields": fields,
@@ -613,9 +644,6 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
         if item.get("layout"):
             # Found by a layout guess or by the model reading the text: the owner checks it.
             flags.append(f"{key}: {LAYOUT_NOTES[item['layout']]}, please check")
-        if item.get("source") == "cloud_ocr":
-            engine = engine_label(item.get("cloud_engine", "google_vision"))
-            flags.append(f"{key}: read again by cloud OCR ({engine}), please check")
         normalized[key] = normalize_field(key, item["value"])
         if normalized[key] is None and isinstance(item["value"], str):
             # The value fails its check as read: try look-alike swaps where the field's shape
@@ -630,12 +658,10 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
         # Organization names have no format; flag signs of a cut-off or misread word.
         earlier = state.get("vault_organization_names", {}).get(key)
         flags.extend(f"{key}: {note}, please check" for note in free_text_problems(key, item["value"], earlier))
-        if key in state.get("cloud_disagreements", []) and item.get("source") != "cloud_ocr":
-            flags.append(f"{key}: the cloud reading differs, please check")
         if key in state.get("local_disagreements", []):
             flags.append(f"{key}: the local reading differs, please check")
         if key in state.get("vision_not_on_page", []):
-            flags.append(f"{key}: not found in the text read on this machine, please check carefully")
+            flags.append(f"{key}: not found in the text read from the file, please check carefully")
     for key in sorted(REQUIRED_FIELDS[state["document_type"]]):
         if is_blank(normalized.get(key)):
             flags.append(f"{key}: missing or invalid")
@@ -671,105 +697,8 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
         "extracted_fields": fields,
         "normalized_fields": normalized,
         "review_flags": flags,
-        "route": "cloud_ocr" if wants_cloud_ocr(state, fields, normalized) else "continue",
+        "route": "continue",
         "events": add_event(state, "validate_candidates"),
-    }
-
-
-def wants_cloud_ocr(state: DocumentState, fields: dict[str, Any], normalized: dict[str, Any]) -> bool:
-    """Read the file again in the cloud? Only with consent, once, and only if the local reading
-    left a required field missing or invalid, a field unsure or looking cut off or misread,
-    or a page blurry."""
-    document = state["document"]
-    if not state.get("cloud_ocr_consent") or state.get("cloud_ocr_used") or not document.get("file_path"):
-        return False
-    if state["document_type"] in MEDICAL_TYPES and not state.get("medical_cloud_consent"):
-        return False
-    weak = any(is_blank(normalized.get(key)) for key in REQUIRED_FIELDS[state["document_type"]])
-    weak = weak or any(item.get("confidence", 1.0) < CONFIDENCE_THRESHOLD for item in fields.values())
-    weak = weak or any(free_text_problems(key, item.get("value")) for key, item in fields.items())
-    return weak or any(page.get("blurry") for page in document.get("pages", []))
-
-
-# The ID number each type carries. Local OCR must have found where it is printed (its box)
-# before a page of that type may go to the cloud with the number blacked out.
-ID_FIELD_OF_TYPE = {"identity": "aadhaar_number", "health_insurance": "policy_number",
-                    "bank_passbook": "account_number"}
-
-
-def has_id_number(document_type: str) -> bool:
-    """Identity, insurance and passbook pages: before they are sent, every ID-like code is painted
-    black too. Other types keep lab sample IDs and registration numbers visible (full-test-review
-    Decision 14d); Aadhaar, VID, PAN, phone and e-mail are painted black on every type."""
-    return document_type in ID_FIELD_OF_TYPE
-
-
-def id_not_located(document_type: str, fields: dict[str, Any]) -> bool:
-    """True if the document should carry an ID number but local OCR didn't locate it. A card
-    without that number (e.g. a PAN card as identity) is then not sent either: safer, less help."""
-    field = ID_FIELD_OF_TYPE.get(document_type)
-    return bool(field) and not (fields.get(field) or {}).get("box")
-
-
-def cloud_ocr(state: DocumentState) -> dict[str, Any]:
-    """Read the file again in the cloud (Google Vision, or a Groq vision model if
-    SENIORLIFE_CLOUD_OCR=groq), with ID regions blacked out, and use its values for fields
-    the local reading got wrong or was unsure of. ID fields always stay local."""
-    done = {"cloud_ocr_used": True, "route": "continue"}
-    warnings = list(state.get("warnings", []))
-    if id_not_located(state["document_type"], state["extracted_fields"]):
-        # Fail closed: an ID number we couldn't find can't be blacked out, so nothing is sent.
-        return {**done, "warnings": [*warnings, "Cloud OCR skipped: the ID number on this document could not be "
-                                                "found on the page to black it out"],
-                "events": add_event(state, "cloud_ocr:id_not_located")}
-    try:
-        engine = cloud_engine()
-    except CloudOcrError as exc:
-        return {**done, "warnings": [*warnings, f"Cloud OCR skipped: {exc}"],
-                "events": add_event(state, "cloud_ocr:bad_setting")}
-    key = engine_key(engine)
-    if not key:
-        return {**done, "warnings": [*warnings, f"Cloud OCR skipped: {ENGINES[engine][2]} is not set"],
-                "events": add_event(state, "cloud_ocr:no_key")}
-    document = state["document"]
-    local = state["extracted_fields"]
-    boxes: dict[int, list[list[int]]] = {}
-    for field in ID_FIELDS:
-        if field in local and local[field].get("box"):
-            boxes.setdefault(local[field]["page"], []).append(local[field]["box"])
-    try:
-        pages = read_document_in_cloud(document["file_path"], document["mime_type"], document["pages"], boxes, key,
-                                       engine=engine, generic_codes=has_id_number(state["document_type"]))
-    except (CloudOcrError, OcrError) as exc:
-        return {**done, "warnings": [*warnings, f"Cloud OCR unavailable ({exc})"],
-                "events": add_event(state, "cloud_ocr:failed")}
-    pages = [clean_page(page) for page in pages]
-    found = extract_fields_from_pages(pages, state["document_type"])
-    found.update(extract_lists(pages, state["document_type"]))
-    found.update(heading_fields(pages, state["document_type"], found))
-    fields = {name: dict(item) for name, item in local.items()}
-    replaced, disagreements = 0, []
-    for name, item in found.items():
-        if name in ID_FIELDS:
-            continue  # blacked out before sending; the local reading is kept
-        mine = fields.get(name)
-        mine_ok = bool(mine and not mine.get("layout") and mine.get("confidence", 0) >= CONFIDENCE_THRESHOLD
-                       and not is_blank(normalize_field(name, mine["value"]))
-                       and not free_text_problems(name, mine["value"]))
-        cloud_ok = not is_blank(normalize_field(name, item["value"])) and not free_text_problems(name, item["value"])
-        if not mine_ok and cloud_ok:
-            fields[name] = {**item, "source_ref": f"cloud:{item['source_ref']}", "source": "cloud_ocr",
-                            "cloud_engine": ENGINES[engine][0]}
-            replaced += 1
-        elif (name in FREE_TEXT_FIELDS and mine and isinstance(item["value"], str) and isinstance(mine["value"], str)
-              and comparable(item["value"]) != comparable(mine["value"])):
-            disagreements.append(name)  # two readings of a name differ: the owner decides
-    return {
-        **done,
-        "document": {**document, "cloud_pages": pages},
-        "extracted_fields": fields,
-        "cloud_disagreements": sorted(disagreements),
-        "events": add_event(state, f"cloud_ocr:replaced_{replaced}"),
     }
 
 
@@ -1093,7 +1022,7 @@ def build_document_graph(checkpointer: Any = None):
     })
     graph.add_conditional_edges("check_file", route_step, {"continue": "read_file", "stop": "mask_on_stop"})
     graph.add_conditional_edges("read_file", route_step, {
-        "continue": "classify_document", "retry": "read_file", "stop": "mask_on_stop",
+        "continue": "classify_document", "stop": "mask_on_stop",
     })
     graph.add_conditional_edges("classify_document", route_step, {"continue": "extract_content", "stop": "mask_on_stop"})
     graph.add_conditional_edges("extract_content", route_step, {
@@ -1103,11 +1032,7 @@ def build_document_graph(checkpointer: Any = None):
     graph.add_conditional_edges("llm_extract", route_step, {"continue": "validate_candidates", "stop": "mask_on_stop"})
     graph.add_node("vision_extract", vision_extract)
     graph.add_conditional_edges("vision_extract", route_step, {"continue": "validate_candidates", "stop": "mask_on_stop"})
-    graph.add_node("cloud_ocr", cloud_ocr)
-    graph.add_conditional_edges("validate_candidates", route_step, {
-        "continue": "confidence_gate", "cloud_ocr": "cloud_ocr",
-    })
-    graph.add_edge("cloud_ocr", "validate_candidates")
+    graph.add_edge("validate_candidates", "confidence_gate")
     graph.add_conditional_edges("confidence_gate", route_step, {
         "auto_accept": "protect_identifiers", "review": "human_field_review",
     })

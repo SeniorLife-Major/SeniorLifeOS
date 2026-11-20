@@ -1,4 +1,4 @@
-"""Keep paid AI services (OpenAI, Groq, Google Vision) under a set number of requests per minute.
+"""Keep paid AI services (OpenAI, Groq) under a set number of requests per minute.
 
 Each service has one shared limiter per process: all requests to it, from every thread, wait
 their turn. Requests are spaced evenly (60 / per-minute seconds apart); the first goes at once.
@@ -84,7 +84,7 @@ def per_minute_setting(setting: str, default: float) -> float:
 
 
 def rate_limiter(service: str, setting: str, default: float) -> SpacedRateLimiter:
-    """The shared limiter of one service (e.g. "groq", "openai", "google_vision")."""
+    """The shared limiter of one service (e.g. "groq", "openai", "groq_vision")."""
     per_minute = per_minute_setting(setting, default)
     with _limiters_lock:
         key = (service, per_minute)  # a changed setting gets a fresh limiter

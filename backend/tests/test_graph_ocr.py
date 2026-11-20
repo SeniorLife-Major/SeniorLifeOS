@@ -1,20 +1,23 @@
 """Tests for step 7c-1: real files going through the document graph.
 
-validate_upload -> read_file (local OCR) -> classify -> extract -> ... -> publish.
-Fast tests use real PDFs that store text (no OCR) or replace read_document with a
-stand-in. The real-PaddleOCR tests run only with SENIORLIFE_RUN_OCR_TESTS=1.
+validate_upload -> read_file -> classify -> extract -> ... -> publish.
+Fast tests use real PDFs that store text, real photos (never read on this machine: without the
+vision model the owner types the details in), or replace read_document with a stand-in that
+returns pages shaped like a box reading, to test the field rules.
 """
 
+import contextlib
 import json
+import os
 import unittest
 from statistics import fmean
 from unittest.mock import patch
 
 from backend.demo.demo_cases import document_success_state
-from backend.graphs.document_graph import NO_KNOWN_LABELS, OCR_MAX_ATTEMPTS, build_document_graph
+from backend.graphs.document_graph import NO_KNOWN_LABELS, build_document_graph
+from backend.tools.cloud_ocr import GROQ_KEY_NAME
 from backend.tools.demo_tools import extract_fields_from_pages
-from backend.tools.ocr import OcrEngineError
-from test_ocr import BENCHMARK, RUN_SLOW, UNIT, ensure_fixtures
+from test_ocr import UNIT, ensure_fixtures
 from test_privacy import FAKE_HASH_KEY, hash_key_env
 
 AADHAAR = "3399 8698 7973"  # fictional, checksum-valid (from the benchmark set)
@@ -106,25 +109,6 @@ class UploadedFileTests(unittest.TestCase):
         self.assertIn("The PDF file is damaged", result["warnings"])
         self.assertFalse(any("retry" in event for event in result["events"]))
 
-    def test_engine_failure_is_retried_then_succeeds(self, _):
-        page = ocr_page([(text, 0.99) for text, _ in INCOME_LINES])
-        with patch("backend.graphs.document_graph.read_document",
-                   side_effect=[OcrEngineError("crash"), OcrEngineError("crash"), [page]]) as reader:
-            result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
-        self.assertEqual(reader.call_count, 3)
-        self.assertIn("read_file:retry_1", result["events"])
-        self.assertIn("read_file:retry_2", result["events"])
-        self.assertIn("read_file:fake", result["events"])
-        self.assertEqual(result["status"], "confirmed")
-
-    def test_engine_that_keeps_failing_stops_the_run(self, _):
-        with patch("backend.graphs.document_graph.read_document", side_effect=OcrEngineError("crash")) as reader:
-            result = self.run_graph(upload_state(UNIT / "sharp.png", "image/png", "income_certificate"))
-        self.assertEqual(reader.call_count, OCR_MAX_ATTEMPTS)
-        self.assertEqual(result["status"], "failed_tool")
-        self.assertIn("read_file:engine_failed", result["events"])
-        self.assertNotIn("vault_record", result)
-
     def test_file_with_no_text_asks_for_reupload(self, _):
         blank = {"page": 1, "quality": 0.0, "text": "", "lines": [], "engine": "fake", "sharpness": 0.0, "blurry": False}
         with patch("backend.graphs.document_graph.read_document", return_value=[blank]):
@@ -204,36 +188,81 @@ class LineConfidenceParserTests(unittest.TestCase):
         self.assertEqual(fields["name"]["confidence"], 0.92)
 
 
-@unittest.skipUnless(RUN_SLOW, "set SENIORLIFE_RUN_OCR_TESTS=1 to run real PaddleOCR (a few minutes)")
+@contextlib.contextmanager
+def groq_key(key=None):
+    """GROQ_API_KEY set to key (or unset), never the developer's own .env."""
+    with patch("backend.tools.cloud_ocr.find_env_file", return_value=None), patch.dict(os.environ, {}):
+        os.environ.pop(GROQ_KEY_NAME, None)
+        if key:
+            os.environ[GROQ_KEY_NAME] = key
+        yield
+
+
 @patch("backend.utils.privacy.find_env_file", return_value=None)
-class RealOcrGraphTests(unittest.TestCase):
+class PhotoWithoutVisionTests(unittest.TestCase):
+    """A real photo, not read on this machine: without the vision model, the owner types it in."""
+
     @classmethod
     def setUpClass(cls):
-        manifest = BENCHMARK / "manifest.json"
-        if not manifest.exists():
-            raise unittest.SkipTest(f"benchmark dataset missing: {manifest}")
-        cls.manifest = {entry["path"]: entry for entry in json.loads(manifest.read_text(encoding="utf-8"))}
+        ensure_fixtures()
 
-    def run_page(self, name, doc_type):
-        state = upload_state(BENCHMARK / "pages" / name, "image/png", doc_type)
-        truth = dict(self.manifest[f"pages/{name}"]["fields"])
-        state["document"]["owner_name"] = truth["Name"]
-        with hash_key_env(FAKE_HASH_KEY):
-            return build_document_graph().invoke(state), truth
+    def run_photo(self, name="sharp.png", doc_type="income_certificate", key=None, **extra):
+        with groq_key(key), hash_key_env(FAKE_HASH_KEY),                 patch("backend.tools.vision_extract.ask_vision_model") as model:
+            result = build_document_graph().invoke(upload_state(UNIT / name, "image/png", doc_type, **extra))
+        model.assert_not_called()  # nothing was sent
+        return result
 
-    def test_clean_identity_photo_is_confirmed_and_masked(self, _):
-        result, truth = self.run_page("identity__clean.png", "identity")
-        self.assertIn("read_file:paddleocr", result["events"])
+    def test_without_consent_the_owner_is_asked_to_type_the_details_in(self, _):
+        result = self.run_photo()
+        self.assertIn("read_file:image", result["events"])
+        self.assertIn("extract_content:photo_not_read", result["events"])
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("This photo was not read: photos and scanned pages are read only by the AI vision model, "
+                      "and you have not allowed it to read document photos; please type in the details",
+                      result["warnings"])
+        for key in ("name", "annual_income", "issue_date"):
+            self.assertIn(f"{key}: missing or invalid", result["review_flags"])
+        self.assertEqual(result["extracted_fields"], {})
+
+    def test_each_reason_the_model_did_not_read_it_is_told(self, _):
+        cases = (({"cloud_ocr_consent": True}, "income_certificate", None,
+                  f"which is not set up ({GROQ_KEY_NAME} is not set)"),
+                 ({"cloud_ocr_consent": True}, "prescription", "fake-key",
+                  "and you have not allowed it to read medical documents"))
+        for consent, doc_type, key, reason in cases:
+            with self.subTest(reason=reason):
+                result = self.run_photo(doc_type=doc_type, key=key, **consent)
+                self.assertEqual(result["status"], "needs_review")
+                self.assertTrue(any(reason in warning for warning in result["warnings"]), result["warnings"])
+
+    def test_a_blurred_photo_is_typed_in_too_not_sent_back(self, _):
+        result = self.run_photo("blurred.png")
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("extract_content:photo_not_read", result["events"])
+
+    def test_the_owner_types_in_every_field_and_it_is_confirmed(self, _):
+        decision = {"action": "confirm", "reviewer_id": "senior-meera",
+                    "edits": {"name": "Meera Rao", "annual_income": "Rs. 1,20,000", "issue_date": "01/06/2026"}}
+        result = self.run_photo(review_decision=decision)
         self.assertEqual(result["status"], "confirmed")
         fields = result["vault_record"]["confirmed_fields"]
-        self.assertEqual(fields["date_of_birth"]["value"], truth["Date of birth"])
-        self.assertEqual(fields["aadhaar_number"]["value"], "XXXX XXXX " + truth["Aadhaar"][-4:])
-        self.assertNotIn(truth["Aadhaar"], json.dumps(result, default=str))
+        self.assertEqual(fields["annual_income"]["value"], 120000)
+        self.assertEqual(fields["name"]["source_ref"], "document:doc-upload-001:entered_by_owner")
 
-    def test_blurred_income_photo_goes_to_review(self, _):
-        result, _ = self.run_page("income_certificate__blur.png", "income_certificate")
-        self.assertEqual(result["status"], "needs_review")
-        self.assertTrue(any("low confidence (0.85)" in flag for flag in result["review_flags"]))
+    def test_a_photo_of_unknown_type_without_both_consents_asks_for_the_type(self, _):
+        for consent in ({}, {"cloud_ocr_consent": True}, {"medical_cloud_consent": True}):
+            with self.subTest(consent=consent):
+                result = self.run_photo(doc_type=None, key="fake-key", use_llm=True, **consent)
+                self.assertEqual(result["status"], "needs_classification")
+                self.assertIn("classify_document:unknown", result["events"])
+
+    def test_the_file_name_still_names_the_type_of_a_photo(self, _):
+        ensure_fixtures()
+        named = UNIT / "income_photo.png"
+        if not named.exists():
+            named.write_bytes((UNIT / "sharp.png").read_bytes())
+        result = self.run_photo("income_photo.png", doc_type=None)
+        self.assertIn("classify_document:income_certificate", result["events"])
 
 
 if __name__ == "__main__":
