@@ -445,61 +445,6 @@ def section_privacy(manifest: list[dict], ocr: dict[str, list], runs: dict[str, 
     return section
 
 
-def section_cloud_blackout(manifest: list[dict], ocr: dict[str, list], runs: dict[str, dict]) -> Section:
-    """Paint the ID regions black exactly as the cloud/vision path does, then read the picture
-    again with the real OCR: can the ID number still be read?"""
-    from PIL import Image
-
-    from backend.graphs.document_graph import has_id_number, id_not_located
-    from backend.tools.ocr import read_document
-    from backend.tools.ocr_postprocess import clean_page
-    from backend.tools.vision_extract import safe_page_images
-    from backend.utils.privacy import ID_FIELDS
-
-    section = Section("cloud_blackout")
-    partial = kept_local = 0
-    for entry in manifest:
-        ids = truth_ids(entry)
-        pages = ocr.get(entry["path"])
-        if not ids or not pages or all(page.get("engine") == "pdf_text" for page in pages):
-            continue
-        local = [clean_page(page) for page in pages]
-        first = runs.get(entry["path"], {}).get("first", {})
-        extracted = first.get("extracted_fields", {})
-        if id_not_located(first.get("document_type") or entry["type"], extracted):
-            # The graph keeps this page local (its ID number couldn't be found to black out): nothing leaks.
-            kept_local += 1
-            section.check(True, f"{entry['path']}: not sent, ID number not located")
-            continue
-        boxes: dict[int, list] = {}
-        for key in ID_FIELDS:
-            if extracted.get(key, {}).get("box"):
-                boxes.setdefault(extracted[key]["page"], []).append(extracted[key]["box"])
-        try:
-            images = safe_page_images(str(DATA / entry["path"]), entry["mime_type"], local, boxes,
-                                      has_id_number(first.get("document_type") or entry["type"]))  # as the graph does
-        except Exception as exc:
-            section.check(False, f"{entry['path']}: blackout failed ({type(exc).__name__})")
-            continue
-        text = ""
-        with tempfile.TemporaryDirectory() as folder:
-            for index, image in enumerate(images):
-                path = Path(folder) / f"sent_{index}.png"
-                Image.fromarray(image).save(path)
-                text += "\n".join(page["text"] for page in read_document(path, "image/png"))
-        digits_lines = [re.sub(r"\D", "", line) for line in text.splitlines()]
-        for value in ids:
-            digits = re.sub(r"\D", "", value)
-            visible = bool(digits) and any(digits in line for line in digits_lines) or squash(value) in squash(text)
-            section.check(not visible, f"{entry['path']}: '{value}' still readable after blackout")
-            if digits and not visible and any(digits[-8:] in line for line in digits_lines):
-                partial += 1
-        say(f"  blackout {entry['path']}")
-    section.metrics = {"ids_with_last_8_digits_still_readable": partial,
-                       "pages_kept_local_id_not_located": kept_local}
-    return section
-
-
 def section_classification_heldout() -> Section:
     """The local type rules on page texts kept apart from the ones they were written from."""
     from backend.tools.document_type import type_from_text
@@ -845,19 +790,18 @@ def section_unit_tests() -> Section:
 # ---------- live (Groq) ----------
 
 def section_live(manifest: list[dict], ocr: dict[str, list]) -> list[Section]:
-    from backend.tools.cloud_ocr import engine_key
+    from backend.tools.cloud_ocr import groq_api_key
 
     vision, classify = Section("live_vision"), Section("live_llm_classification")
-    if not engine_key("groq"):
+    if not groq_api_key():
         return [vision.skip("GROQ_API_KEY is not set"), classify.skip("GROQ_API_KEY is not set")]
     from backend.agents.llm_agents import choose_document_type
 
-    kept_local, by_type = 0, defaultdict(Counter)
+    by_type = defaultdict(Counter)
     for entry in manifest:
         if entry["mime_type"] == "image/png":  # every type is read by the vision model (Decision 14)
             result = run_graph(graph_state(entry, cloud_ocr_consent=True, medical_cloud_consent=True), ocr[entry["path"]])
             used = any(event.startswith("vision_extract:found") for event in result.get("events", []))
-            kept_local += "vision_extract:id_not_located" in result.get("events", [])
             for key, truth in entry["fields"].items():
                 by_type[entry["type"]]["right"] += used and field_right(result, key, truth["value"], False)
                 by_type[entry["type"]]["total"] += 1
@@ -873,8 +817,7 @@ def section_live(manifest: list[dict], ocr: dict[str, list]) -> list[Section]:
                 got = f"error {type(exc).__name__}"
             classify.check(got == entry["type"], f"{entry['path']}: LLM said {got}")
     vision.metrics = {"right_percent_by_type": {t: round(100 * c["right"] / c["total"], 1)
-                                                for t, c in sorted(by_type.items())},
-                      "id_cards_kept_local_id_not_located": kept_local}
+                                                for t, c in sorted(by_type.items())}}
     return [vision, classify]
 
 
@@ -974,10 +917,10 @@ def main() -> None:
         run("documents", lambda: section_documents(manifest, ocr, runs))
         run("classification_heldout", section_classification_heldout)
         run("privacy", lambda: section_privacy(manifest, ocr, runs))
-        if args.quick:
-            sections.append(Section("cloud_blackout").skip("--quick"))
-        else:
-            run("cloud_blackout", lambda: section_cloud_blackout(manifest, ocr, runs))
+        # Nothing on this machine finds ID numbers on a photo any more, so none are blacked out:
+        # they are sent to the vision model on purpose (vision-only Decision 1).
+        sections.append(Section("cloud_blackout").skip("ID numbers are sent to the vision model on purpose "
+                                                       "(vision-only Decision 1): no blackout to check"))
         run("file_safety", section_file_safety)
         run("manual_entry", section_manual_entry)
         run("benefits_rules", section_benefits_rules)

@@ -1,20 +1,19 @@
 """Documents read by a vision language model (Groq), straight into fields.
 
-A vision model reads handwriting, free layouts and values printed with no label (a name in a
-sentence of a certificate) far better than local OCR and its label rules, so with the senior's
-consent it is the main reader for every document type (Decision #41; all types since
-full-test-review Decision 14). It is never the only step:
-- local OCR always runs first, to find where identifiers (Aadhaar, PAN, account, policy and
-  Virtual ID numbers, ABHA health IDs, phone numbers), QR codes and faces are, so they are
-  painted black before the picture leaves the machine; an ID card whose number local OCR
-  could not find is not sent at all;
-- the model is never asked for an ID field: those always come from the local reading;
+There is no reader on this machine for photos and scanned pages: with the senior's consent the
+vision model reads every one of them, of every type (Decision #41; all types since
+full-test-review Decision 14; the only reader since the vision-only session). What keeps it safe:
+- faces and QR codes are painted black before the picture leaves the machine (an ID card's
+  QR code holds personal data); ID numbers can no longer be found on the picture, so they are
+  sent, and the model reads them like any other field (vision-only Decision 1);
 - every value the model gives is reviewed by the owner (the model gives no confidence
   and can make up a plausible value, e.g. a wrong dose);
-- where the local reading has the same field and it differs, the owner is told; where the
-  local text does not contain the model's value at all, the owner is told too.
+- an ID number read by the model is checked (format, check digit) and masked and hashed
+  before anything is saved, like one the owner typed in;
+- where a PDF also stores text and that text has the same field read differently, the owner
+  is told; where the stored text does not contain the model's value at all, the owner is told too.
 
-Values never include ID numbers: any that come back are masked.
+Values other than the ID fields asked for never include ID numbers: any that come back are masked.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from typing import Any
 import httpx
 import numpy as np
 
-from ..utils.privacy import mask_ids_in_text
+from ..utils.privacy import ID_FIELDS, mask_ids_in_text
 from .cloud_ocr import (
     GROQ_CHAT_URL,
     GROQ_TIMEOUT_SECONDS,
@@ -38,7 +37,6 @@ from .cloud_ocr import (
     black_out,
     face_boxes,
     groq_model,
-    id_boxes,
     post_with_retry,
     qr_boxes,
 )
@@ -67,10 +65,11 @@ SHAPES: dict[str, dict[str, Any]] = {
         "total_amount": "the total amount payable",
         "items": [{"description": "item or service", "amount": "its amount"}],
     },
-    # Never an ID field (Aadhaar, PAN, account or policy number): see the module note.
     "identity": {
         "name": "the card holder's name in English letters",
         "date_of_birth": "the date of birth",
+        "aadhaar_number": "the 12-digit Aadhaar number, if this is an Aadhaar card (not the Virtual ID)",
+        "pan_number": "the 10-character PAN, if this is a PAN card",
     },
     "income_certificate": {
         "name": "the name of the person the certificate is about",
@@ -91,11 +90,13 @@ SHAPES: dict[str, dict[str, Any]] = {
         "insurer": "the insurance company's name",
         "expiry_date": "the date the cover ends",
         "sum_insured": "the sum insured (cover amount)",
+        "policy_number": "the policy number",
     },
     "bank_passbook": {
         "name": "the account holder's name",
         "bank_name": "the bank's name",
         "ifsc": "the IFSC code of the branch",
+        "account_number": "the account number",
     },
     "disability_certificate": {
         "name": "the name of the person the certificate is about",
@@ -112,7 +113,6 @@ LABELS = {"prescription": "a prescription", "lab_report": "a lab report", "medic
 
 ABHA_NUMBER = re.compile(r"(?<!\d)\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}(?!\d)")
 ABHA_ADDRESS = re.compile(r"\b[\w.]+@(?:abdm|sbx)\b", re.IGNORECASE)
-ABHA_LABEL = re.compile(r"\b(?:abha|health\s*id)\b", re.IGNORECASE)
 
 
 def prompt_for(document_type: str) -> str:
@@ -123,15 +123,20 @@ def prompt_for(document_type: str) -> str:
         f"with the descriptions replaced by what is on the page:\n{shape}\n"
         "Copy text exactly as printed or handwritten: do not correct spelling, expand abbreviations or "
         "convert units. Use null for anything that is not visible or that you are not sure of; an empty "
-        "list if there are no rows. Never include ID numbers (Aadhaar, PAN, ABHA, policy or account numbers)."
+        "list if there are no rows. Never include an ID number (Aadhaar, Virtual ID, PAN, ABHA health ID, "
+        "policy or account number) except in a field above that asks for it."
     )
 
 
-def health_id_boxes(page: dict[str, Any]) -> list[list[int]]:
-    """Boxes of OCR lines that show an ABHA health ID (number or address) or its label."""
-    return [line["box"] for line in page.get("lines", [])
-            if line.get("box") and (ABHA_NUMBER.search(line["text"]) or ABHA_ADDRESS.search(line["text"])
-                                    or ABHA_LABEL.search(line["text"]))]
+def classify_prompt() -> str:
+    choices = "\n".join(f'- "{document_type}": {label}' for document_type, label in LABELS.items())
+    return (
+        "These pictures are pages of one document from India. Some areas are painted black on purpose. "
+        "Which one of these is it?\n"
+        f"{choices}\n"
+        'Return only one JSON object: {"document_type": "<one of the names above>"}, '
+        'or {"document_type": null} if it is none of them or you are not sure.'
+    )
 
 
 HEALTH_ID_MASK = "[health ID hidden]"
@@ -141,17 +146,19 @@ def mask_health_ids(text: str) -> str:
     return ABHA_ADDRESS.sub(HEALTH_ID_MASK, ABHA_NUMBER.sub(HEALTH_ID_MASK, text))
 
 
-def _text(value: Any) -> str | None:
+def _text(value: Any, masked: bool = True) -> str | None:
+    """One value as plain text. masked=False only for an ID field that was asked for: the graph
+    checks, masks and hashes it later, like a number the owner typed in."""
     if value is None or isinstance(value, (dict, list)):
         return None
     text = " ".join(str(value).split())
     if not text or text.casefold() in {"null", "none", "n/a", "-"}:
         return None
-    return mask_health_ids(mask_ids_in_text(text))
+    return mask_health_ids(mask_ids_in_text(text)) if masked else text
 
 
-def fields_from_answer(answer: str, document_type: str) -> dict[str, Any]:
-    """The model's JSON -> {field: text or list of rows}. Unknown keys and empty values are dropped."""
+def _json_object(answer: str) -> dict[str, Any]:
+    """The one JSON object in the model's reply (reasoning and words around it are dropped)."""
     text = THINKING.sub("", answer)
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
@@ -162,6 +169,12 @@ def fields_from_answer(answer: str, document_type: str) -> dict[str, Any]:
         raise CloudOcrError("The vision model sent an answer that could not be read") from None
     if not isinstance(data, dict):
         raise CloudOcrError("The vision model sent an answer that could not be read")
+    return data
+
+
+def fields_from_answer(answer: str, document_type: str) -> dict[str, Any]:
+    """The model's JSON -> {field: text or list of rows}. Unknown keys and empty values are dropped."""
+    data = _json_object(answer)
     fields: dict[str, Any] = {}
     for key, example in SHAPES[document_type].items():
         value = data.get(key)
@@ -175,39 +188,42 @@ def fields_from_answer(answer: str, document_type: str) -> dict[str, Any]:
                         rows.append(clean)
             if rows:
                 fields[key] = rows
-        elif (clean := _text(value)) is not None:
+        elif (clean := _text(value, masked=key not in ID_FIELDS)) is not None:
             fields[key] = clean
     return fields
 
 
-def safe_page_images(path: str, mime_type: str, local_pages: list[dict[str, Any]],
-                     id_field_boxes: dict[int, list[list[int]]], generic_codes: bool = True) -> list[np.ndarray]:
-    """Every page with identifiers (ID numbers, phone, e-mail, health IDs), QR codes and faces painted
-    black. generic_codes=False keeps lab sample IDs and registration numbers (privacy.shows_identifier)."""
-    images = []
-    for local, image in zip(local_pages, page_images(path, mime_type)):
-        boxes = id_boxes(local, id_field_boxes.get(local["page"], []), generic_codes) + health_id_boxes(local)
-        images.append(black_out(image, boxes + qr_boxes(image) + face_boxes(image)))
-    return images
+def type_from_answer(answer: str) -> str | None:
+    """The model's {"document_type": ...} -> one of our types, or None if it named none of them."""
+    named = _json_object(answer).get("document_type")
+    return named if isinstance(named, str) and named in SHAPES else None
 
 
-def extract_with_vision(path: str, mime_type: str, local_pages: list[dict[str, Any]],
-                        id_field_boxes: dict[int, list[list[int]]], document_type: str, api_key: str,
-                        client: httpx.Client | None = None, model: str | None = None,
-                        generic_codes: bool = True) -> dict[str, Any]:
-    if document_type not in SHAPES:
-        raise CloudOcrError("The vision model does not read this document type")
-    if len(local_pages) > MAX_PAGES:
+def safe_page_images(path: str, mime_type: str) -> list[np.ndarray]:
+    """Every page with QR codes and faces painted black."""
+    return [black_out(image, qr_boxes(image) + face_boxes(image)) for image in page_images(path, mime_type)]
+
+
+def picture_content(path: str, mime_type: str) -> list[dict[str, Any]]:
+    """The pages as JPEG pictures for one request. More than MAX_PAGES is refused before anything is sent."""
+    images = safe_page_images(path, mime_type)
+    if len(images) > MAX_PAGES:
         raise CloudOcrError(f"more than {MAX_PAGES} pages")
-    content: list[dict[str, Any]] = [{"type": "text", "text": prompt_for(document_type)}]
-    for image in safe_page_images(path, mime_type, local_pages, id_field_boxes, generic_codes):
+    content = []
+    for image in images:
         buffer = io.BytesIO()
         _shrink(image).convert("RGB").save(buffer, format="JPEG", quality=90)
         picture = base64.b64encode(buffer.getvalue()).decode("ascii")
         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{picture}"}})
+    return content
+
+
+def ask_vision_model(content: list[dict[str, Any]], api_key: str, client: httpx.Client | None = None,
+                     model: str | None = None) -> str:
+    """Send one prompt and its pictures; return the model's reply text."""
     # JSON mode: Groq makes the reply one valid JSON object (the prompt gives its shape and must say
     # "JSON"), or answers 400 instead. full-test-review 14d: same fields right as plain text, valid
-    # JSON every time. fields_from_answer still parses the reply as before.
+    # JSON every time. The reply is still parsed as before.
     body = {"model": model or groq_model(), "temperature": 0, "max_completion_tokens": 4096,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": content}]}
@@ -229,4 +245,20 @@ def extract_with_vision(path: str, mime_type: str, local_pages: list[dict[str, A
         raise CloudOcrError("The vision model sent an answer that could not be read") from None
     if not isinstance(answer, str):
         raise CloudOcrError("The vision model sent an answer that could not be read")
-    return fields_from_answer(answer, document_type)
+    return answer
+
+
+def extract_with_vision(path: str, mime_type: str, document_type: str, api_key: str,
+                        client: httpx.Client | None = None, model: str | None = None) -> dict[str, Any]:
+    """Every field of this type the model can read on the pages (its ID fields too)."""
+    if document_type not in SHAPES:
+        raise CloudOcrError("The vision model does not read this document type")
+    content = [{"type": "text", "text": prompt_for(document_type)}, *picture_content(path, mime_type)]
+    return fields_from_answer(ask_vision_model(content, api_key, client, model), document_type)
+
+
+def classify_with_vision(path: str, mime_type: str, api_key: str, client: httpx.Client | None = None,
+                         model: str | None = None) -> str | None:
+    """Which of our document types the pictures show, or None if the model can't tell."""
+    content = [{"type": "text", "text": classify_prompt()}, *picture_content(path, mime_type)]
+    return type_from_answer(ask_vision_model(content, api_key, client, model))
