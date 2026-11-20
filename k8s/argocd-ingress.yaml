@@ -1,6 +1,7 @@
 # https://argocd.seniorlifeos.rohanbatra.dpdns.org through Traefik with a real certificate.
 # argocd-server keeps its own self-signed https, so Traefik talks https to it without verifying
-# (ServersTransport) and the NodePort https://<ip>:30080 keeps working.
+# (ServersTransport, set on the Service below: Traefik reads those two settings from the Service,
+# not the Ingress) and the NodePort https://<ip>:30080 keeps working.
 apiVersion: traefik.io/v1alpha1
 kind: ServersTransport
 metadata:
@@ -23,6 +24,23 @@ spec:
     scheme: https
     permanent: true
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-server-traefik
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    traefik.ingress.kubernetes.io/service.serversscheme: https
+    traefik.ingress.kubernetes.io/service.serverstransport: argocd-argocd-insecure@kubernetescrd
+spec:
+  selector:
+    app.kubernetes.io/name: argocd-server
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8080
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -32,8 +50,6 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
     cert-manager.io/cluster-issuer: letsencrypt-prod
     traefik.ingress.kubernetes.io/router.middlewares: argocd-redirect-https@kubernetescrd
-    traefik.ingress.kubernetes.io/service.serversscheme: https
-    traefik.ingress.kubernetes.io/service.serverstransport: argocd-argocd-insecure@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
@@ -48,6 +64,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: argocd-server
+                name: argocd-server-traefik
                 port:
                   number: 443
