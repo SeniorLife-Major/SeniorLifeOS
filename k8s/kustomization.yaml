@@ -14,6 +14,7 @@ resources:
   - backend-pvc.yaml
   - backend-deployment.yaml
   - backend-service.yaml
+  - middleware-redirect-https.yaml
   - ingress.yaml
   - hpa.yaml
 

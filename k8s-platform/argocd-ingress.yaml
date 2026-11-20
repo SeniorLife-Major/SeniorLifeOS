@@ -1,0 +1,48 @@
+# https://argocd.seniorlifeos.rohanbatra.dpdns.org through Traefik with a real certificate.
+# argocd-server keeps its own self-signed https, so Traefik talks https to it without verifying
+# (ServersTransport) and the NodePort https://<ip>:30080 keeps working.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: argocd-insecure
+  namespace: argocd
+spec:
+  insecureSkipVerify: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: argocd
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-ingress
+  namespace: argocd
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.middlewares: argocd-redirect-https@kubernetescrd
+    traefik.ingress.kubernetes.io/service.serversscheme: https
+    traefik.ingress.kubernetes.io/service.serverstransport: argocd-argocd-insecure@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - argocd.seniorlifeos.rohanbatra.dpdns.org
+      secretName: argocd-tls
+  rules:
+    - host: argocd.seniorlifeos.rohanbatra.dpdns.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 443

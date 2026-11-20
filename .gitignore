@@ -8,3 +8,4 @@ ideas/
 backend/tests/datasets/
 ci/.version
 var/
+seniorlife.env

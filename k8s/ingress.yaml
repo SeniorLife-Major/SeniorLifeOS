@@ -6,10 +6,20 @@ metadata:
   labels:
     app.kubernetes.io/name: seniorlifeos
     app.kubernetes.io/component: ingress
+  annotations:
+    # cert-manager issues and renews the certificate (k8s-platform/cluster-issuer.yaml).
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Plain http on port 80 is redirected to https (middleware-redirect-https.yaml).
+    traefik.ingress.kubernetes.io/router.middlewares: seniorlifeos-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
+  tls:
+    - hosts:
+        - seniorlifeos.rohanbatra.dpdns.org
+      secretName: seniorlife-tls
   rules:
-    - http:
+    - host: seniorlifeos.rohanbatra.dpdns.org
+      http:
         paths:
           - path: /
             pathType: Prefix
