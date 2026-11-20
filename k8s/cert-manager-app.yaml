@@ -1,10 +1,12 @@
 # cert-manager, installed and kept up to date by ArgoCD from its official Helm chart.
-# Bootstrap once: kubectl apply -f argocd-apps/   (after that, git is the only source of truth).
+# Part of the seniorlifeos app (k8s/), so it needs no separate setup. Wave 0: before the issuer.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: cert-manager
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   project: default
   source:

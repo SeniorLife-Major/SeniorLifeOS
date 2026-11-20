@@ -6,6 +6,8 @@ kind: ServersTransport
 metadata:
   name: argocd-insecure
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   insecureSkipVerify: true
 ---
@@ -14,6 +16,8 @@ kind: Middleware
 metadata:
   name: redirect-https
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   redirectScheme:
     scheme: https
@@ -25,6 +29,7 @@ metadata:
   name: argocd-ingress
   namespace: argocd
   annotations:
+    argocd.argoproj.io/sync-wave: "1"
     cert-manager.io/cluster-issuer: letsencrypt-prod
     traefik.ingress.kubernetes.io/router.middlewares: argocd-redirect-https@kubernetescrd
     traefik.ingress.kubernetes.io/service.serversscheme: https

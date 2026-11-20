@@ -1,7 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: seniorlifeos
+# No global namespace: every manifest names its own, since some live in argocd and cert-manager.
 
 resources:
   - namespace.yaml
@@ -15,6 +15,9 @@ resources:
   - backend-deployment.yaml
   - backend-service.yaml
   - middleware-redirect-https.yaml
+  - cert-manager-app.yaml
+  - cluster-issuer.yaml
+  - argocd-ingress.yaml
   - ingress.yaml
   - hpa.yaml
 
