@@ -88,7 +88,10 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(set(SHAPES["identity"]) & set(ID_FIELDS), {"aadhaar_number", "pan_number"})
         self.assertEqual(set(SHAPES["health_insurance"]) & set(ID_FIELDS), {"policy_number"})
         self.assertEqual(set(SHAPES["bank_passbook"]) & set(ID_FIELDS), {"account_number"})
-        for document_type in set(SHAPES) - {"identity", "health_insurance", "bank_passbook"}:
+        self.assertEqual(set(SHAPES["death_certificate"]) & set(ID_FIELDS), {"registration_number"})
+        self.assertEqual(set(SHAPES["ration_card"]) & set(ID_FIELDS), {"ration_card_number"})
+        numbered = {"identity", "health_insurance", "bank_passbook", "death_certificate", "ration_card"}
+        for document_type in set(SHAPES) - numbered:
             self.assertFalse(set(SHAPES[document_type]) & set(ID_FIELDS), document_type)
 
     def test_an_asked_for_id_number_is_kept_as_given_for_the_graph_to_check_and_mask(self):

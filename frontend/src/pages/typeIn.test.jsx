@@ -70,7 +70,7 @@ describe('Typing a document in', () => {
     expect(screen.getByRole('button', { name: 'ID card (Aadhaar, PAN)' })).toBeInTheDocument()
   })
 
-  it('does not offer a residence proof or a disability certificate, even from an old link (Decision 74)', async () => {
+  it('does not offer a residence proof, even from an old link (Decision 74)', async () => {
     signedIn()
     renderApp('/documents/type-in?type=residence_proof')
 
@@ -80,9 +80,12 @@ describe('Typing a document in', () => {
       'Income certificate',
       'Health insurance',
       'Bank passbook',
+      'Disability certificate',
       'Prescription',
       'Lab report',
       'Medical bill',
+      "Death certificate (husband's or wife's)",
+      'Ration card',
     ])
   })
 

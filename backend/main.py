@@ -17,7 +17,9 @@ from fastapi import Depends, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from backend.api import auth_router, demo_router, documents_router, health_requests_router, profile_router
+from backend.api import (
+    auth_router, benefits_router, demo_router, documents_router, health_requests_router, profile_router,
+)
 from backend.api.deps import is_production
 from backend.api.web_app import app_page, built_web_app, install_web_app
 from backend.common.schemas import ApiResponse, CamelModel
@@ -127,6 +129,8 @@ app.include_router(profile_router)
 app.include_router(documents_router)
 # 4c. Doctor search (needs DATABASE_URL and SENIORLIFE_CHECKPOINT_KEY; GEOAPIFY_API_KEY to look places up)
 app.include_router(health_requests_router)
+# 4d. Benefit schemes: made-up demo schemes checked against the confirmed papers (needs DATABASE_URL)
+app.include_router(benefits_router)
 
 
 # 5. DTO Schemas (camelCase via CamelModel)

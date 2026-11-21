@@ -70,6 +70,7 @@ SHAPES: dict[str, dict[str, Any]] = {
         "date_of_birth": "the date of birth",
         "aadhaar_number": "the 12-digit Aadhaar number, if this is an Aadhaar card (not the Virtual ID)",
         "pan_number": "the 10-character PAN, if this is a PAN card",
+        "gender": "the holder's gender as printed (Male, Female or Transgender), if printed",
     },
     "income_certificate": {
         "name": "the name of the person the certificate is about",
@@ -105,11 +106,31 @@ SHAPES: dict[str, dict[str, Any]] = {
         "disability_percent": "the percentage of disability",
         "expiry_date": "the date it is valid until, if printed",
     },
+    "death_certificate": {
+        "deceased_name": "the name of the person who died",
+        "date_of_death": "the date of death",
+        "spouse_name": "the name printed as the husband or wife of the person who died, if printed",
+        "age_at_death": "the age at death, if printed",
+        "place_of_death": "the place of death, if printed",
+        "issue_date": "the date the certificate was issued",
+        "issuing_authority": "the registrar or office that issued it",
+        "registration_number": "the registration number of the death",
+    },
+    "ration_card": {
+        "head_of_family": "the name of the head of the family (card holder)",
+        "card_category": "the card type or category as printed (e.g. AAY, PHH, BPL, APL)",
+        "residence_state": "the Indian state that issued the card",
+        "family_members": "the names of all family members listed, separated by commas",
+        "issue_date": "the date the card was issued, if printed",
+        "ration_card_number": "the ration card number",
+    },
 }
 LABELS = {"prescription": "a prescription", "lab_report": "a lab report", "medical_bill": "a medical bill",
           "identity": "an identity card", "income_certificate": "an income certificate",
           "residence_proof": "a residence (domicile) certificate", "health_insurance": "a health insurance card or policy",
-          "bank_passbook": "a bank passbook", "disability_certificate": "a disability certificate"}
+          "bank_passbook": "a bank passbook", "disability_certificate": "a disability certificate",
+          "death_certificate": "a death certificate (from the registrar of deaths)",
+          "ration_card": "a ration card"}
 
 ABHA_NUMBER = re.compile(r"(?<!\d)\d{2}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}(?!\d)")
 ABHA_ADDRESS = re.compile(r"\b[\w.]+@(?:abdm|sbx)\b", re.IGNORECASE)
@@ -124,7 +145,7 @@ def prompt_for(document_type: str) -> str:
         "Copy text exactly as printed or handwritten: do not correct spelling, expand abbreviations or "
         "convert units. Use null for anything that is not visible or that you are not sure of; an empty "
         "list if there are no rows. Never include an ID number (Aadhaar, Virtual ID, PAN, ABHA health ID, "
-        "policy or account number) except in a field above that asks for it."
+        "policy, account, ration card or registration number) except in a field above that asks for it."
     )
 
 

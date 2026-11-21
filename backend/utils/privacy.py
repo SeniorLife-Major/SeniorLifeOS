@@ -48,8 +48,11 @@ _VERHOEFF_INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]
 # Fourth PAN character is the holder type (P = person, C = company, ...).
 PAN_HOLDER_TYPES = set("ABCFGHJLPT")
 
-# Vault fields that hold ID numbers. They are masked and hashed before storage.
-ID_FIELDS = ("aadhaar_number", "pan_number", "account_number", "policy_number")
+# Vault fields that hold ID numbers. They are masked and hashed before storage: only the last 4
+# characters are kept, like an account number. A death's registration number and a ration card
+# number identify a family as surely as an account number does.
+ID_FIELDS = ("aadhaar_number", "pan_number", "account_number", "policy_number", "registration_number",
+             "ration_card_number")
 MIN_HASH_KEY_LENGTH = 32
 
 AADHAAR_PATTERN = re.compile(r"(?<!\d)[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}(?!\d)")
@@ -60,6 +63,9 @@ PHONE_PATTERN = re.compile(r"(?<![\d+])(?:\+91[ -]?)?[6-9]\d{9}(?!\d)")
 EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 # Policy numbers have no fixed format, so only hide them after a "Policy No" label.
 POLICY_PATTERN = re.compile(r"(?i)\bpolicy\s*(?:no\.?|number|#)?\s*[:.\-]?\s*((?=[A-Z0-9/-]*\d)[A-Z0-9][A-Z0-9/-]{5,29})\b")
+# Ration card numbers have no single format either: only after a "Ration Card No" / "RC No" label.
+RATION_CARD_PATTERN = re.compile(
+    r"(?i)\b(?:ration\s*card|rc)\s*(?:no\.?|number|#)\s*[:.\-]?\s*((?=[A-Z0-9/-]*\d)[A-Z0-9][A-Z0-9/-]{5,23})\b")
 # Prompts only: an ID whose label OCR misread, or that has no label, still looks like one.
 # A plain run of 9-18 digits (amounts keep their commas, so they stay), and a code that mixes
 # capitals, "/" or "-" with at least 5 digits (HLT/2024/288382, MID64277000).
@@ -140,6 +146,11 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
         whole = match.group(0)
         return whole[:start] + placeholder("POLICY", match.group(1)) + whole[end:]
 
+    def replace_ration_card(match: re.Match) -> str:
+        start, end = match.start(1) - match.start(0), match.end(1) - match.start(0)
+        whole = match.group(0)
+        return whole[:start] + placeholder("RATION_CARD", match.group(1)) + whole[end:]
+
     def replace_code(match: re.Match) -> str:
         found = match.group(0)
         if DATE_LIKE.fullmatch(found) or is_valid_ifsc(found):  # dates are needed; IFSC is public
@@ -156,6 +167,7 @@ def redact(text: str, known_values: dict[str, str] | None = None) -> tuple[str, 
     safe = AADHAAR_PATTERN.sub(replace_aadhaar, safe)
     safe = ACCOUNT_PATTERN.sub(replace_account, safe)
     safe = POLICY_PATTERN.sub(replace_policy, safe)
+    safe = RATION_CARD_PATTERN.sub(replace_ration_card, safe)
     safe = PHONE_PATTERN.sub(lambda m: placeholder("PHONE", m.group(0)), safe)
     safe = EMAIL_PATTERN.sub(lambda m: placeholder("EMAIL", m.group(0)), safe)
     safe = PAN_PATTERN.sub(replace_pan, safe)
@@ -184,7 +196,7 @@ def shows_identifier(text: str, generic_codes: bool = True) -> bool:
     if generic_codes:
         return bool(redact(text)[1])
     return (any(pattern.search(text) for pattern in (VID_PATTERN, AADHAAR_PATTERN, PHONE_PATTERN, EMAIL_PATTERN,
-                                                     ACCOUNT_PATTERN, POLICY_PATTERN))
+                                                     ACCOUNT_PATTERN, POLICY_PATTERN, RATION_CARD_PATTERN))
             or any(is_valid_pan(match.group(0)) for match in PAN_PATTERN.finditer(text)))
 
 
@@ -199,8 +211,8 @@ def mask_identifier(field: str, value: str) -> str:
 def mask_ids_in_text(text: str) -> str:
     """Mask ID numbers wherever they appear, even when no field was extracted for them.
 
-    Catches a checksum-valid Aadhaar number, a valid PAN, and an account or policy
-    number written after its label. Unlabelled account numbers are left alone: they
+    Catches a checksum-valid Aadhaar number, a valid PAN, and an account, policy or ration
+    card number written after its label. Unlabelled account numbers are left alone: they
     can't be told apart from other long numbers.
     """
     def aadhaar(match: re.Match) -> str:
@@ -217,6 +229,7 @@ def mask_ids_in_text(text: str) -> str:
     text = AADHAAR_PATTERN.sub(aadhaar, text)
     text = ACCOUNT_PATTERN.sub(after_label("account_number"), text)
     text = POLICY_PATTERN.sub(after_label("policy_number"), text)
+    text = RATION_CARD_PATTERN.sub(after_label("ration_card_number"), text)
     return PAN_PATTERN.sub(lambda m: mask_identifier("pan_number", m.group(0)) if is_valid_pan(m.group(0))
                            else m.group(0), text)
 

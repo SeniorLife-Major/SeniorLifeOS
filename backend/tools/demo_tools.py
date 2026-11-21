@@ -1,7 +1,6 @@
-"""Small local tool adapters. Replace these with OCR/catalogue services later.
+"""Small local tool adapters: reading labelled fields from page text and normalizing values.
 
-The benefit scheme is fictional. Its criteria are useful for exercising graph
-branches, not advice about an actual Indian government programme.
+The benefit schemes live in tools/schemes.py (all made up for the demo).
 """
 
 from __future__ import annotations
@@ -14,35 +13,10 @@ from ..utils.privacy import AADHAAR_PATTERN, is_valid_aadhaar, is_valid_ifsc, is
 from .layout import STOP, label_above, no_colon_pair, pairs_in_line
 from .medical import LIST_FIELDS, normalize_rows, parse_money
 
-DATE_FIELDS = {"issue_date", "expiry_date", "date_of_birth", "report_date", "prescription_date", "bill_date"}
-
-
-DEMO_SCHEMES: dict[str, dict[str, Any]] = {
-    "demo_senior_support": {
-        "scheme_id": "demo_senior_support",
-        "name": "Demo Senior Support Pension (fictional)",
-        "jurisdiction": "MH",
-        "source": {
-            "source_id": "demo-source-v1",
-            "publisher": "SeniorLife OS fictional demo catalogue",
-            "url": "demo://schemes/demo_senior_support/v1",
-            "retrieved_at": "2026-09-22",
-            "version": "v1",
-            "approved_for_demo": True,
-        },
-        "criteria": [
-            {"id": "age", "fact": "age", "operator": ">=", "value": 60},
-            {"id": "annual_income", "fact": "annual_income", "operator": "<=", "value": 200000},
-            {"id": "residence_state", "fact": "residence_state", "operator": "==", "value": "MH"},
-        ],
-        "required_documents": ["identity", "income_certificate", "residence_proof"],
-    }
-}
-
-
-def get_scheme(scheme_id: str) -> dict[str, Any] | None:
-    """Simulate a narrow, allowlisted scheme catalogue lookup."""
-    return DEMO_SCHEMES.get(scheme_id)
+DATE_FIELDS = {"issue_date", "expiry_date", "date_of_birth", "report_date", "prescription_date", "bill_date",
+               "date_of_death"}
+# Names of people other than "name" (the owner's): titles are dropped the same way.
+PERSON_NAME_FIELDS = {"deceased_name", "spouse_name", "head_of_family"}
 
 
 FIELD_LABELS = {
@@ -94,6 +68,49 @@ TYPE_LABELS = {
                      "amount payable": "total_amount", "net payable": "total_amount",
                      "total amount": "total_amount", "bill amount": "total_amount",
                      "hospital name": "provider", "pharmacy name": "provider", "patient": "name"},
+    # Aadhaar prints "Gender: Female" or "लिंग / Gender"; elsewhere "Sex" only ends a value.
+    "identity": {"gender": "gender", "sex": "gender"},
+    # A death certificate is about the person who died: its "Name" is theirs, not the owner's.
+    "death_certificate": {
+        **CERTIFICATE_LABELS,
+        "name": "deceased_name", "name of deceased": "deceased_name", "name of the deceased": "deceased_name",
+        "deceased name": "deceased_name", "name of deceased person": "deceased_name", "deceased": "deceased_name",
+        "date of death": "date_of_death", "death date": "date_of_death",
+        "age": "age_at_death", "age at death": "age_at_death", "age of deceased": "age_at_death",
+        "age at the time of death": "age_at_death",
+        "place of death": "place_of_death",
+        "name of husband/wife": "spouse_name", "name of wife/husband": "spouse_name",
+        "name of husband": "spouse_name", "name of wife": "spouse_name", "name of spouse": "spouse_name",
+        "spouse name": "spouse_name", "spouse's name": "spouse_name", "husband's name": "spouse_name",
+        "wife's name": "spouse_name", "husband name": "spouse_name", "wife name": "spouse_name",
+        "registration no": "registration_number", "registration number": "registration_number",
+        "reg no": "registration_number", "regn no": "registration_number",
+        "date of issue": "issue_date", "registrar": "issuing_authority", "issuing officer": "issuing_authority",
+    },
+    # On a ration card "Name" is the head of the family, who may not be the owner.
+    "ration_card": {
+        "name": "head_of_family", "head of family": "head_of_family", "head of the family": "head_of_family",
+        "name of head of family": "head_of_family", "name of the head of family": "head_of_family",
+        "name of head of the family": "head_of_family", "family head": "head_of_family",
+        "card holder": "head_of_family", "card holder name": "head_of_family", "cardholder": "head_of_family",
+        "name of card holder": "head_of_family",
+        "card type": "card_category", "card category": "card_category", "category": "card_category",
+        "type of card": "card_category", "ration card type": "card_category",
+        "ration card no": "ration_card_number", "ration card number": "ration_card_number",
+        "card no": "ration_card_number", "card number": "ration_card_number", "rc no": "ration_card_number",
+        "rc number": "ration_card_number",
+        "members": "family_members", "family members": "family_members", "members of family": "family_members",
+        "names of family members": "family_members", "name of members": "family_members",
+        "family member names": "family_members",
+        "date of issue": "issue_date", "issue date": "issue_date", "date": "issue_date",
+    },
+}
+# Labels that end a value on one type only (they are ordinary words elsewhere).
+TYPE_STOP_LABELS = {
+    "death_certificate": {"date of registration", "remarks", "permanent address", "address of the deceased",
+                          "father's name", "mother's name", "cause of death"},
+    "ration_card": {"district", "taluka", "village", "fair price shop", "fps no", "fps", "no of members",
+                    "number of members", "relation", "age"},
 }
 # Labels that are not fields here but end the value before them ("... Age / Sex: 69").
 STOP_LABELS = {
@@ -113,6 +130,8 @@ COMPACT_FIELD_LABELS = {compact_label(label): key for label, key in FIELD_LABELS
 COMPACT_TYPE_LABELS = {doc_type: {compact_label(label): key for label, key in labels.items()}
                        for doc_type, labels in TYPE_LABELS.items()}
 COMPACT_STOP_LABELS = {compact_label(label) for label in STOP_LABELS}
+COMPACT_TYPE_STOP_LABELS = {doc_type: {compact_label(label) for label in labels}
+                            for doc_type, labels in TYPE_STOP_LABELS.items()}
 
 
 def field_for_label(raw_label: str, document_type: str | None = None) -> str | None:
@@ -122,7 +141,9 @@ def field_for_label(raw_label: str, document_type: str | None = None) -> str | N
     """
     labels = dict(COMPACT_FIELD_LABELS)
     labels.update(COMPACT_TYPE_LABELS.get(document_type or "", {}))
-    key = FIELD_LABELS.get(raw_label.strip().lower()) or labels.get(compact_label(raw_label))
+    # The type's own meaning wins: "Name" on a death certificate is the deceased's.
+    key = (TYPE_LABELS.get(document_type or "", {}).get(raw_label.strip().lower())
+           or FIELD_LABELS.get(raw_label.strip().lower()) or labels.get(compact_label(raw_label)))
     if key is None and "/" in raw_label:
         key = labels.get(compact_label(raw_label.rsplit("/", 1)[1]))
     return key
@@ -133,7 +154,9 @@ def label_kind(raw_label: str, document_type: str | None = None) -> str | None:
     key = field_for_label(raw_label, document_type)
     if key:
         return key
-    return STOP if compact_label(raw_label) in COMPACT_STOP_LABELS else None
+    compact = compact_label(raw_label)
+    stops = COMPACT_STOP_LABELS | COMPACT_TYPE_STOP_LABELS.get(document_type or "", set())
+    return STOP if compact in stops else None
 
 
 def extract_fields_from_pages(pages: list[dict[str, Any]], document_type: str | None = None) -> dict[str, dict[str, Any]]:
@@ -197,7 +220,64 @@ def extract_fields_from_pages(pages: list[dict[str, Any]], document_type: str | 
                     for match in AADHAAR_PATTERN.finditer(line) if is_valid_aadhaar(match.group(0))]
             if len({re.sub(r"\D", "", text) for _, text in hits}) == 1:
                 found["aadhaar_number"] = item(hits[0][1], hits[0][0], layout="checksum")
+        if document_type == "identity" and "gender" not in found:
+            # Aadhaar prints "FEMALE / महिला" with no label. Only one gender word on the card counts.
+            words = [(number, match.group(0)) for number, line in enumerate(text_lines, start=1)
+                     for match in GENDER_WORD.finditer(line)]
+            if len({parse_gender(word) for _, word in words}) == 1:
+                found["gender"] = item(words[0][1], words[0][0], layout="printed_word")
     return found
+
+
+GENDER_WORD = re.compile(r"(?<![A-Za-z])(?:female|male|transgender)(?![A-Za-z])|महिला|पुरुष|स्त्री", re.IGNORECASE)
+GENDERS = {"female": "female", "f": "female", "woman": "female", "महिला": "female", "स्त्री": "female",
+           "male": "male", "m": "male", "man": "male", "पुरुष": "male",
+           "transgender": "other", "t": "other", "other": "other", "third gender": "other"}
+
+
+def parse_gender(raw_value: str) -> str | None:
+    """'FEMALE / महिला', 'F', 'Female' -> 'female'; 'Male' -> 'male'; 'Transgender' -> 'other'.
+    Two different genders in one value are refused."""
+    parts = [part.strip().strip(".").casefold() for part in re.split(r"[/|,]", raw_value) if part.strip()]
+    found = {GENDERS.get(part) for part in parts}
+    return found.pop() if len(found) == 1 and None not in found else None
+
+
+# Ration card categories (National Food Security Act and the older scheme), as one code each.
+# Checked in this order: "non priority household" holds "priority household".
+CARD_CATEGORIES = (
+    ("NPHH", r"\bnphh\b|non[- ]?priority"),
+    ("AAY", r"\baay\b|antyodaya|अंत्योदय"),
+    ("PHH", r"\bphh\b|priority household|^priority$|प्राथमिकता"),
+    ("BPL", r"\bbpl\b|below poverty|बीपीएल|गरीबी रेखा से नीचे"),
+    ("APL", r"\bapl\b|above poverty|एपीएल"),
+)
+CARD_CATEGORY_NAMES = {"AAY": "Antyodaya (AAY)", "PHH": "Priority household (PHH)", "BPL": "Below poverty line (BPL)",
+                       "APL": "Above poverty line (APL)", "NPHH": "Non-priority household (NPHH)"}
+
+
+def parse_card_category(raw_value: str) -> str | None:
+    """'Antyodaya Anna Yojana', 'AAY', 'PHH (NFSA)', 'Below Poverty Line' -> one code, or None."""
+    value = " ".join(raw_value.split()).casefold()
+    for code, pattern in CARD_CATEGORIES:
+        if re.search(pattern, value):
+            return code
+    return None
+
+
+def parse_person_name(raw_value: str) -> str | None:
+    """A person's name without titles: 'Late Shri Ramesh Devi' -> 'Ramesh Devi'."""
+    name = " ".join(raw_value.split())
+    name = re.sub(r"^(?:late|lt|swargiya|स्वर्गीय|स्व)\.?\s+", "", name, flags=re.IGNORECASE)
+    name = NAME_TITLE.sub("", name).strip(" ,.")
+    return name if re.search(r"[^\W\d_]", name) else None
+
+
+def parse_family_members(raw_value: str) -> str | None:
+    """'Smt. Kamla Devi, Raju Kumar; Sita' -> 'Kamla Devi, Raju Kumar, Sita'."""
+    names = [parse_person_name(part) for part in re.split(r"[,;\n]", raw_value)]
+    names = [name for name in names if name]
+    return ", ".join(names) if names else None
 
 
 # States and union territories -> ISO 3166-2:IN code. Names are compared lower-case
@@ -294,6 +374,23 @@ def normalize_field(key: str, raw_value: Any) -> Any:
     if key == "name":
         # "Smt. Anita Deshpande" -> "Anita Deshpande": a title is not part of the name.
         return NAME_TITLE.sub("", " ".join(raw_value.split()))
+    if key in PERSON_NAME_FIELDS:
+        return parse_person_name(raw_value)
+    if key == "family_members":
+        return parse_family_members(raw_value)
+    if key == "gender":
+        return parse_gender(raw_value)
+    if key == "card_category":
+        return parse_card_category(raw_value)
+    if key == "age_at_death":
+        match = re.fullmatch(r"(\d{1,3})\s*(?:years?|yrs?\.?|y)?(?:\s*old)?", raw_value.strip(), re.IGNORECASE)
+        return int(match[1]) if match and int(match[1]) <= 130 else None
+    if key == "registration_number":
+        number = re.sub(r"\s", "", raw_value).upper()
+        return number if re.fullmatch(r"[A-Z0-9/:-]{4,40}", number) and len(re.findall(r"\d", number)) >= 3 else None
+    if key == "ration_card_number":
+        number = re.sub(r"\s", "", raw_value).upper()
+        return number if re.fullmatch(r"[A-Z0-9/-]{6,24}", number) and len(re.findall(r"\d", number)) >= 4 else None
     if key == "aadhaar_number":
         digits = re.sub(r"[ -]", "", raw_value)
         return digits if is_valid_aadhaar(digits) else None
@@ -316,6 +413,10 @@ def normalize_field(key: str, raw_value: Any) -> Any:
 
 
 def evaluate_rule(actual: Any, operator: str, expected: Any) -> bool:
+    if operator == "in":
+        if not isinstance(expected, (list, tuple, set)):
+            raise ValueError("The 'in' operator needs a list of allowed values")
+        return actual in expected
     if operator == ">=":
         return actual >= expected
     if operator == "<=":

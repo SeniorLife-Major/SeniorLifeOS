@@ -3,7 +3,7 @@ import { formatDate, todayISO } from './status'
 // The details on each kind of document, as the backend names them (REQUIRED_FIELDS and
 // OPTIONAL_MANUAL_FIELDS in backend/graphs/document_graph.py), in the order they are checked.
 export const FIELD_ORDER = {
-  identity: ['name', 'date_of_birth', 'aadhaar_number', 'pan_number'],
+  identity: ['name', 'date_of_birth', 'gender', 'aadhaar_number', 'pan_number'],
   income_certificate: ['name', 'annual_income', 'issue_date', 'issuing_authority', 'expiry_date'],
   residence_proof: ['name', 'residence_state', 'issue_date', 'issuing_authority', 'expiry_date'],
   health_insurance: ['name', 'insurer', 'policy_number', 'sum_insured', 'expiry_date'],
@@ -12,6 +12,17 @@ export const FIELD_ORDER = {
   lab_report: ['name', 'lab_name', 'report_date', 'tests'],
   prescription: ['name', 'doctor_name', 'prescription_date', 'medicines'],
   medical_bill: ['name', 'provider', 'bill_date', 'total_amount', 'items'],
+  death_certificate: [
+    'deceased_name',
+    'date_of_death',
+    'spouse_name',
+    'age_at_death',
+    'place_of_death',
+    'registration_number',
+    'issuing_authority',
+    'issue_date',
+  ],
+  ration_card: ['head_of_family', 'card_category', 'residence_state', 'family_members', 'ration_card_number', 'issue_date'],
 }
 
 // The details each kind of document must have (REQUIRED_FIELDS in backend/graphs/document_graph.py).
@@ -25,6 +36,8 @@ export const REQUIRED_FIELDS = {
   lab_report: ['name', 'lab_name', 'report_date', 'tests'],
   prescription: ['name', 'doctor_name', 'prescription_date', 'medicines'],
   medical_bill: ['name', 'provider', 'bill_date', 'total_amount'],
+  death_certificate: ['deceased_name', 'date_of_death', 'issue_date', 'issuing_authority'],
+  ration_card: ['head_of_family', 'card_category', 'residence_state'],
 }
 
 // kind decides how a value is shown, typed and checked (normalize_field in backend/tools/demo_tools.py).
@@ -55,6 +68,17 @@ const FIELDS = {
   bill_date: { label: 'Bill date', kind: 'date', past: true },
   total_amount: { label: 'Total amount', kind: 'money' },
   items: { label: 'Bill items', kind: 'rows' },
+  gender: { label: 'Gender', kind: 'gender' },
+  deceased_name: { label: 'Name of the person who died', kind: 'text' },
+  date_of_death: { label: 'Date of death', kind: 'date', past: true },
+  spouse_name: { label: 'Name of husband or wife', kind: 'text' },
+  age_at_death: { label: 'Age at death', kind: 'age' },
+  place_of_death: { label: 'Place of death', kind: 'text' },
+  registration_number: { label: 'Registration number', kind: 'code' },
+  head_of_family: { label: 'Head of the family', kind: 'text' },
+  card_category: { label: 'Card type', kind: 'category' },
+  family_members: { label: 'Family members (names, with commas)', kind: 'text' },
+  ration_card_number: { label: 'Ration card number', kind: 'code' },
 }
 
 export const TEXT_MAX = 200
@@ -120,6 +144,36 @@ export const STATES = [
 ]
 const STATE_NAMES = new Map(STATES)
 
+// GENDERS in backend/tools/demo_tools.py (parse_gender), as the backend stores them.
+export const GENDERS = [
+  ['female', 'Woman'],
+  ['male', 'Man'],
+  ['other', 'Transgender or other'],
+]
+const GENDER_NAMES = new Map(GENDERS)
+
+// CARD_CATEGORIES in backend/tools/demo_tools.py: the ration card's type, as one code.
+export const CARD_CATEGORIES = [
+  ['AAY', 'Antyodaya (AAY)'],
+  ['PHH', 'Priority household (PHH)'],
+  ['BPL', 'Below poverty line (BPL)'],
+  ['APL', 'Above poverty line (APL)'],
+  ['NPHH', 'Non-priority household (NPHH)'],
+]
+const CATEGORY_NAMES = new Map(CARD_CATEGORIES)
+
+// The details chosen from a list: the list and what the empty choice says.
+const CHOICES = {
+  state: { options: STATES, empty: 'Choose the state', problem: 'Please choose the state.' },
+  gender: { options: GENDERS, empty: 'Choose one', problem: 'Please choose one.' },
+  category: { options: CARD_CATEGORIES, empty: 'Choose the card type', problem: 'Please choose the card type.' },
+}
+
+/** For a detail chosen from a list (state, gender, card type): { options: [[code, name]], empty, problem }; else undefined. */
+export function choicesFor(kind) {
+  return CHOICES[kind]
+}
+
 const RUPEES = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 })
 
 /** A detail as the person reads it: "₹2,56,000", "23 Dec 2025", "Maharashtra", "40%". */
@@ -135,6 +189,12 @@ export function showValue(key, value) {
       return `${value}%`
     case 'state':
       return STATE_NAMES.get(String(value)) ?? String(value)
+    case 'gender':
+      return GENDER_NAMES.get(String(value)) ?? String(value)
+    case 'category':
+      return CATEGORY_NAMES.get(String(value)) ?? String(value)
+    case 'age':
+      return `${value} years`
     case 'aadhaar':
       return String(value).replace(/(\d{4})(?=\d)/g, '$1 ')
     case 'rows':
@@ -188,6 +248,20 @@ const CHECKS = {
       : { problem: 'Please type a number from 0 to 100.' }
   },
   state: (text) => (STATE_NAMES.has(text) ? { value: text } : { problem: 'Please choose the state.' }),
+  gender: (text) => (GENDER_NAMES.has(text) ? { value: text } : { problem: 'Please choose one.' }),
+  category: (text) => (CATEGORY_NAMES.has(text) ? { value: text } : { problem: 'Please choose the card type.' }),
+  age: (text) => {
+    const plain = text.replace(/\s*(years?|yrs?)$/i, '')
+    return /^\d{1,3}$/.test(plain) && Number(plain) <= 130
+      ? { value: String(Number(plain)) }
+      : { problem: 'Please type the age in years, like 74.' }
+  },
+  code: (text) => {
+    const code = text.replace(/\s/g, '').toUpperCase()
+    return /^[A-Z0-9/:-]{4,40}$/.test(code) && /\d/.test(code)
+      ? { value: code }
+      : { problem: 'Please type the number as printed: letters and digits.' }
+  },
   aadhaar: (text) => {
     const digits = text.replace(/[\s-]/g, '')
     return /^\d{12}$/.test(digits) ? { value: digits } : { problem: 'An Aadhaar number has 12 digits.' }
@@ -223,7 +297,7 @@ export function checkTyped(key, text, { required, now = todayISO() } = {}) {
   const kind = fieldKind(key)
   if (typed === '') {
     if (!required) return { value: '' }
-    if (kind === 'state') return { problem: 'Please choose the state.' }
+    if (CHOICES[kind]) return { problem: CHOICES[kind].problem }
     if (kind === 'date') return { problem: 'Please choose the date.' }
     return { problem: 'Please type this in.' }
   }

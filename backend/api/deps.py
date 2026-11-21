@@ -16,7 +16,7 @@ from backend.errors import AppException, UnauthorizedException
 from backend.errors.error_codes import ErrorCode
 
 __all__ = ["PRODUCTION", "is_production", "StorageUnavailable", "SignInUnavailable", "current_actor", "Actor",
-           "get_account_service", "get_health_service", "account_lookup"]
+           "get_account_service", "get_health_service", "get_benefits_service", "account_lookup"]
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class SignInUnavailable(AppException):
                          status_code=503)
 
 
-# ---- services made here: accounts, doctor search ------------------------------------------
+# ---- services made here: accounts, doctor search, scheme checks ---------------------------
 # They share one connection pool (DATABASE_URL). The document service still makes its own.
 
 _lock = threading.RLock()  # re-entrant: building one service builds the shared sessions first
@@ -116,6 +116,20 @@ def build_health_service() -> Any:
         logger.error("Doctor search storage could not start: %s", type(exc).__name__)
         raise StorageUnavailable("The doctor search database can't be reached") from None
     return HealthService(sessions, checkpointer, get_config().limits)
+
+
+def get_benefits_service() -> Any:
+    """The shared BenefitsService (scheme checks on the person's confirmed papers)."""
+    return shared("benefits", build_benefits_service)
+
+
+def build_benefits_service() -> Any:
+    from backend.storage.benefits_service import BenefitsService
+
+    sessions = database_sessions()
+    needs_table(sessions, "graph_runs", "scheme check")
+    needs_table(sessions, "documents", "document")
+    return BenefitsService(sessions)
 
 
 def account_lookup() -> Callable[[], Any]:

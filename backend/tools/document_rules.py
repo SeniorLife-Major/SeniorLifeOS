@@ -24,6 +24,11 @@ REQUIRED_FIELDS = {
     "lab_report": {"name", "lab_name", "report_date", "tests"},
     "prescription": {"name", "doctor_name", "prescription_date", "medicines"},
     "medical_bill": {"name", "provider", "bill_date", "total_amount"},
+    # About someone else (the person who died), so no "name" field: the owner-name checks must
+    # not fire. The spouse's name is optional; the benefits graph links it to the owner.
+    "death_certificate": {"deceased_name", "date_of_death", "issue_date", "issuing_authority"},
+    # The head of the family may be someone else (a son), so no "name" field here either.
+    "ration_card": {"head_of_family", "card_category", "residence_state"},
 }
 DOCUMENT_TYPES = tuple(REQUIRED_FIELDS)
 MATCH_RANK = {"usable": 0, "unconfirmed": 1, "expired": 2}
@@ -81,6 +86,8 @@ PROOFS = {
     "proof_of_disability": (("disability_certificate", "disability_percent"),),
     "health_cover": (("health_insurance", "policy_number"),),
     "bank_details": (("bank_passbook", "account_number"),),
+    "proof_of_widowhood": (("death_certificate", "date_of_death"),),
+    "proof_of_bpl": (("ration_card", "card_category"),),
 }
 
 

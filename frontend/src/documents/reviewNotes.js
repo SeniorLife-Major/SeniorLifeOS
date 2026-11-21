@@ -21,6 +21,8 @@ const NOTES = [
   [/a word may be misread/, 'A word may be misread.'],
   [/differs slightly from your earlier document/, 'It is a little different on your earlier document.'],
   [/is in the future/, 'This date is in the future.'],
+  [/is after the issue date/, 'This is after the date the paper was issued.'],
+  [/found as a word printed with no label/, 'Found as a word printed on the card, with no label.'],
   [/please check every row/, null], // every list is checked anyway
   [/missing or invalid/, null], // shown as "We could not find this"
 ]
@@ -84,6 +86,15 @@ const FUTURE_DATES = {
   'Report date': 'report_date',
   'Prescription date': 'prescription_date',
   'Bill date': 'bill_date',
+  'Date of death': 'date_of_death',
+}
+
+// DATE_ORDER in backend/graphs/document_graph.py: the refusal and the details it names.
+export const DATE_ORDER = {
+  'Date of death cannot be after the date it was issued': {
+    fields: ['date_of_death', 'issue_date'],
+    sentence: 'The date of death cannot be after the date the certificate was issued.',
+  },
 }
 
 /**
@@ -107,6 +118,11 @@ export function refusalOf(errors) {
       const names = match[1].split(',').map((name) => name.trim())
       fields.push(...names)
       sentences.push(`Please check: ${names.map(fieldLabel).join(', ')}.`)
+      continue
+    }
+    if (DATE_ORDER[error]) {
+      fields.push(...DATE_ORDER[error].fields)
+      sentences.push(DATE_ORDER[error].sentence)
       continue
     }
     match = /^(.+) cannot be in the future$/.exec(error)

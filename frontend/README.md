@@ -31,7 +31,9 @@ src/
   main.jsx            starts the app: fonts, styles, the router
   App.jsx             every screen and its address
   api/                talking to the backend: client.js (every request), session.js (the token), auth.js,
-                      profile.js, documents.js
+                      profile.js, documents.js, doctors.js, benefits.js
+  benefits/           scheme checks in words: the groups, each rule's outcome, where each thing to
+                      do leads (schemes.js)
   auth/               who is signed in (AuthProvider) and the guard for signed-in screens (RequireAuth)
   components/         shared pieces: Screen, BackLink, EmergencyStrip, Button, ButtonLink, Icon, Brand,
                       TextField, PasswordField, Switch, FocusedTitle
@@ -83,6 +85,13 @@ backend's real steps as it works, answers its one question if it asks (where to 
 near my home, a place it offers or a typed one; what kind of help; or whether to call emergency
 services), and shows the doctors with why each was picked, directions and their page. An emergency
 shows big call buttons. Your recent searches (30 days) open again.
+
+Schemes for me: the four made-up demo schemes (a health cover at 70, old-age, widow and disability
+pensions) checked against the saved papers, grouped as "You may get these", "Please check",
+"Add papers to know" and "Not for you now". A scheme's page shows each rule with what the papers
+say, what to add (with a link to add it), the answers no paper shows ("I have not married again"),
+and, once everything is there, the papers to take and a checklist to approve. Death certificates
+and ration cards can be added (and disability certificates again) for these.
 
 Speaking instead of typing is not built yet (see ideas/frontend/Decision.md #68). Family Mode needs
 sharing in the backend first.

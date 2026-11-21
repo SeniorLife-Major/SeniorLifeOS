@@ -5,13 +5,13 @@ import { TextField } from '../components/Field'
 import {
   checkRows,
   checkTyped,
+  choicesFor,
   emptyRow,
   mustBePast,
   rowWord,
   ROW_PARTS,
   showRow,
   showValue,
-  STATES,
   TEXT_MAX,
   toInput,
   toInputRows,
@@ -38,6 +38,8 @@ const KEYBOARD = {
   pan: { autoCapitalize: 'characters', autoComplete: 'off' },
   ifsc: { autoCapitalize: 'characters', autoComplete: 'off' },
   policy: { autoCapitalize: 'characters', autoComplete: 'off' },
+  code: { autoCapitalize: 'characters', autoComplete: 'off' },
+  age: { inputMode: 'numeric' },
 }
 
 /** The step's heading takes the focus, so a screen reader starts reading at the new detail. */
@@ -75,11 +77,13 @@ function Header({ step, position, headingRef }) {
 }
 
 /**
- * The box to type one detail in: a list of states, a date, or text (with the right keyboard).
- * fieldKey names the detail; kind is fieldKind(fieldKey). Also used to type a document in.
+ * The box to type one detail in: a list to choose from (state, gender, card type), a date, or text
+ * (with the right keyboard). fieldKey names the detail; kind is fieldKind(fieldKey). Also used to
+ * type a document in.
  */
 export function DetailBox({ id, fieldKey, kind, label, hint, value, onChange, error, inputRef }) {
-  if (kind === 'state') {
+  const choices = choicesFor(kind)
+  if (choices) {
     return (
       <div className="field">
         <label htmlFor={id} className="field__label">
@@ -99,8 +103,8 @@ export function DetailBox({ id, fieldKey, kind, label, hint, value, onChange, er
           aria-invalid={error ? true : undefined}
           aria-describedby={[hint && `${id}-hint`, error && `${id}-error`].filter(Boolean).join(' ') || undefined}
         >
-          <option value="">Choose the state</option>
-          {STATES.map(([code, name]) => (
+          <option value="">{choices.empty}</option>
+          {choices.options.map(([code, name]) => (
             <option key={code} value={code}>
               {name}
             </option>

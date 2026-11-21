@@ -130,7 +130,7 @@ class OwnerFillsInMissingFieldTests(unittest.TestCase):
             paused = graph.invoke(upload_state(UNIT / "sharp.png", "image/png", "identity", use_interrupt=True),
                                   config)
             self.assertEqual(paused["__interrupt__"][0].value["missing_fields"], ["name"])
-            self.assertEqual(paused["__interrupt__"][0].value["optional_fields"], ["pan_number"])  # Aadhaar was read
+            self.assertEqual(paused["__interrupt__"][0].value["optional_fields"], ["gender", "pan_number"])  # Aadhaar was read
             finished = graph.invoke(Command(resume={"action": "confirm", "reviewer_id": OWNER,
                                                     "edits": {"name": "Meera Rao"}}), config)
         self.assertEqual(finished["status"], "confirmed")

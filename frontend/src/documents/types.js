@@ -11,6 +11,8 @@ export const DOCUMENT_TYPES = [
   { key: 'prescription', label: 'Prescription' },
   { key: 'lab_report', label: 'Lab report' },
   { key: 'medical_bill', label: 'Medical bill' },
+  { key: 'death_certificate', label: 'Death certificate', choice: "Death certificate (husband's or wife's)" },
+  { key: 'ration_card', label: 'Ration card' },
 ]
 
 /** Health papers: they go to a cloud service or AI only with their own yes (MEDICAL_TYPES in backend/tools/medical.py). */
@@ -22,7 +24,8 @@ export function isKnownType(key) {
 
 // Kinds the app no longer offers to add (the owner's choice, Decision 74). They stay in the list
 // above, so ones already saved, or found by the reader after "I don't know", still show their name.
-const NOT_OFFERED = new Set(['residence_proof', 'disability_certificate'])
+// The disability certificate is offered again: the disability pension needs it (benefits Part 2).
+const NOT_OFFERED = new Set(['residence_proof'])
 
 /** The kinds offered on "Add a document" and "Type the details in". */
 export const ADDABLE_TYPES = DOCUMENT_TYPES.filter((type) => !NOT_OFFERED.has(type.key))

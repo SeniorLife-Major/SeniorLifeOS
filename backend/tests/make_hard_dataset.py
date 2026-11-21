@@ -44,7 +44,8 @@ FONT_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
 NBSP = "\u00a0"
 
 TYPES = ["identity", "income_certificate", "residence_proof", "health_insurance",
-         "bank_passbook", "disability_certificate", "lab_report", "prescription", "medical_bill"]
+         "bank_passbook", "disability_certificate", "lab_report", "prescription", "medical_bill",
+         "death_certificate", "ration_card"]
 CONDITIONS = ["scan", "photocopy", "phone_photo", "phone_shadow_dim", "phone_glare_shake", "worn"]
 
 PEOPLE = [
@@ -437,6 +438,73 @@ def make_disability_certificate(rng, person):
     return img, fields, []
 
 
+SPOUSES = {"FEMALE": ["Ramesh Rao", "Vijay Deshpande", "Mohan Narayanan"],
+           "MALE": ["Sunita Iyer", "Kavita Gupta", "Asha Kumar"]}
+
+
+def make_death_certificate(rng, person):
+    """Civil death certificate: labelled lines, the owner named as the spouse, no cause of death."""
+    img, draw = new_page(1240, 1754)
+    guilloche(img, rng, (110, 110, 160), alpha=35)
+    watermark(img)
+    y = header(img, draw, ["GOVERNMENT OF DEMO STATE (SAMPLE)", "Department of Health - Registration of Births & Deaths"],
+               "मृत्यु प्रमाण पत्र (नमूना)")
+    title = font("timesbd.ttf", 38)
+    w = draw.textlength("DEATH CERTIFICATE", font=title)
+    draw.text(((1240 - w) / 2, y), "DEATH CERTIFICATE", font=title, fill=INK)
+    deceased = rng.choice(SPOUSES[person["gender"]])
+    died = fake_date(rng, 2019, 2025)
+    died_shown = f"{died[2]:02d}/{died[1]:02d}/{died[0]}"
+    issued = (died[0] + 1, rng.randint(1, 12), rng.randint(1, 28))
+    issued_shown = f"{issued[2]:02d}-{issued[1]:02d}-{issued[0]}"
+    registration = f"D-{died[0]}:{rng.randint(10, 99)}-{rng.randint(10000, 99999)}"
+    authority = "Registrar, Demo Municipal Council"
+    body = font("times.ttf", 31)
+    lines = [f"Name of deceased: Late {deceased}", f"Date of death: {died_shown}",
+             f"Age: {rng.randint(60, 88)} years", "Place of death: Demo Taluka", f"Name of husband/wife: {person['name']}",
+             f"Registration No: {registration}", f"Date of issue: {issued_shown}", f"Issuing authority: {authority}"]
+    y += 90
+    for line in lines:
+        draw.text((100, y), line, font=body, fill=INK)
+        y += 58
+    signature(img, rng, 820, y + 40, "Registrar")
+    stamp(img, rng, (rng.randint(330, 900), y + 90), 100, ["REGISTRAR", "SAMPLE", "DEATHS"])
+    fields = {"deceased_name": field(deceased, deceased),
+              "date_of_death": field(died_shown, iso(died)),
+              "issue_date": field(issued_shown, iso(issued)),
+              "issuing_authority": field(authority, authority),
+              "spouse_name": field(person["name"], person["name"]),
+              "registration_number": field(registration, registration)}
+    return img, fields, []
+
+
+CARD_TYPES = [("Antyodaya (AAY)", "AAY"), ("Priority Household (PHH)", "PHH"), ("BPL", "BPL"), ("APL", "APL")]
+
+
+def make_ration_card(rng, person):
+    """Ration card booklet page: the owner as head of family, category, state, members."""
+    img, draw = new_page(1240, 900, (246, 248, 238))
+    guilloche(img, rng, (60, 130, 80), alpha=35)
+    watermark(img)
+    y = header(img, draw, ["FOOD & CIVIL SUPPLIES DEPARTMENT (SAMPLE)", "Ration Card - Public Distribution System"],
+               "राशन कार्ड (नमूना)")
+    category_shown, category = rng.choice(CARD_TYPES)
+    state = rng.choice(list(STATES))
+    number = f"{rng.randint(10, 35)}{rng.randint(1000000000, 9999999999)}"
+    members = f"{person['name']}, {rng.choice(['Raju', 'Sita', 'Arjun', 'Pooja'])} {person['name'].split()[-1]}"
+    body = font("times.ttf", 31)
+    for line in (f"Ration Card No: {number}", f"Head of family: {person['title']} {person['name']}",
+                 f"Card type: {category_shown}", f"State: {state}", f"Family members: {members}"):
+        draw.text((100, y), line, font=body, fill=INK)
+        y += 58
+    fields = {"head_of_family": field(person["name"], person["name"]),
+              "card_category": field(category_shown, category),
+              "residence_state": field(state, STATES[state]),
+              "ration_card_number": field(number, number),
+              "family_members": field(members, members)}
+    return img, fields, []
+
+
 LAB_TESTS = [("Haemoglobin", "g/dL", "12.0 - 15.5", 9.0, 16.0), ("Fasting Blood Sugar", "mg/dL", "70 - 100", 80, 180),
              ("HbA1c", "%", "4.0 - 5.6", 5.0, 9.5), ("Serum Creatinine", "mg/dL", "0.6 - 1.2", 0.6, 2.2),
              ("Total Cholesterol", "mg/dL", "< 200", 150, 280), ("TSH", "uIU/mL", "0.4 - 4.0", 0.5, 7.0)]
@@ -574,7 +642,8 @@ def make_medical_bill(rng, person):
 MAKERS = {"identity": make_identity, "income_certificate": make_income_certificate,
           "residence_proof": make_residence_proof, "health_insurance": make_health_insurance,
           "bank_passbook": make_bank_passbook, "disability_certificate": make_disability_certificate,
-          "lab_report": make_lab_report, "prescription": make_prescription, "medical_bill": make_medical_bill}
+          "lab_report": make_lab_report, "prescription": make_prescription, "medical_bill": make_medical_bill,
+          "death_certificate": make_death_certificate, "ration_card": make_ration_card}
 
 
 # ---------- capture damage (all on RGB uint8 arrays) ----------

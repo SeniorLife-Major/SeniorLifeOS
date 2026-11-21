@@ -2,6 +2,7 @@ import { Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider'
 import { RequireAuth, SignedOutOnly } from './auth/RequireAuth'
 import { AddDocumentPage } from './pages/AddDocumentPage'
+import { BenefitsPage } from './pages/BenefitsPage'
 import { ChecklistPage } from './pages/ChecklistPage'
 import { DocumentPage } from './pages/DocumentPage'
 import { DocumentsPage } from './pages/DocumentsPage'
@@ -13,6 +14,7 @@ import { NewCopyPage } from './pages/NewCopyPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { ReviewPage } from './pages/ReviewPage'
+import { SchemePage } from './pages/SchemePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SignInPage } from './pages/SignInPage'
 import { NewCopyTypeInPage, TypeInPage } from './pages/TypeInPage'
@@ -54,6 +56,8 @@ export function App() {
             <Route path="/documents/:documentId/new-copy/type-in" element={<NewCopyTypeInPage />} />
             <Route path="/doctor" element={<DoctorPage />} />
             <Route path="/doctor/:requestId" element={<DoctorResultPage />} />
+            <Route path="/benefits" element={<BenefitsPage />} />
+            <Route path="/benefits/:schemeId" element={<SchemePage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

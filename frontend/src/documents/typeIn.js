@@ -1,4 +1,5 @@
 import { checkRows, checkTyped, emptyRow, FIELD_ORDER, fieldKind, fieldLabel, REQUIRED_FIELDS } from './fields'
+import { DATE_ORDER } from './reviewNotes'
 import { todayISO } from './status'
 
 // Typing a document in, with no photo (POST /documents/manual and /documents/{id}/versions/manual).
@@ -74,6 +75,7 @@ const FUTURE_DATES = {
   'Report date': 'report_date',
   'Prescription date': 'prescription_date',
   'Bill date': 'bill_date',
+  'Date of death': 'date_of_death',
 }
 
 function notValid(key) {
@@ -102,6 +104,10 @@ export function typeInRefusal(errors, places = {}) {
     match = /^([a-z_]+): (required|not valid)$/.exec(error)
     if (match) {
       problems[match[1]] = match[2] === 'required' ? 'Please type this in.' : notValid(match[1])
+      continue
+    }
+    if (DATE_ORDER[error]) {
+      problems[DATE_ORDER[error].fields[0]] = DATE_ORDER[error].sentence
       continue
     }
     match = /^(.+) cannot be in the future$/.exec(error)

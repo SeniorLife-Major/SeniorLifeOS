@@ -224,7 +224,7 @@ describe('Add a document', () => {
     }
   })
 
-  it('does not offer a residence proof or a disability certificate (Decision 74)', async () => {
+  it('does not offer a residence proof (Decision 74), but offers the papers the pensions need', async () => {
     signedIn()
     const { unmount } = renderApp('/documents/add')
     const group = await screen.findByRole('group', { name: '1. What is it?' })
@@ -233,15 +233,18 @@ describe('Add a document', () => {
       'Income certificate',
       'Health insurance',
       'Bank passbook',
+      'Disability certificate',
       'Prescription',
       'Lab report',
       'Medical bill',
+      "Death certificate (husband's or wife's)",
+      'Ration card',
       "I don't know",
     ])
     unmount()
 
-    // An old link that names one of them chooses nothing.
-    renderApp('/documents/add?type=disability_certificate')
+    // An old link that names a residence proof chooses nothing.
+    renderApp('/documents/add?type=residence_proof')
     for (const button of within(await screen.findByRole('group', { name: '1. What is it?' })).getAllByRole('button')) {
       expect(button).toHaveAttribute('aria-pressed', 'false')
     }

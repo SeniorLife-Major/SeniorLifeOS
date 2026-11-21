@@ -17,7 +17,7 @@ describe('typeInFields', () => {
   })
 
   it('starts empty, with one row to fill only in a list that must have one', () => {
-    expect(emptyTypeIn('identity')).toEqual({ name: '', date_of_birth: '', aadhaar_number: '', pan_number: '' })
+    expect(emptyTypeIn('identity')).toEqual({ name: '', date_of_birth: '', gender: '', aadhaar_number: '', pan_number: '' })
     expect(emptyTypeIn('prescription').medicines).toEqual([NO_MEDICINE])
     expect(emptyTypeIn('medical_bill').items).toEqual([])
   })

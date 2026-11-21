@@ -36,6 +36,15 @@ const PATHS = {
     </>
   ),
   folder: <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />,
+  gift: (
+    <>
+      <polyline points="20 12 20 22 4 22 4 12" />
+      <rect x="2" y="7" width="20" height="5" />
+      <line x1="12" y1="22" x2="12" y2="7" />
+      <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+      <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+    </>
+  ),
   lock: (
     <>
       <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -88,7 +97,7 @@ const PATHS = {
 
 /**
  * name        — one of the icons above (alertCircle, arrowLeft, camera, check, chevronRight, clock,
- *               document, folder, lock, mapPin, navigation, phone, plus, settings, shieldCheck,
+ *               document, folder, gift, lock, mapPin, navigation, phone, plus, settings, shieldCheck,
  *               stethoscope)
  * label       — only for an icon that means something on its own; most icons sit next to words
  *               and stay hidden from screen readers

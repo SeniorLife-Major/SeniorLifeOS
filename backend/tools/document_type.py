@@ -57,6 +57,16 @@ TYPE_WORDS: dict[str, list[tuple[str, int]]] = {
         (r"disabilit|\bdisabled\b|divyang|दिव्यांग|विकलांग|handicap", 4),
         (r"\budid\b|medical (?:board|authority)|locomotor|low vision|benchmark|impairment", 2),
     ],
+    "death_certificate": [
+        (r"death certificate|certificate of death|मृत्यु प्रमाण|मृत्यु", 4),
+        (r"\bdeceased\b|date of death|place of death|registration of (?:births (?:and|&) )?deaths|"
+         r"registrar of (?:births (?:and|&) )?deaths|\blate\b", 2),
+    ],
+    "ration_card": [
+        (r"ration ?card|राशन कार्ड|शिधापत्रिका|public distribution system", 4),
+        (r"\bantyodaya\b|priority household|\bphh\b|\baay\b|below poverty line|\bapl\b|fair price shop|"
+         r"civil supplies|head of (?:the )?family|परिवार के मुखिया", 2),
+    ],
     "lab_report": [
         (r"laborator|\blab\b|patholog|diagnostic|reference (?:range|interval)|normal range|specimen|"
          r"sample collected|\bprofile\b", 2),

@@ -3,7 +3,7 @@
 This local mentor demo contains two separate `StateGraph` workflows:
 
 1. **Document Intake:** validate → classify → extract → validate fields → human review → publish a confirmed vault record.
-2. **Benefits Case Manager:** choose a curated scheme → retrieve/validate its source → evaluate confirmed facts → match documents in a subgraph → identify gaps → draft and review a manual handoff package.
+2. **Benefits Case Manager:** screen every demo scheme (or choose one) → retrieve/validate its source → collect confirmed facts → link papers (a death certificate naming the owner, a ration card listing them) → evaluate rules → match documents in a subgraph → say what to add → draft and review a manual handoff package.
 
 The design uses `TypedDict` states, small node functions, conditional edges, subgraphs, `invoke()`, and `interrupt()` as in the practice code. Each result contains an `events` list showing the node path.
 
@@ -227,6 +227,26 @@ Every other call sends the token: `Authorization: Bearer <accessToken>`. A wrong
 
 The result (`status`): `doctors_found` (`doctors` shown with reasons, `otherDoctors`, `answer` as plain text, `attribution` to show with a looked-up place), `no_doctors_nearby`, `emergency` (`emergency.numbers`, `message`), `needs_emergency_confirmation` / `needs_clarification` / `needs_location` (`question`, `options`), `location_not_found`, `not_available`, `not_understood`, `search_unavailable`, `failed`, `expired`. Person-facing notes are in `notes`.
 
+**Benefit schemes** (`api/benefits.py`, `storage/benefits_service.py`, `graphs/benefits_graph.py`; needs `DATABASE_URL`; tables from `alembic upgrade head`, no new migration). The four schemes in `tools/schemes.py` are **made up for the demonstration**: shaped like Indian welfare schemes, but their names, ages, amounts and rules are not any real programme's. No office is contacted and nothing is submitted.
+
+| Scheme | Rules | Papers |
+|---|---|---|
+| `senior_health_cover` | aged 70 or more | ID card |
+| `old_age_pension` | aged 60 or more; poor household on the ration card (AAY, BPL or PHH) | ID card, ration card, bank passbook |
+| `widow_pension` | a woman aged 40 to 79; her husband's death certificate names her as his wife; poor household | ID card, death certificate, ration card, bank passbook |
+| `disability_pension` | aged 18 to 79; disability 80% or more; poor household | ID card, disability certificate, ration card, bank passbook |
+
+The three pensions are one `exclusive_group` (only one can be had). What no paper shows is a declaration the person makes ("I have not married again", "I do not get another government pension"); a package is drafted only once they are given.
+
+| Call | What it does |
+|---|---|
+| `GET /api/v1/benefits/schemes` | the schemes, their rules, papers and declarations |
+| `POST /api/v1/benefits/checks` | `{}`: screens every scheme against my confirmed papers. Each scheme: `likely`, `add_documents`, `not_eligible` or `please_check`, each rule's outcome (`met`, `unmet`, `unknown`, `conflict`) with the fact compared, and `gaps` (what to add or check: `missing`, `unconfirmed`, `expired`, `detail_missing`, `check`). `{"schemeId": "widow_pension", "declarations": {"not_remarried": true, "no_other_pension": true}}`: one scheme; when it passes, `status: "awaiting_review"` with a `package` (papers to take, checklist, task, `actionId`) |
+| `POST /api/v1/benefits/checks/{id}/approve` | `{"actionId", "taskTitle"?}`: approves that package (`ready_for_manual_handoff`). The graph runs again on the vault as it is now; if a paper, an answer or the date changed, the `actionId` differs and the answer is 409 |
+| `GET /api/v1/benefits/checks/{id}`, `GET /api/v1/benefits/checks?limit=20` | my checks from the last 30 days |
+
+How the papers are linked: the owner's name comes from the ID card (the confirmed `name` fields). A ration card counts for the household when the owner is its head or one of its `family_members`; a death certificate makes "widowed" true when its `spouse_name` is the owner's name. Names are never corrected: a near match ("Kamala" for "Kamla", or one name inside the other) is `please_check`. A check keeps only what the person is shown (scheme names, outcomes, the facts compared such as an age or a card category, what to add): never a name or an ID number.
+
 With `Accept: text/event-stream` the answer is server-sent events: `step` events (`{"step": "safety_check"}`, ...), then one `result` event (the same envelope as the JSON answer) or one `error` event. The search finishes and is saved even if the caller disconnects.
 
 Kept: the request text, name and phone location only in the encrypted checkpoint while a question waits; a question not answered in 24 hours expires and that checkpoint is deleted. What the person was shown (no request text, no coordinates of the person) is kept 30 days.
@@ -268,7 +288,8 @@ Someone else's document is always "not found". Responses carry `Cache-Control: n
 During review the owner can also **fill in a required field OCR missed**, such as a name printed without a label. The review view lists these as `missingFields`; send them in `edits` like any correction. The value is checked like a read one, and is stored with `source_ref` `document:<id>:entered_by_owner` and `correctedByUser: true`. Only fields that were read or that the document type requires can be edited; anything else is refused.
 
 **Typing a document in, with no file** (`POST /api/v1/documents/manual`): for when a photo isn't possible or typing is easier.
-- Allowed fields: the type's required fields, plus `aadhaar_number` and `pan_number` for `identity`, `issuing_authority` and `expiry_date` for income and residence certificates, `expiry_date` for a disability certificate. Medical lists (`tests`, `medicines`, `items`) are sent as lists of rows.
+- Allowed fields: the type's required fields, plus `aadhaar_number`, `pan_number` and `gender` for `identity`, `issuing_authority` and `expiry_date` for income and residence certificates, `expiry_date` for a disability certificate, `spouse_name`, `age_at_death`, `place_of_death` and `registration_number` for a death certificate, `ration_card_number`, `family_members` and `issue_date` for a ration card. Medical lists (`tests`, `medicines`, `items`) are sent as lists of rows.
+- The two papers the pensions need: a **death certificate** (`deceased_name`, `date_of_death`, `issue_date`, `issuing_authority`; it is about someone else, so it has no `name` and is never compared with the owner's name; the date of death can't be after the issue date) and a **ration card** (`head_of_family`, `card_category` as `AAY`, `PHH`, `BPL`, `APL` or `NPHH`, `residence_state`). The civil death certificate carries no cause of death.
 - Each value gets the same checks as a value read from a page (Aadhaar checksum, PAN shape, dates, amounts, no future dates). Anything wrong gives `422` with the reasons in `details.errors` (never the values) and nothing is stored.
 - Typing in counts as the owner's confirmation: the document is saved `confirmed` at once, ID numbers masked and hashed, with `entry: "manual"`, no file, and every field's `source_ref` ending in `entered_by_owner`. A scheme that needs the paper itself can still ask for it.
 - A card already in the vault (same ID hash) is reported in `warnings`, as for uploads.
@@ -297,9 +318,9 @@ The owner's earlier confirmed documents are passed to the graph, so a repeated I
 
 Document Intake returns `vault_record` only after the owner confirms extracted fields. Put this record in the Benefits state's `documents` list. Benefits checks owner, confirmation, required fields, expiry, and provenance. A later confirmed upload can be passed to a *new* Benefits run for reassessment; the two graphs do not share one checkpoint.
 
-Shared document rules live in `tools/document_rules.py`: `match_requirements()` checks a fixed document type, and `match_proofs()` checks a need such as `proof_of_age` against every document type that can prove it (`PROOFS`). The Benefits graph does not use `match_proofs()` yet.
+Shared document rules live in `tools/document_rules.py`: `match_requirements()` checks a fixed document type (the Benefits graph uses it for every scheme's papers), and `match_proofs()` checks a need such as `proof_of_age` against every document type that can prove it (`PROOFS`, now with `proof_of_bpl` and `proof_of_widowhood`).
 
-The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), after the file checks below. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension` and its `demo://` source are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. The graphs themselves never touch a database: uploads sent through the document vault API are saved by `storage/service.py` after the graph runs (see "Document vault" below). Benefits packages, tasks, and event trails exist only in the returned state, and no external action is taken. `InMemorySaver` and `make_checkpointer()` lose state after process exit; the vault uses the PostgreSQL checkpointer. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
+The sample states use handwritten `pages[].text`. A real image or PDF can be read with local OCR (`document.file_path`, see "Local OCR" below), after the file checks below. The field parser understands labelled values (see "Reading values" below). Values written inside sentences or printed with no label, such as certificate paragraphs or the number on an ID card, are not extracted yet. `Demo Senior Support Pension`, the four schemes in `tools/schemes.py` and their `demo://` sources are **fictional test data**, not real government eligibility advice. No government website is queried or application submitted. The graphs themselves never touch a database: uploads sent through the document vault API are saved by `storage/service.py` after the graph runs (see "Document vault" below). Benefits packages, tasks, and event trails exist only in the returned state, and no external action is taken. `InMemorySaver` and `make_checkpointer()` lose state after process exit; the vault uses the PostgreSQL checkpointer. The local demo uses deterministic extraction and a curated mock catalogue to run without API keys. Its agentic structure is visible in evidence-dependent routing, retries, a document-match subgraph, provenance, and approval boundaries, rather than one generated answer.
 
 Optional structured LLM selection nodes are included for document classification and scheme resolution. Set `use_llm=True` and omit `claimed_type` or `scheme_id` respectively. The provider is chosen by `SENIORLIFE_LLM_PROVIDER` (see `agents/models.py`):
 
@@ -321,7 +342,7 @@ This slows spending down; it does not cap the total, and each server process has
 
 ### ID numbers in the vault
 
-Aadhaar, PAN, account, and insurance policy numbers are stored masked (`XXXX XXXX 9012`) plus a keyed hash (HMAC-SHA256) for duplicate detection; the full number is never stored. This needs `SENIORLIFE_HASH_KEY` (at least 32 characters) in the environment or `.env`. Without it, a document that contains an ID number stops with `failed_tool` instead of being published. Documents without ID numbers don't need the key. Never change the key after data is stored, or old hashes stop matching. Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
+Aadhaar, PAN, account, insurance policy, death registration and ration card numbers are stored masked (`XXXX XXXX 9012`, `XXXXXXXX6789`) plus a keyed hash (HMAC-SHA256) for duplicate detection; the full number is never stored. This needs `SENIORLIFE_HASH_KEY` (at least 32 characters) in the environment or `.env`. Without it, a document that contains an ID number stops with `failed_tool` instead of being published. Documents without ID numbers don't need the key. Never change the key after data is stored, or old hashes stop matching. Groq uses `langchain-groq` (`ChatGroq`); OpenAI uses `langchain-openai` (`ChatOpenAI`). Both are in `requirements.txt`. Every prompt is redacted first (`utils/privacy.py`). The returned choice is still restricted to the local catalogue. The default sample states never call an external model.
 
 ### File checks (`tools/file_safety.py`)
 

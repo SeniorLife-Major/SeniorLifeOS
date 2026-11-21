@@ -49,6 +49,16 @@ export function HomePage() {
         </span>
       </Link>
 
+      <Link to="/benefits" className="tile tile--outline">
+        <span className="tile__icon">
+          <Icon name="gift" size={36} strokeWidth={2} />
+        </span>
+        <span className="tile__text">
+          <span className="tile__title">Schemes for me</span>
+          <span className="tile__hint">Pensions and health cover your papers may get you</span>
+        </span>
+      </Link>
+
       <Button variant="quiet" className="button--muted" onClick={leave} disabled={signingOut}>
         {signingOut ? 'Signing out…' : 'Sign out'}
       </Button>

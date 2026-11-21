@@ -22,6 +22,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from ..tools.demo_tools import extract_fields_from_pages, normalize_field
+from ..tools.document_rules import REQUIRED_FIELDS as DOCUMENT_REQUIRED_FIELDS
 from ..tools.document_type import type_from_text
 from ..tools.medical import (
     LIST_FIELDS, MEDICAL_TYPES, extract_lists, heading_fields, looks_medical,
@@ -37,17 +38,8 @@ from ..utils.checkpoints import is_encrypted
 from ..utils.tracing import install_safe_client
 
 
-REQUIRED_FIELDS = {
-    "identity": {"name", "date_of_birth"},
-    "income_certificate": {"name", "annual_income", "issue_date"},
-    "residence_proof": {"name", "residence_state", "issue_date"},
-    "health_insurance": {"name", "insurer", "policy_number", "expiry_date", "sum_insured"},
-    "bank_passbook": {"name", "bank_name", "account_number", "ifsc"},
-    "disability_certificate": {"name", "issuing_authority", "issue_date", "disability_percent"},
-    "lab_report": {"name", "lab_name", "report_date", "tests"},
-    "prescription": {"name", "doctor_name", "prescription_date", "medicines"},
-    "medical_bill": {"name", "provider", "bill_date", "total_amount"},
-}
+# The fields each type must have: one shared list (tools/document_rules.py), no copy to drift.
+REQUIRED_FIELDS = DOCUMENT_REQUIRED_FIELDS
 ALLOWED_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
 CONFIDENCE_THRESHOLD = 0.9
 AUTO_REVIEWER_ID = "system:confidence_gate"
@@ -202,6 +194,7 @@ FILENAME_HINTS = (
     ("income", "income_certificate"), ("identity", "identity"), ("residence", "residence_proof"),
     ("insurance", "health_insurance"), ("passbook", "bank_passbook"), ("disability", "disability_certificate"),
     ("lab", "lab_report"), ("prescription", "prescription"), ("bill", "medical_bill"), ("invoice", "medical_bill"),
+    ("death", "death_certificate"), ("ration", "ration_card"),
 )
 
 
@@ -383,11 +376,15 @@ def pages_clear(pages: list[dict[str, Any]]) -> bool:
 
 # Fields an owner may type in: the required ones, plus these.
 OPTIONAL_MANUAL_FIELDS = {
-    "identity": {"aadhaar_number", "pan_number"},
+    "identity": {"aadhaar_number", "pan_number", "gender"},
     "income_certificate": {"issuing_authority", "expiry_date"},
     "residence_proof": {"issuing_authority", "expiry_date"},
     "disability_certificate": {"expiry_date"},
     "medical_bill": {"items"},  # the bill's lines; only the total is required
+    # The spouse's name links the certificate to a widow or widower (benefits graph).
+    "death_certificate": {"spouse_name", "age_at_death", "place_of_death", "registration_number"},
+    # The members' names show the owner is on the card when someone else is its head.
+    "ration_card": {"ration_card_number", "family_members", "issue_date"},
 }
 MANUAL_SOURCE = "entered_by_owner"
 
@@ -436,6 +433,8 @@ def take_manual_entry(state: DocumentState) -> dict[str, Any]:
         checked = normalize_field(key, fields[key]["value"]) if key in fields else None
         if checked and date.fromisoformat(checked) > today:
             errors.append(f"{label} cannot be in the future")
+    typed = {key: normalize_field(key, item["value"]) for key, item in fields.items() if key in DATE_ORDER_FIELDS}
+    errors.extend(message for _, _, message in dates_out_of_order(typed))
     update = {"manual_fields": {}, "document_type": document_type, "extracted_fields": fields}
     if errors:
         return {**update, "status": "rejected", "route": "stop", "errors": errors,
@@ -627,9 +626,27 @@ LAYOUT_NOTES = {
     "heading": "taken from the page heading",
     "doctor_line": "taken from a line starting with Dr.",
     "checksum": "found by its check digit (printed with no label)",
+    "printed_word": "found as a word printed with no label",
 }
 FUTURE_DATE_LABELS = {"issue_date": "Issue date", "report_date": "Report date",
-                      "prescription_date": "Prescription date", "bill_date": "Bill date"}
+                      "prescription_date": "Prescription date", "bill_date": "Bill date",
+                      "date_of_death": "Date of death"}
+# (earlier, later, refusal): the first date can't come after the second on the same document.
+DATE_ORDER = (("date_of_death", "issue_date", "Date of death cannot be after the date it was issued"),)
+DATE_ORDER_FIELDS = {key for pair in DATE_ORDER for key in pair[:2]}
+
+
+def dates_out_of_order(values: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """The DATE_ORDER pairs these normalized values break (both dates known and valid)."""
+    broken = []
+    for earlier, later, message in DATE_ORDER:
+        try:
+            if values.get(earlier) and values.get(later) and \
+                    date.fromisoformat(values[earlier]) > date.fromisoformat(values[later]):
+                broken.append((earlier, later, message))
+        except (TypeError, ValueError):
+            continue
+    return broken
 
 
 def is_blank(value: Any) -> bool:
@@ -693,6 +710,8 @@ def validate_candidates(state: DocumentState) -> dict[str, Any]:
             flags.append(f"{key} is in the future")
     if normalized.get("expiry_date") and date.fromisoformat(normalized["expiry_date"]) < today:
         flags.append("document is expired")
+    flags.extend(f"{earlier} is after the {later.replace('_', ' ')}"
+                 for earlier, later, _ in dates_out_of_order(normalized))
     return {
         "extracted_fields": fields,
         "normalized_fields": normalized,
@@ -815,6 +834,14 @@ def human_field_review(state: DocumentState) -> dict[str, Any]:
                 "events": add_event(state, "human_field_review:future_issue_date" if key == "issue_date"
                                     else "human_field_review:future_date"),
             }
+    out_of_order = dates_out_of_order(confirmed)
+    if out_of_order:
+        return {
+            "status": "needs_review",
+            "route": "stop",
+            "errors": [message for _, _, message in out_of_order],
+            "events": add_event(state, "human_field_review:dates_out_of_order"),
+        }
     return {
         "normalized_fields": confirmed,
         "review_decision": decision,

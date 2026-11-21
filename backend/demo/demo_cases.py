@@ -80,6 +80,48 @@ def disability_state() -> dict[str, Any]:
     ))
 
 
+# ---- the widow pension story (benefits Part 2): Kamla Devi, 68, Maharashtra -------------------
+# Fictional people and numbers. The Aadhaar number has a valid check digit but is made up.
+
+KAMLA = {"actor_id": "senior-kamla", "owner_name": "Kamla Devi"}
+
+
+def _owner_upload(owner: dict[str, str], document_id: str, filename: str, text: str) -> dict[str, Any]:
+    state = _upload_state(document_id, filename, text)
+    state["actor_id"] = owner["actor_id"]
+    state["document"].update(owner_id=owner["actor_id"], owner_name=owner["owner_name"], as_of="2026-11-21")
+    return state
+
+
+def kamla_identity_state() -> dict[str, Any]:
+    return _owner_upload(KAMLA, "doc-kamla-id", "aadhaar_card.jpg", (
+        "Government of India\nName: Kamla Devi\nDOB: 12/03/1958\nFEMALE / महिला\nAadhaar: 2345 6789 0124"
+    ))
+
+
+def death_certificate_state(spouse_name: str = "Kamla Devi") -> dict[str, Any]:
+    return _owner_upload(KAMLA, "doc-kamla-death", "death_certificate.jpg", (
+        "DEATH CERTIFICATE (DEMO)\nRegistration of Births & Deaths\nName of deceased: Late Shri Ramesh Prasad\n"
+        "Date of death: 14/02/2024\nAge: 74 years\nPlace of death: Demo Taluka\n"
+        f"Name of husband/wife: {spouse_name}\nRegistration No: D-2024:27-90012\n"
+        "Date of issue: 02/03/2024\nIssuing authority: Registrar, Demo Municipal Council"
+    ))
+
+
+def ration_card_state(category: str = "Priority Household (PHH)") -> dict[str, Any]:
+    return _owner_upload(KAMLA, "doc-kamla-ration", "ration_card.jpg", (
+        "RATION CARD (DEMO)\nFood & Civil Supplies Department\nRation Card No: 272100456789\n"
+        f"Head of family: Raju Prasad\nCard type: {category}\nState: Maharashtra\n"
+        "Family members: Raju Prasad, Kamla Devi, Sita Prasad"
+    ))
+
+
+def kamla_passbook_state() -> dict[str, Any]:
+    return _owner_upload(KAMLA, "doc-kamla-bank", "bank_passbook.jpg", (
+        "Name: Kamla Devi\nBank name: Demo Bank (fictional)\nAccount number: 987654321012\nIFSC: DEMO0004321"
+    ))
+
+
 def lab_report_state() -> dict[str, Any]:
     """Fictional lab: heading as lab name, a results table, every row needs the owner's check."""
     return _upload_state("doc-lab-001", "lab_report.jpg", (

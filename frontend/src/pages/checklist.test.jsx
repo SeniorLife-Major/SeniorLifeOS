@@ -103,12 +103,14 @@ describe('Do I have what I need?', () => {
     expect(screen.getByText('1 missing')).toBeInTheDocument()
   })
 
-  it('does not offer proof of address or of disability (Decision 74)', async () => {
+  it('does not offer proof of address (Decision 74), but offers the papers the pensions need', async () => {
     const backend = signedIn()
     renderApp('/documents/checklist')
     await screen.findByRole('heading', { level: 1, name: 'Do I have what I need?' })
     expect(screen.queryByRole('button', { name: /^Proof of address/ })).toBeNull()
-    expect(screen.queryByRole('button', { name: /^Proof of disability/ })).toBeNull()
+    expect(choice('Proof of disability')).toHaveTextContent('A disability certificate')
+    expect(choice('Proof of widowhood')).toHaveTextContent("Your husband's or wife's death certificate")
+    expect(choice('Proof of BPL')).toHaveTextContent('A ration card (AAY, BPL or PHH)')
     expect(choice('Proof of income')).toBeInTheDocument()
     expect(backend.sent(MATCH)).toEqual([])
   })

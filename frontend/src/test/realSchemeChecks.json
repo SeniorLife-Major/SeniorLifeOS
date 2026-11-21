@@ -1,0 +1,1109 @@
+{
+ "screenBefore": {
+  "checkId": "check-before",
+  "mode": "screen",
+  "status": "screened",
+  "asOf": "2026-11-21",
+  "schemeId": null,
+  "schemes": [
+   {
+    "schemeId": "senior_health_cover",
+    "name": "Senior Health Cover 70+ (demo)",
+    "summary": "Free hospital care for everyone aged 70 or more, whatever their income.",
+    "benefit": "Hospital care up to ₹5,00,000 a year, free at listed hospitals",
+    "status": "not_eligible",
+    "exclusiveGroup": null,
+    "criteria": [
+     {
+      "criterionId": "age",
+      "label": "Aged 70 or more",
+      "fact": "age",
+      "status": "unmet",
+      "value": 68,
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": []
+   },
+   {
+    "schemeId": "old_age_pension",
+    "name": "Old Age Pension (demo)",
+    "summary": "A monthly pension for people aged 60 or more from a poor household.",
+    "benefit": "₹1,000 a month into your bank account",
+    "status": "likely",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "age",
+      "label": "Aged 60 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": [
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   },
+   {
+    "schemeId": "widow_pension",
+    "name": "Widow Pension (demo)",
+    "summary": "A monthly pension for a woman aged 40 to 79 whose husband has died, from a poor household.",
+    "benefit": "₹1,200 a month into your bank account",
+    "status": "add_documents",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "woman",
+      "label": "A woman",
+      "fact": "gender",
+      "status": "met",
+      "value": "female",
+      "note": null
+     },
+     {
+      "criterionId": "age_from",
+      "label": "Aged 40 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "widowed",
+      "label": "Her husband has died (his death certificate names her)",
+      "fact": "widowed",
+      "status": "unknown",
+      "value": null,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "death_certificate",
+      "documentId": null,
+      "status": "missing"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [
+     {
+      "documentType": "death_certificate",
+      "documentId": null,
+      "reason": "missing",
+      "message": "Add your husband's death certificate."
+     }
+    ],
+    "toConfirm": [
+     {
+      "key": "not_remarried",
+      "label": "I have not married again",
+      "confirmed": false
+     },
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   },
+   {
+    "schemeId": "disability_pension",
+    "name": "Disability Pension (demo)",
+    "summary": "A monthly pension for people aged 18 to 79 with a severe disability (80% or more), from a poor household.",
+    "benefit": "₹1,500 a month into your bank account",
+    "status": "add_documents",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "age_from",
+      "label": "Aged 18 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "severe_disability",
+      "label": "Disability of 80% or more",
+      "fact": "disability_percent",
+      "status": "unknown",
+      "value": null,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "disability_certificate",
+      "documentId": null,
+      "status": "missing"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [
+     {
+      "documentType": "disability_certificate",
+      "documentId": null,
+      "reason": "missing",
+      "message": "Add your disability certificate."
+     }
+    ],
+    "toConfirm": [
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   }
+  ],
+  "notes": [],
+  "declarations": {},
+  "package": null,
+  "createdAt": "2026-11-21T10:00:00Z"
+ },
+ "screenAfter": {
+  "checkId": "check-after",
+  "mode": "screen",
+  "status": "screened",
+  "asOf": "2026-11-21",
+  "schemeId": null,
+  "schemes": [
+   {
+    "schemeId": "senior_health_cover",
+    "name": "Senior Health Cover 70+ (demo)",
+    "summary": "Free hospital care for everyone aged 70 or more, whatever their income.",
+    "benefit": "Hospital care up to ₹5,00,000 a year, free at listed hospitals",
+    "status": "not_eligible",
+    "exclusiveGroup": null,
+    "criteria": [
+     {
+      "criterionId": "age",
+      "label": "Aged 70 or more",
+      "fact": "age",
+      "status": "unmet",
+      "value": 68,
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": []
+   },
+   {
+    "schemeId": "old_age_pension",
+    "name": "Old Age Pension (demo)",
+    "summary": "A monthly pension for people aged 60 or more from a poor household.",
+    "benefit": "₹1,000 a month into your bank account",
+    "status": "likely",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "age",
+      "label": "Aged 60 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": [
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   },
+   {
+    "schemeId": "widow_pension",
+    "name": "Widow Pension (demo)",
+    "summary": "A monthly pension for a woman aged 40 to 79 whose husband has died, from a poor household.",
+    "benefit": "₹1,200 a month into your bank account",
+    "status": "likely",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "woman",
+      "label": "A woman",
+      "fact": "gender",
+      "status": "met",
+      "value": "female",
+      "note": null
+     },
+     {
+      "criterionId": "age_from",
+      "label": "Aged 40 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "widowed",
+      "label": "Her husband has died (his death certificate names her)",
+      "fact": "widowed",
+      "status": "met",
+      "value": true,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "death_certificate",
+      "documentId": "death",
+      "status": "usable"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": [
+     {
+      "key": "not_remarried",
+      "label": "I have not married again",
+      "confirmed": false
+     },
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   },
+   {
+    "schemeId": "disability_pension",
+    "name": "Disability Pension (demo)",
+    "summary": "A monthly pension for people aged 18 to 79 with a severe disability (80% or more), from a poor household.",
+    "benefit": "₹1,500 a month into your bank account",
+    "status": "add_documents",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "age_from",
+      "label": "Aged 18 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "severe_disability",
+      "label": "Disability of 80% or more",
+      "fact": "disability_percent",
+      "status": "unknown",
+      "value": null,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "disability_certificate",
+      "documentId": null,
+      "status": "missing"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [
+     {
+      "documentType": "disability_certificate",
+      "documentId": null,
+      "reason": "missing",
+      "message": "Add your disability certificate."
+     }
+    ],
+    "toConfirm": [
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   }
+  ],
+  "notes": [
+   "You can get only one monthly pension. Choose the one that suits you best."
+  ],
+  "declarations": {},
+  "package": null,
+  "createdAt": "2026-11-21T10:00:00Z"
+ },
+ "widowNeedsAnswers": {
+  "checkId": "check-widow-1",
+  "mode": "apply",
+  "status": "needs_input",
+  "asOf": "2026-11-21",
+  "schemeId": "widow_pension",
+  "schemes": [
+   {
+    "schemeId": "widow_pension",
+    "name": "Widow Pension (demo)",
+    "summary": "A monthly pension for a woman aged 40 to 79 whose husband has died, from a poor household.",
+    "benefit": "₹1,200 a month into your bank account",
+    "status": "likely",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "woman",
+      "label": "A woman",
+      "fact": "gender",
+      "status": "met",
+      "value": "female",
+      "note": null
+     },
+     {
+      "criterionId": "age_from",
+      "label": "Aged 40 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "widowed",
+      "label": "Her husband has died (his death certificate names her)",
+      "fact": "widowed",
+      "status": "met",
+      "value": true,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "death_certificate",
+      "documentId": "death",
+      "status": "usable"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": [
+     {
+      "key": "not_remarried",
+      "label": "I have not married again",
+      "confirmed": false
+     },
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   }
+  ],
+  "notes": [],
+  "declarations": {},
+  "package": null,
+  "createdAt": "2026-11-21T10:00:00Z"
+ },
+ "widowPackage": {
+  "checkId": "check-widow-2",
+  "mode": "apply",
+  "status": "awaiting_review",
+  "asOf": "2026-11-21",
+  "schemeId": "widow_pension",
+  "schemes": [
+   {
+    "schemeId": "widow_pension",
+    "name": "Widow Pension (demo)",
+    "summary": "A monthly pension for a woman aged 40 to 79 whose husband has died, from a poor household.",
+    "benefit": "₹1,200 a month into your bank account",
+    "status": "likely",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "woman",
+      "label": "A woman",
+      "fact": "gender",
+      "status": "met",
+      "value": "female",
+      "note": null
+     },
+     {
+      "criterionId": "age_from",
+      "label": "Aged 40 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "widowed",
+      "label": "Her husband has died (his death certificate names her)",
+      "fact": "widowed",
+      "status": "met",
+      "value": true,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "death_certificate",
+      "documentId": "death",
+      "status": "usable"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": [
+     {
+      "key": "not_remarried",
+      "label": "I have not married again",
+      "confirmed": true
+     },
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": true
+     }
+    ]
+   }
+  ],
+  "notes": [],
+  "declarations": {
+   "not_remarried": true,
+   "no_other_pension": true
+  },
+  "package": {
+   "actionId": "7536f0ed9b4e79bc",
+   "schemeId": "widow_pension",
+   "schemeName": "Widow Pension (demo)",
+   "documents": [
+    {
+     "documentType": "identity",
+     "documentId": "id"
+    },
+    {
+     "documentType": "death_certificate",
+     "documentId": "death"
+    },
+    {
+     "documentType": "ration_card",
+     "documentId": "ration"
+    },
+    {
+     "documentType": "bank_passbook",
+     "documentId": "bank"
+    }
+   ],
+   "declarations": [
+    "I have not married again",
+    "I do not get another government pension"
+   ],
+   "checklist": [
+    "Take the papers listed, the originals and one photocopy of each, to your ward office, gram panchayat or the district social welfare office",
+    "Sign the declarations: I have not married again; I do not get another government pension",
+    "Ask for a receipt and keep its reference number",
+    "This is a made-up demo scheme: for a real scheme, ask the office how to apply first"
+   ],
+   "tasks": [
+    {
+     "title": "Apply for Widow Pension (demo) at your ward office, gram panchayat or the district social welfare office"
+    }
+   ],
+   "warning": "Fictional demo scheme. This is not a real eligibility decision or application.",
+   "status": "proposed"
+  },
+  "createdAt": "2026-11-21T10:00:00Z"
+ },
+ "widowReady": {
+  "checkId": "check-widow-2",
+  "mode": "apply",
+  "status": "ready_for_manual_handoff",
+  "asOf": "2026-11-21",
+  "schemeId": "widow_pension",
+  "schemes": [
+   {
+    "schemeId": "widow_pension",
+    "name": "Widow Pension (demo)",
+    "summary": "A monthly pension for a woman aged 40 to 79 whose husband has died, from a poor household.",
+    "benefit": "₹1,200 a month into your bank account",
+    "status": "likely",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "woman",
+      "label": "A woman",
+      "fact": "gender",
+      "status": "met",
+      "value": "female",
+      "note": null
+     },
+     {
+      "criterionId": "age_from",
+      "label": "Aged 40 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "widowed",
+      "label": "Her husband has died (his death certificate names her)",
+      "fact": "widowed",
+      "status": "met",
+      "value": true,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "death_certificate",
+      "documentId": "death",
+      "status": "usable"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [],
+    "toConfirm": [
+     {
+      "key": "not_remarried",
+      "label": "I have not married again",
+      "confirmed": true
+     },
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": true
+     }
+    ]
+   }
+  ],
+  "notes": [],
+  "declarations": {
+   "not_remarried": true,
+   "no_other_pension": true
+  },
+  "package": {
+   "actionId": "7536f0ed9b4e79bc",
+   "schemeId": "widow_pension",
+   "schemeName": "Widow Pension (demo)",
+   "documents": [
+    {
+     "documentType": "identity",
+     "documentId": "id"
+    },
+    {
+     "documentType": "death_certificate",
+     "documentId": "death"
+    },
+    {
+     "documentType": "ration_card",
+     "documentId": "ration"
+    },
+    {
+     "documentType": "bank_passbook",
+     "documentId": "bank"
+    }
+   ],
+   "declarations": [
+    "I have not married again",
+    "I do not get another government pension"
+   ],
+   "checklist": [
+    "Take the papers listed, the originals and one photocopy of each, to your ward office, gram panchayat or the district social welfare office",
+    "Sign the declarations: I have not married again; I do not get another government pension",
+    "Ask for a receipt and keep its reference number",
+    "This is a made-up demo scheme: for a real scheme, ask the office how to apply first"
+   ],
+   "tasks": [
+    {
+     "title": "Apply for Widow Pension (demo) at your ward office, gram panchayat or the district social welfare office"
+    }
+   ],
+   "warning": "Fictional demo scheme. This is not a real eligibility decision or application.",
+   "status": "approved_for_manual_handoff"
+  },
+  "createdAt": "2026-11-21T10:00:00Z"
+ },
+ "widowNoCertificate": {
+  "checkId": "check-widow-3",
+  "mode": "apply",
+  "status": "needs_input",
+  "asOf": "2026-11-21",
+  "schemeId": "widow_pension",
+  "schemes": [
+   {
+    "schemeId": "widow_pension",
+    "name": "Widow Pension (demo)",
+    "summary": "A monthly pension for a woman aged 40 to 79 whose husband has died, from a poor household.",
+    "benefit": "₹1,200 a month into your bank account",
+    "status": "add_documents",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "woman",
+      "label": "A woman",
+      "fact": "gender",
+      "status": "met",
+      "value": "female",
+      "note": null
+     },
+     {
+      "criterionId": "age_from",
+      "label": "Aged 40 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "widowed",
+      "label": "Her husband has died (his death certificate names her)",
+      "fact": "widowed",
+      "status": "unknown",
+      "value": null,
+      "note": null
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "death_certificate",
+      "documentId": null,
+      "status": "missing"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [
+     {
+      "documentType": "death_certificate",
+      "documentId": null,
+      "reason": "missing",
+      "message": "Add your husband's death certificate."
+     }
+    ],
+    "toConfirm": [
+     {
+      "key": "not_remarried",
+      "label": "I have not married again",
+      "confirmed": false
+     },
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   }
+  ],
+  "notes": [],
+  "declarations": {},
+  "package": null,
+  "createdAt": "2026-11-21T10:00:00Z"
+ },
+ "widowNameCheck": {
+  "checkId": "check-widow-4",
+  "mode": "apply",
+  "status": "blocked_conflict",
+  "asOf": "2026-11-21",
+  "schemeId": "widow_pension",
+  "schemes": [
+   {
+    "schemeId": "widow_pension",
+    "name": "Widow Pension (demo)",
+    "summary": "A monthly pension for a woman aged 40 to 79 whose husband has died, from a poor household.",
+    "benefit": "₹1,200 a month into your bank account",
+    "status": "please_check",
+    "exclusiveGroup": "monthly_pension",
+    "criteria": [
+     {
+      "criterionId": "woman",
+      "label": "A woman",
+      "fact": "gender",
+      "status": "met",
+      "value": "female",
+      "note": null
+     },
+     {
+      "criterionId": "age_from",
+      "label": "Aged 40 or more",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "age_to",
+      "label": "Aged 79 or less",
+      "fact": "age",
+      "status": "met",
+      "value": 68,
+      "note": null
+     },
+     {
+      "criterionId": "widowed",
+      "label": "Her husband has died (his death certificate names her)",
+      "fact": "widowed",
+      "status": "conflict",
+      "value": null,
+      "note": "The husband's or wife's name on the death certificate is spelt a little differently from your name. Please check it."
+     },
+     {
+      "criterionId": "poor_household",
+      "label": "A poor household on the ration card (AAY, BPL or PHH)",
+      "fact": "ration_card_category",
+      "status": "met",
+      "value": "PHH",
+      "note": null
+     }
+    ],
+    "documents": [
+     {
+      "documentType": "identity",
+      "documentId": "id",
+      "status": "usable"
+     },
+     {
+      "documentType": "death_certificate",
+      "documentId": "death",
+      "status": "usable"
+     },
+     {
+      "documentType": "ration_card",
+      "documentId": "ration",
+      "status": "usable"
+     },
+     {
+      "documentType": "bank_passbook",
+      "documentId": "bank",
+      "status": "usable"
+     }
+    ],
+    "gaps": [
+     {
+      "documentType": "death_certificate",
+      "documentId": "death",
+      "reason": "check",
+      "message": "The husband's or wife's name on the death certificate is spelt a little differently from your name. Please check it."
+     }
+    ],
+    "toConfirm": [
+     {
+      "key": "not_remarried",
+      "label": "I have not married again",
+      "confirmed": false
+     },
+     {
+      "key": "no_other_pension",
+      "label": "I do not get another government pension",
+      "confirmed": false
+     }
+    ]
+   }
+  ],
+  "notes": [],
+  "declarations": {},
+  "package": null,
+  "createdAt": "2026-11-21T10:00:00Z"
+ }
+}
