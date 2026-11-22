@@ -10,9 +10,24 @@ export const STAGES = [
   'Picking the best three',
 ]
 
+/** The same for a search from a lab report: its results are read instead of words. */
+export const LAB_STAGES = [
+  'Reading the results on your lab report',
+  'Choosing the right kind of doctor',
+  'Asking Practo for doctors nearby (live, via Apify)',
+  'Checking registrations',
+  'Picking the best three',
+]
+
+/** The stages for this search (by its result, once there is one). */
+export function stagesFor(result) {
+  return result?.labReport ? LAB_STAGES : STAGES
+}
+
 // The step that finishes each stage. The other steps (validate_request, understand_request,
 // confirm_emergency, ask_clarification, locate, ask_location, rank) happen within a stage.
-const FINISHES = { safety_check: 0, map_specialty: 1, search_doctors: 2, verify: 3, explain: 4 }
+// read_lab_report is the first stage of a search from a lab report (it has no safety_check).
+const FINISHES = { safety_check: 0, read_lab_report: 0, map_specialty: 1, search_doctors: 2, verify: 3, explain: 4 }
 
 /** How many stages are done once this step has finished (never fewer than before). */
 export function stagesDone(before, step) {
@@ -29,7 +44,10 @@ export function doneWhenAsked(status) {
 export const QUESTIONS = new Set(['needs_location', 'needs_clarification', 'needs_emergency_confirmation'])
 
 /** The heading and the sentence for a search that ended without doctors to show. */
-export function endWords(status) {
+export function endWords(status, { fromLabReport = false } = {}) {
+  if (status === 'rejected' && fromLabReport) {
+    return { heading: 'No results on this lab report', text: 'Please check the report in My documents.' }
+  }
   switch (status) {
     case 'no_doctors_nearby':
       return { heading: 'No doctor found nearby', text: 'We looked, but found no doctor of this kind near you.' }
@@ -60,6 +78,22 @@ export function searchChip(status) {
   if (QUESTIONS.has(status)) return { kind: 'check', word: 'Waiting for your answer' }
   if (status === 'running') return { kind: 'reading', word: 'Still looking' }
   return { kind: 'missing', word: 'No doctors shown' }
+}
+
+// How a result outside its range is said (backend tools/lab_specialty.py: high, low, or the word found).
+const LAB_FLAGS = { high: 'High', low: 'Low', positive: 'Positive', reactive: 'Reactive', present: 'Present' }
+
+/** "High", "Low", "Positive"…; the flag as sent for one this app does not know. */
+export function labFlagWord(flag) {
+  return LAB_FLAGS[flag] ?? String(flag ?? '')
+}
+
+/** "1 result had no normal range we could read, so it was not compared."; null for none. */
+export function unjudgedWords(count) {
+  if (!Number.isInteger(count) || count < 1) return null
+  return count === 1
+    ? '1 result had no normal range we could read, so it was not compared.'
+    : `${count} results had no normal range we could read, so they were not compared.`
 }
 
 // The emergency signs the backend's rules know (backend/tools/red_flags.py), in plain words.

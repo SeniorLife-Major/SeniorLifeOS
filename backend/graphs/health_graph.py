@@ -14,6 +14,13 @@
                                 (tools/doctor_search.py); none within 20 km: a general physician
         -> ask_clarification    unclear: one question, then the answer is checked from the start
         -> stop                 a task this graph doesn't handle yet
+    validate_request -> read_lab_report -> map_specialty -> locate -> ...   (a search from a lab report)
+
+From a lab report (lab-report-doctor-search): the person picks a lab report they have checked and
+saved; its results outside the normal range printed on it choose the kind of doctor by a fixed
+table (tools/lab_specialty.py), with no model and no network. Very abnormal values make it urgent
+("Please see a doctor today"). There are no words, so the emergency rules and the model are not
+used, and where to look is the phone's location or the one question (search_near "not_said").
 
 Safety rule (plan §5.2): the emergency check is deterministic and runs first. The model is a second
 check that can add an emergency the rules missed, never remove one: when it disagrees with the
@@ -60,12 +67,14 @@ from ..tools.provider_import import today_utc
 from ..tools.doctor_search import RADII_KM, DoctorListError, find_nearby, load_doctors
 from ..tools.doctor_verify import PRACTO_VERIFIED, registration_level, registration_note
 from ..tools.geocode import GeocodeError, device_location, find_place, search_near_from_text
+from ..tools.lab_specialty import SEE_TODAY, read_lab_results
 from ..tools.red_flags import emergency_message, emergency_numbers, find_red_flags
 from ..tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES, specialty_from_text
 from ..utils.checkpoints import is_encrypted
 from ..utils.tracing import install_safe_client
 
 MAX_QUERY_CHARS = 2000
+NO_LAB_RESULTS = "The lab report has no test results"
 CLARIFYING_QUESTION = "Which kind of doctor do you need, or what problem would you like help with?"
 # Asked when the model doubts a rule finding; the model words it in the person's language, this
 # is the fallback when it gives none.
@@ -126,6 +135,10 @@ class HealthState(TypedDict, total=False):
     current_location: dict[str, float]  # {"lat", "lon"} from the phone, shared with the person's permission
     home_location: dict[str, float]  # {"lat", "lon"} the home saved in the person's profile
     location_answer: Any  # the answer to the location question: a place in words, or {"lat", "lon"}
+    lab_report: dict[str, Any]  # instead of query: a confirmed lab report {document_id, report_date, lab_name, tests}
+
+    # From a lab report
+    lab_reading: dict[str, Any]  # tools/lab_specialty.read_lab_results: findings, specialty, see_today, reason
 
     # Outputs / control
     red_flags: list[str]  # found by the fixed rules
@@ -174,6 +187,12 @@ def validate_request(state: HealthState) -> dict[str, Any]:
     query = state.get("query")
     if not state.get("actor_id"):
         errors.append("actor_id is required")
+    if state.get("lab_report") is not None:  # a search from a lab report: its results, not words
+        tests = state["lab_report"].get("tests") if isinstance(state["lab_report"], dict) else None
+        if not isinstance(tests, list) or not tests:
+            errors.append(NO_LAB_RESULTS)
+        return {"errors": errors, "status": "rejected" if errors else "processing",
+                "route": "stop" if errors else "lab_report", "events": add_event(state, "validate_request:lab_report")}
     if not isinstance(query, str) or not query.strip():
         errors.append("Say or type what you need")
     elif len(query) > MAX_QUERY_CHARS:
@@ -265,6 +284,29 @@ def understand_request(state: HealthState) -> dict[str, Any]:
         **step,
         "warnings": [*warnings, note] if note else warnings,
         "events": add_event(state, f"understand_request:{update['reading_source']}:{update['intent']}"),
+    }
+
+
+def read_lab_report(state: HealthState) -> dict[str, Any]:
+    """The kind of doctor from a lab report's results (tools/lab_specialty.py): the fixed table, on
+    this machine. Fills what understand_request fills for words, so the rest of the search is the
+    same: no preferences, where to look not said, urgent when a value is very abnormal."""
+    reading = read_lab_results(state["lab_report"]["tests"])
+    return {
+        "lab_reading": reading,
+        "reading_source": "lab_report",
+        "red_flags": [],
+        "model_emergency": None,
+        "model_signs": [],
+        "intent": "find_doctor",
+        "specialty": reading["specialty"],
+        "urgency": "urgent" if reading["see_today"] else "routine",
+        "preferences": {},
+        "search_near": "not_said",
+        "reason": reading["reason"],
+        "route": "find_doctor",
+        "events": add_event(state, f"read_lab_report:{reading['specialty']}:{len(reading['findings'])}"
+                            + (":see_today" if reading["see_today"] else "")),
     }
 
 
@@ -581,6 +623,9 @@ def explain(state: HealthState) -> dict[str, Any]:
     fallback = state.get("doctor_fallback") == GENERAL_PHYSICIAN
     top = state.get("top_doctors") or []
     notes = [VAGUE_NEED + "."] if state.get("reason") == VAGUE_NEED else []
+    lab = state.get("lab_reading")
+    if lab:  # why this kind of doctor, first; and "see a doctor today" when a value is very abnormal
+        notes = [lab["reason"], *([SEE_TODAY] if lab["see_today"] else [])]
     if fallback:
         notes.append(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES[specialty], km=FAR))
     notes += [RELAXED_NOTES[name] for name in state.get("relaxed_filters", []) if name in RELAXED_NOTES]
@@ -607,6 +652,7 @@ def build_health_graph(checkpointer: Any = None):
     graph = StateGraph(HealthState)
     graph.add_node("validate_request", validate_request)
     graph.add_node("safety_check", safety_check)
+    graph.add_node("read_lab_report", read_lab_report)
     graph.add_node("understand_request", understand_request)
     graph.add_node("emergency", emergency)
     graph.add_node("confirm_emergency", confirm_emergency)
@@ -620,7 +666,9 @@ def build_health_graph(checkpointer: Any = None):
     graph.add_node("explain", explain)
 
     graph.add_edge(START, "validate_request")
-    graph.add_conditional_edges("validate_request", route_step, {"continue": "safety_check", "stop": END})
+    graph.add_conditional_edges("validate_request", route_step, {"continue": "safety_check",
+                                                                 "lab_report": "read_lab_report", "stop": END})
+    graph.add_edge("read_lab_report", "map_specialty")
     graph.add_edge("safety_check", "understand_request")
     after_understanding = {"emergency": "emergency", "confirm_emergency": "confirm_emergency",
                            "find_doctor": "map_specialty", "clarify": "ask_clarification", "stop": END}

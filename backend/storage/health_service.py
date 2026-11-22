@@ -9,13 +9,19 @@ What is kept where:
 - the encrypted checkpoint, only while a question waits (at most PAUSE_HOURS): the whole state,
   with the request text, the person's name and the phone's location;
 - graph_runs.result, RESULT_DAYS from the request: what the person was shown (status, kind of
-  doctor, the place's name, the doctors, the plain-text answer, the question asked). Never the
-  request text, the person's name or the phone's coordinates;
+  doctor, the place's name, the doctors, the plain-text answer, the question asked; for a search
+  from a lab report, the names of the results outside their range, high or low, and the kind of
+  doctor each points to). Never the request text, the person's name, the phone's coordinates
+  or a lab report's values;
 - audit events: that a request was made, answered, and how it ended. Never the kind of doctor or
   the emergency signs (the audit trail is kept longer than results).
 
 start() and answer() check and record the request at once, then return an iterator that runs
 the graph: ("step", {"step": node}) for each step finished, last ("result", view).
+
+A search can start from a lab report instead of words (lab-report-doctor-search): start() is
+given the id of one of the person's lab reports, which must be checked and saved (confirmed);
+its saved results go to the graph, which picks the kind of doctor from them.
 """
 
 from __future__ import annotations
@@ -43,8 +49,8 @@ from ..tools.specialties import SPECIALTIES
 from ..utils.checkpoints import forget_run
 from .limits import count, wait_words
 from .models import GraphRun
-from .repository import audit
-from .service import WorkflowFailed, run_config
+from .repository import audit, owned_document
+from .service import WorkflowFailed, run_config, vault_record
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +68,11 @@ NOT_UNDERSTOOD = "I could not understand what you need. Please start again and s
 TOO_LONG = "The request became too long. Please start again with a shorter one."
 EXPIRED = "This question was not answered in time. Please start again."
 FAILED = "Something went wrong with this request. Please try again."
+NO_RESULTS = "This lab report has no test results. Please check it in My documents."
+LAB_NOT_FOUND = "This lab report was not found"
+NOT_A_LAB_REPORT = "This document is not a lab report"
+LAB_NOT_CHECKED = "Please check this lab report's details before using it"
+LAB_NOT_USABLE = "This lab report could not be read. Please add it again."
 CLINIC_FIELDS = ("name", "locality", "address", "city", "hours", "lat", "lon")
 
 
@@ -106,7 +117,21 @@ def empty_view(run_id: str, status: str, notes: list[str] | None = None) -> dict
     return {"request_id": run_id, "status": status, "specialty": None, "doctor_fallback": None,
             "search_location": None, "search_radius_km": None, "doctors": [], "other_doctors": [],
             "is_top_choice": False, "answer": None, "notes": notes or [], "attribution": None,
-            "question": None, "options": [], "emergency": None, "doctor_source": None}
+            "question": None, "options": [], "emergency": None, "doctor_source": None, "lab_report": None}
+
+
+def lab_view(values: dict[str, Any]) -> dict[str, Any] | None:
+    """For a search from a lab report: which report, why this kind of doctor, and each result
+    outside its range by name with high or low (never its value), and whether to go today."""
+    reading, report = values.get("lab_reading"), values.get("lab_report")
+    if not isinstance(reading, dict) or not isinstance(report, dict):
+        return None
+    return {"document_id": report.get("document_id"), "report_date": report.get("report_date"),
+            "lab_name": report.get("lab_name"), "summary": reading.get("reason"),
+            "see_today": bool(reading.get("see_today")), "unjudged": int(reading.get("unjudged") or 0),
+            "findings": [{"test": item["test"], "flag": item["flag"], "specialty": item["specialty"],
+                          "specialty_label": SPECIALTIES.get(item["specialty"])}
+                         for item in reading.get("findings") or []]}
 
 
 def source_view(source: Any) -> dict[str, Any] | None:
@@ -129,6 +154,7 @@ def result_view(run_id: str, values: dict[str, Any], waiting: str | None = None,
     question's payload). Only what is listed here is ever stored or sent."""
     status = WAITING[waiting] if waiting else values.get("status") or "failed"
     view = empty_view(run_id, status, person_notes(values.get("warnings")))
+    view["lab_report"] = lab_view(values)
     specialty = values.get("specialty")
     if values.get("specialty_label") and specialty in SPECIALTIES:  # the kind of doctor is settled
         view["specialty"] = {"key": specialty, "label": SPECIALTIES[specialty]}
@@ -153,7 +179,7 @@ def result_view(run_id: str, values: dict[str, Any], waiting: str | None = None,
     elif status == "not_understood":
         view["notes"].append(NOT_UNDERSTOOD)
     elif status == "rejected":
-        view["notes"].append(TOO_LONG)
+        view["notes"].append(NO_RESULTS if values.get("lab_report") is not None else TOO_LONG)
     if waiting:
         payload = payload or {}
         view["question"] = payload.get("question")
@@ -180,21 +206,25 @@ class HealthService:
 
     # ---- asking ------------------------------------------------------------------------------
 
-    def start(self, owner_id: str, query: str, *, current_location: dict[str, float] | None = None,
+    def start(self, owner_id: str, query: str | None, *, lab_report_id: str | None = None,
+              current_location: dict[str, float] | None = None,
               home_location: dict[str, float] | None = None, use_llm: bool = False,
               medical_cloud_consent: bool = False, owner_name: str | None = None) -> Iterator[tuple[str, dict[str, Any]]]:
         """owner_name is hidden from the model's prompt; current_location is the phone's (lat, lon);
-        home_location the home saved in the profile, used only when the person means home."""
-        self._count_search(owner_id, emergency=bool(find_red_flags(query)))
+        home_location the home saved in the profile, used only when the person means home.
+        lab_report_id: one of the person's confirmed lab reports, instead of query; its results
+        choose the kind of doctor (checked here, before the search is counted)."""
+        lab_report = self._lab_report(owner_id, lab_report_id) if lab_report_id else None
+        self._count_search(owner_id, emergency=lab_report is None and bool(find_red_flags(query or "")))
         self.purge_expired()
         run_id = str(uuid4())
         with self.sessions.begin() as session:
             session.add(GraphRun(id=run_id, owner_id=owner_id, graph=GRAPH, status="running", result={}))
-            audit(session, owner_id, "health.request_started", None, run_id=run_id, use_llm=use_llm,
-                  medical_cloud=medical_cloud_consent, location_shared=current_location is not None,
-                  home_saved=home_location is not None)
-        state = {"actor_id": owner_id, "query": query, "use_interrupt": True, "use_llm": use_llm,
-                 "medical_cloud_consent": medical_cloud_consent,
+            audit(session, owner_id, "health.request_started", lab_report_id if lab_report else None, run_id=run_id,
+                  use_llm=use_llm, medical_cloud=medical_cloud_consent, location_shared=current_location is not None,
+                  home_saved=home_location is not None, from_lab_report=lab_report is not None)
+        state = {"actor_id": owner_id, **({"lab_report": lab_report} if lab_report else {"query": query}),
+                 "use_interrupt": True, "use_llm": use_llm, "medical_cloud_consent": medical_cloud_consent,
                  **({"current_location": current_location} if current_location else {}),
                  **({"home_location": home_location} if home_location else {}),
                  **({"owner_name": owner_name} if owner_name else {})}
@@ -220,6 +250,28 @@ class HealthService:
             audit(session, owner_id, "health.answered", None, run_id=run_id, kind=kind)
         resume = {"call_emergency": value} if kind == "call_emergency" else value
         return self._steps(owner_id, run_id, Command(resume=resume))
+
+    def _lab_report(self, owner_id: str, document_id: str) -> dict[str, Any]:
+        """The person's lab report as the graph takes it: its saved results, report date and lab.
+        Someone else's, or none: not found. Not a lab report: refused. Not checked and saved yet,
+        or refused when it was read: a conflict, with what to do."""
+        with self.sessions() as session:
+            document = owned_document(session, owner_id, document_id)
+            if document is None:
+                raise NotFoundException(LAB_NOT_FOUND)
+            if document.document_type != "lab_report":
+                raise ValidationException(NOT_A_LAB_REPORT)
+            record = vault_record(document)
+        if record is None:
+            raise ConflictException(LAB_NOT_USABLE)
+        if record["status"] != "confirmed":
+            raise ConflictException(LAB_NOT_CHECKED)
+        fields = record["confirmed_fields"]
+        tests = (fields.get("tests") or {}).get("value")
+        if not isinstance(tests, list) or not tests:
+            raise ValidationException(NO_RESULTS)
+        return {"document_id": document_id, "report_date": (fields.get("report_date") or {}).get("value"),
+                "lab_name": (fields.get("lab_name") or {}).get("value"), "tests": tests}
 
     def _count_search(self, owner_id: str, emergency: bool) -> None:
         """limits.doctor_searches_per_hour per person (requests and answers: each may use the AI
@@ -300,7 +352,8 @@ class HealthService:
                                        GraphRun.created_at >= now() - timedelta(days=RESULT_DAYS))
                 .order_by(GraphRun.created_at.desc(), GraphRun.id).limit(limit)).scalars().all()
         return [{"request_id": run.id, "status": run.outcome or run.status,
-                 "specialty": (run.result or {}).get("specialty"), "created_at": run.created_at} for run in runs]
+                 "specialty": (run.result or {}).get("specialty"), "created_at": run.created_at,
+                 "from_lab_report": bool((run.result or {}).get("lab_report"))} for run in runs]
 
     # ---- keeping only what is needed ---------------------------------------------------------
 

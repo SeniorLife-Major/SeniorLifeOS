@@ -7,8 +7,9 @@ import { FocusedTitle } from '../components/FocusedTitle'
 import { Screen } from '../components/Screen'
 import { DoctorCard } from '../doctor/DoctorCard'
 import { EmergencyView } from '../doctor/EmergencyView'
+import { LabReportPanel, SeeToday } from '../doctor/LabReportPanel'
 import { Question } from '../doctor/Question'
-import { doneWhenAsked, endWords, QUESTIONS, resultsHeading, sourceWords } from '../doctor/search'
+import { doneWhenAsked, endWords, QUESTIONS, resultsHeading, sourceWords, stagesFor } from '../doctor/search'
 import { SearchProgress } from '../doctor/SearchProgress'
 import { useSearchRun } from '../doctor/useSearchRun'
 
@@ -99,7 +100,7 @@ function SearchResult({ requestId }) {
     return (
       <Screen title="Finding a doctor" back={BACK}>
         <h1 className="page-title">Finding a doctor</h1>
-        <SearchProgress done={run.done} />
+        <SearchProgress done={run.done} stages={stagesFor(result)} />
       </Screen>
     )
   }
@@ -138,12 +139,14 @@ function Doctors({ result }) {
         <FocusedTitle>{heading}</FocusedTitle>
         {result.specialty && <p className="lead">{result.specialty.label}</p>}
       </div>
+      <SeeToday labReport={result.labReport} />
       {source && (
         <p className="doctor-source">
           <span className={`chip ${source.kind === 'live' ? 'chip--ready' : 'chip--check'}`}>{source.chip}</span>
           <span>{source.text}</span>
         </p>
       )}
+      <LabReportPanel labReport={result.labReport} />
       <Notes notes={result.notes} />
       {result.doctors.map((doctor, index) => (
         <DoctorCard key={doctor.doctorId ?? index} doctor={doctor} id={`doctor-${index}`} />
@@ -172,7 +175,7 @@ function Doctors({ result }) {
 
 /** A search that ended without doctors to show: why, the backend's notes, and what to do. */
 function Ended({ result, reload }) {
-  const words = endWords(result.status)
+  const words = endWords(result.status, { fromLabReport: Boolean(result.labReport) })
   return (
     <Screen title={words.heading} back={BACK}>
       <div className="intro">
@@ -180,6 +183,8 @@ function Ended({ result, reload }) {
         <p className="lead">{words.text}</p>
         {result.specialty && <p className="lead">Kind of doctor: {result.specialty.label}</p>}
       </div>
+      <SeeToday labReport={result.labReport} />
+      <LabReportPanel labReport={result.labReport} />
       <Notes notes={result.notes} />
       {result.status === 'running' ? (
         <Button onClick={reload}>Check again</Button>

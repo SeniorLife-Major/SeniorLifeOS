@@ -276,6 +276,11 @@ export function DocumentPage() {
       )}
 
       {document.status === 'confirmed' && <SavedDetails document={document} />}
+      {document.status === 'confirmed' && document.documentType === 'lab_report' && (
+        <ButtonLink to={`/doctor/lab?report=${encodeURIComponent(document.documentId)}`} icon="stethoscope">
+          Find a doctor for this report
+        </ButtonLink>
+      )}
 
       {canAddNewCopy(document) && !expired && (
         <ButtonLink to={newCopyPath} variant="secondary" icon="plus">

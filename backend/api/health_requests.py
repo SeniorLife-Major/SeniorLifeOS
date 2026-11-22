@@ -1,6 +1,11 @@
 """Doctor search (fastapi-backend Phase 2): ask for a doctor in your own words, answer the one
 question it may ask, and see the result again for 30 days (storage/health_service.py).
 
+Or start from a lab report (lab-report-doctor-search): labReportId instead of query, the id of
+one of the person's lab reports that has been checked and saved. Its results outside the normal
+range printed on it choose the kind of doctor by a fixed table; no model reads it. Someone
+else's report or none: 404; not a lab report: 422; not checked yet, or refused: 409.
+
 The AI model always reads the request, and the doctor list may be refreshed for it (the owner's
 choice, frontend Decision 73: doctor search needs the model). The saved consents in the profile
 are for documents only. A request can still say useLlm / medicalCloudConsent false (tests, API
@@ -49,10 +54,19 @@ class LocationDto(CamelModel):
 
 
 class HealthRequestCreate(CamelModel):
-    query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)  # in the person's own words
+    """Exactly one of query (the need in words) or lab_report_id (a checked and saved lab report)."""
+
+    query: str | None = Field(default=None, min_length=1, max_length=MAX_QUERY_CHARS)  # in the person's own words
+    lab_report_id: str | None = Field(default=None, min_length=1, max_length=64)
     current_location: LocationDto | None = None  # the phone's, shared with permission
     use_llm: StrictBool | None = None  # None: yes (doctor search always uses the model)
     medical_cloud_consent: StrictBool | None = None  # None: yes
+
+    @model_validator(mode="after")
+    def words_or_lab_report(self) -> HealthRequestCreate:
+        if (self.query is None) == (self.lab_report_id is None):
+            raise ValueError("Send exactly one of query or labReportId")
+        return self
 
 
 class HealthAnswer(CamelModel):
@@ -141,6 +155,25 @@ class DoctorSourceDto(CamelModel):
     checked_on: str | None = None  # live: today; saved: the newest date among those shown
 
 
+class LabFindingDto(CamelModel):
+    test: str  # the result's name as saved from the report
+    flag: str  # high, low, or the word found (positive, reactive, present)
+    specialty: str  # the kind of doctor this result points to
+    specialty_label: str | None = None
+
+
+class LabReportDto(CamelModel):
+    """A search from a lab report: why this kind of doctor (no values are kept or sent)."""
+
+    document_id: str | None = None
+    report_date: str | None = None
+    lab_name: str | None = None
+    summary: str | None = None  # the sentence saying why this kind of doctor
+    see_today: bool = False  # a result is very abnormal: "Please see a doctor today"
+    unjudged: int = 0  # results with no normal range that could be read
+    findings: list[LabFindingDto] = []
+
+
 class HealthResultDto(CamelModel):
     request_id: str
     status: str
@@ -158,6 +191,7 @@ class HealthResultDto(CamelModel):
     options: list[str] = []
     emergency: EmergencyDto | None = None
     doctor_source: DoctorSourceDto | None = None  # with doctors_found only
+    lab_report: LabReportDto | None = None  # a search from a lab report
 
 
 class HealthRequestSummaryDto(CamelModel):
@@ -165,6 +199,7 @@ class HealthRequestSummaryDto(CamelModel):
     status: str
     specialty: SpecialtyDto | None = None
     created_at: datetime
+    from_lab_report: bool = False
 
 
 # ---- helpers ------------------------------------------------------------------------------
@@ -234,12 +269,12 @@ def respond(events: Iterator[tuple[str, dict[str, Any]]], request: Request, resp
 # ---- routes -------------------------------------------------------------------------------
 
 @router.post("/health-requests", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[HealthResultDto],
-             summary="Find a doctor: describe the need in your own words")
+             summary="Find a doctor: describe the need in your own words, or choose a saved lab report")
 def create_health_request(body: HealthRequestCreate, request: Request, response: Response, actor: Actor,
                           health: Health, accounts: Accounts) -> Any:
     saved = accounts.saved_choices(actor)  # the home and the name; its consents are for documents
     events = health.start(
-        actor, body.query,
+        actor, body.query, lab_report_id=body.lab_report_id,
         current_location=body.current_location.model_dump() if body.current_location else None,
         home_location=saved["home"],
         use_llm=True if body.use_llm is None else body.use_llm,

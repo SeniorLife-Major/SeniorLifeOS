@@ -7,6 +7,7 @@ import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
 import { useProfile } from '../profile/ProfileProvider'
 import { CallButtons } from './CallButtons'
+import { LabReportPanel, SeeToday } from './LabReportPanel'
 
 const BACK = { to: '/doctor', label: 'Find a doctor' }
 const PERMISSION_DENIED = 1 // GeolocationPositionError.PERMISSION_DENIED
@@ -163,6 +164,7 @@ function LocationQuestion({ result, answer, problem }) {
         <FocusedTitle>One question</FocusedTitle>
         <p className="lead">{result.question}</p>
       </div>
+      <SeeToday labReport={result.labReport} />
       <Problem text={problemText(problem) ?? phoneProblem} />
       <div className="place-choices">
         {(result.options ?? []).map((option) => (
@@ -196,6 +198,7 @@ function LocationQuestion({ result, answer, problem }) {
           Use this
         </Button>
       </form>
+      <LabReportPanel labReport={result.labReport} />
       <p className="fine-print">
         <Icon name="lock" size={18} /> Where you are is used for this search only. It is not saved.
       </p>

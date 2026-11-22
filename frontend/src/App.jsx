@@ -8,6 +8,7 @@ import { DocumentPage } from './pages/DocumentPage'
 import { DocumentsPage } from './pages/DocumentsPage'
 import { DoctorPage } from './pages/DoctorPage'
 import { DoctorResultPage } from './pages/DoctorResultPage'
+import { LabReportSearchPage } from './pages/LabReportSearchPage'
 import { HomeLocationPage } from './pages/HomeLocationPage'
 import { HomePage } from './pages/HomePage'
 import { NewCopyPage } from './pages/NewCopyPage'
@@ -55,6 +56,7 @@ export function App() {
             <Route path="/documents/:documentId/new-copy" element={<NewCopyPage />} />
             <Route path="/documents/:documentId/new-copy/type-in" element={<NewCopyTypeInPage />} />
             <Route path="/doctor" element={<DoctorPage />} />
+            <Route path="/doctor/lab" element={<LabReportSearchPage />} />
             <Route path="/doctor/:requestId" element={<DoctorResultPage />} />
             <Route path="/benefits" element={<BenefitsPage />} />
             <Route path="/benefits/:schemeId" element={<SchemePage />} />

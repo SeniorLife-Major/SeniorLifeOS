@@ -185,7 +185,14 @@ function ReviewFlow({ documentId, review }) {
             : `Your ${inSentence(name)} is now in My documents. Only you can open it.`}
           {hasId && ' ID numbers are hidden now; we show just the last 4 digits.'}
         </p>
-        <ButtonLink to="/documents">Back to My documents</ButtonLink>
+        {review.documentType === 'lab_report' && (
+          <ButtonLink to={`/doctor/lab?report=${encodeURIComponent(documentId)}`} icon="stethoscope">
+            Find a doctor for this report
+          </ButtonLink>
+        )}
+        <ButtonLink to="/documents" variant={review.documentType === 'lab_report' ? 'secondary' : 'primary'}>
+          Back to My documents
+        </ButtonLink>
       </Screen>
     )
   }

@@ -22,12 +22,25 @@ import { api } from './client'
 //   attribution      must be shown when the place came from place search
 //   question, options                 the question that waits, and places to pick from
 //   emergency        { numbers: [{ number, for }], message, redFlags, modelSigns, source }
+//   labReport        a search from a lab report (else null):
+//                    { documentId, reportDate, labName, summary, seeToday, unjudged,
+//                      findings: [{ test, flag, specialty, specialtyLabel }] }
+//                    flag is high, low, or the word found (positive, reactive, present); no values
 //
 // It is kept for 30 days; a question not answered within 24 hours expires.
+//
+// A search can start from a lab report instead of words (startLabSearch): one of the person's
+// lab reports that has been checked and saved. Its results outside the normal range printed on
+// it choose the kind of doctor by a fixed table in the backend; no AI reads them for this.
 
 /** Starts a search. onStep(step) is called with each step's name as the backend finishes it. */
 export function startSearch(query, { onStep, signal } = {}) {
   return api('/health-requests', { method: 'POST', body: { query }, onStep, signal })
+}
+
+/** Starts a search from a saved lab report (its documentId). Like startSearch otherwise. */
+export function startLabSearch(labReportId, { onStep, signal } = {}) {
+  return api('/health-requests', { method: 'POST', body: { labReportId }, onStep, signal })
 }
 
 /** Answers the question a search asked: { location: "Andheri West, Mumbai" | { lat, lon } },
@@ -45,7 +58,7 @@ export function getSearch(requestId, signal) {
   return api(`/health-requests/${encodeURIComponent(requestId)}`, { signal })
 }
 
-/** The searches of the last 30 days, newest first: [{ requestId, status, specialty, createdAt }]. */
+/** The searches of the last 30 days, newest first: [{ requestId, status, specialty, createdAt, fromLabReport }]. */
 export function listSearches(signal, limit = 5) {
   return api(`/health-requests?limit=${limit}`, { signal })
 }

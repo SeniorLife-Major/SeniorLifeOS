@@ -16,13 +16,17 @@ from backend.errors import NotFoundException, ValidationException
 from backend.errors.exceptions import ConflictException
 from backend.graphs.health_graph import CALL_QUESTION, CLARIFYING_QUESTION, LOCATION_QUESTIONS, NO_DOCTORS
 from backend.storage.db import make_sessions
-from backend.storage.health_service import EXPIRED, FAILED, HealthService, now, source_view
+from backend.storage.health_service import (
+    EXPIRED, FAILED, LAB_NOT_CHECKED, LAB_NOT_FOUND, LAB_NOT_USABLE, NOT_A_LAB_REPORT, HealthService, now, source_view,
+)
 from backend.storage.models import AuditEvent, GraphRun
 from backend.storage.service import WorkflowFailed, run_config
 from backend.tools.geocode import GeocodeError
+from backend.tools.lab_specialty import SEE_TODAY
 from test_health_graph import (
     FAKE_DOCTORS, IN_ANDHERI, PUNE, FakePlaces, FakeStructuredModel, not_fetched, found, no_network, reading,
 )
+from test_privacy import FAKE_HASH_KEY, hash_key_env
 from test_storage_db import OTHER_OWNER, OWNER, DatabaseCase
 
 PERSONAL = "I am Meera Rao, 9876543210"
@@ -267,6 +271,103 @@ class KeepingTests(HealthCase):
         self.health.purge_expired()
         self.assertIsNone(self.run_row(old))
         self.assertEqual([item["request_id"] for item in self.health.list(OWNER)], [recent])
+
+
+LAB_TESTS = [{"name": "LDL Cholesterol", "value": "172", "unit": "mg/dL", "ref_range": "< 100"},
+             {"name": "Urine Sugar", "value": "Nil"}]
+
+
+class LabReportTests(HealthCase):
+    """A search from a lab report (lab-report-doctor-search): only a checked and saved one of the
+    person's own lab reports; its results choose the kind of doctor; no values are kept."""
+
+    def type_in(self, owner=OWNER, **fields):
+        return self.typed(owner, "lab_report", {"lab_name": "Demo Path Labs", "report_date": "2026-11-02",
+                                                "tests": LAB_TESTS, **fields})
+
+    def typed(self, owner, document_type, fields):
+        with patch("backend.utils.privacy.find_env_file", return_value=None), hash_key_env(FAKE_HASH_KEY):
+            return self.service.create_manual(owner, document_type, {"name": "Meera Rao", **fields})["document_id"]
+
+    def test_a_saved_lab_report_finds_the_specialist(self):
+        document_id = self.type_in()
+        steps, result = final(self.health.start(OWNER, None, lab_report_id=document_id, current_location=IN_ANDHERI))
+        self.assertEqual(steps[:3], ["validate_request", "read_lab_report", "map_specialty"])
+        self.assertNotIn("safety_check", steps)
+        self.assertEqual((result["status"], result["specialty"]["key"]), ("doctors_found", "cardiologist"))
+        self.assertEqual(result["lab_report"], {
+            "document_id": document_id, "report_date": "2026-11-02", "lab_name": "Demo Path Labs",
+            "summary": result["lab_report"]["summary"], "see_today": False, "unjudged": 0,
+            "findings": [{"test": "LDL Cholesterol", "flag": "high", "specialty": "cardiologist",
+                          "specialty_label": "Cardiologist (heart)"}]})
+        self.assertIn("LDL Cholesterol (high)", result["lab_report"]["summary"])
+        self.assertIn(result["lab_report"]["summary"], result["answer"])
+        self.assertEqual(self.health.get(OWNER, result["request_id"]), result)
+        self.assertEqual(self.health.list(OWNER)[0]["from_lab_report"], True)
+        [(action, detail)] = [item for item in self.audit_details() if item[0] == "health.request_started"]
+        self.assertTrue(detail["from_lab_report"])
+
+    def audit_details(self):
+        with self.sessions() as session:
+            return [(event.action, event.detail) for event in session.execute(select(AuditEvent)).scalars()]
+
+    def test_the_values_are_never_kept_with_the_search(self):
+        document_id = self.type_in()
+        final(self.health.start(OWNER, None, lab_report_id=document_id, current_location=IN_ANDHERI))
+        stored = self.stored_text()
+        self.assertIn("LDL Cholesterol", stored)  # the name of the result, high or low
+        for value in ("172", "< 100", "mg/dL", "Meera"):
+            self.assertNotIn(value, stored)
+
+    def test_a_very_abnormal_value_says_see_a_doctor_today(self):
+        document_id = self.type_in(tests=[{"name": "Potassium", "value": "6.8", "unit": "mmol/L",
+                                           "ref_range": "3.5 - 5.1"}])
+        _, result = final(self.health.start(OWNER, None, lab_report_id=document_id, current_location=IN_ANDHERI))
+        self.assertTrue(result["lab_report"]["see_today"])
+        self.assertIn(SEE_TODAY, result["answer"])
+        self.assertEqual(result["specialty"]["key"], "general_physician")
+
+    def test_without_the_phone_location_it_asks_where_and_keeps_the_reason(self):
+        document_id = self.type_in()
+        _, asked = final(self.health.start(OWNER, None, lab_report_id=document_id))
+        self.assertEqual(asked["status"], "needs_location")
+        self.assertEqual(asked["lab_report"]["findings"][0]["test"], "LDL Cholesterol")
+        _, result = final(self.health.answer(OWNER, asked["request_id"], "location", dict(IN_ANDHERI)))
+        self.assertEqual((result["status"], result["specialty"]["key"]), ("doctors_found", "cardiologist"))
+        self.assertEqual(result["lab_report"]["document_id"], document_id)
+
+    def test_only_the_persons_own_checked_lab_report(self):
+        other = self.type_in(owner=OTHER_OWNER)
+        with self.assertRaises(NotFoundException) as caught:
+            self.health.start(OWNER, None, lab_report_id=other)
+        self.assertEqual(caught.exception.message, LAB_NOT_FOUND)
+        with self.assertRaises(NotFoundException):
+            self.health.start(OWNER, None, lab_report_id="no-such-document")
+        prescription = self.typed(OWNER, "prescription", {"doctor_name": "Dr. Shah", "prescription_date": "2026-11-02",
+                                                          "medicines": [{"name": "Metformin 500 mg"}]})
+        with self.assertRaises(ValidationException) as caught:
+            self.health.start(OWNER, None, lab_report_id=prescription)
+        self.assertEqual(caught.exception.message, NOT_A_LAB_REPORT)
+        self.assertEqual(self.health.list(OWNER), [])  # nothing started, nothing counted
+
+    def test_a_report_waiting_to_be_checked_or_refused_is_not_used(self):
+        lines = [(text, 0.99) for text in ["Demo Path Labs", "Patient: Meera Rao", "Report Date: 02/11/2026",
+                                            "LDL Cholesterol 172 mg/dL < 100"]]
+        waiting = self.upload(lines, claimed_type="lab_report")
+        self.assertEqual(waiting["status"], "needs_review")
+        with self.assertRaises(ConflictException) as caught:
+            self.health.start(OWNER, None, lab_report_id=waiting["document_id"])
+        self.assertEqual(caught.exception.message, LAB_NOT_CHECKED)
+        self.review(waiting["document_id"], "reject")
+        with self.assertRaises(ConflictException) as caught:
+            self.health.start(OWNER, None, lab_report_id=waiting["document_id"])
+        self.assertEqual(caught.exception.message, LAB_NOT_USABLE)
+        self.assertEqual(self.health.list(OWNER), [])
+
+    def test_words_still_work_and_say_nothing_about_a_lab_report(self):
+        _, result = final(self.health.start(OWNER, "heart doctor near me", current_location=IN_ANDHERI))
+        self.assertIsNone(result["lab_report"])
+        self.assertEqual(self.health.list(OWNER)[0]["from_lab_report"], False)
 
 
 if __name__ == "__main__":

@@ -123,6 +123,7 @@ describe('Checking the details', () => {
       { action: 'confirm', edits: { annual_income: '266000', issue_date: '2025-12-23' } },
     ])
     expect(screen.getByRole('link', { name: 'Back to My documents' })).toHaveAttribute('href', '/documents')
+    expect(screen.queryByRole('link', { name: 'Find a doctor for this report' })).toBeNull() // lab reports only
   })
 
   it('checks what is typed before moving on, and can go back a detail or cancel a change', async () => {
@@ -391,6 +392,12 @@ describe('Lists', () => {
     await press(user, 'Save to my documents')
     await screen.findByRole('heading', { level: 1, name: 'Saved' })
     expect(backend.sent(SEND)[0].body.edits).toEqual({ tests: [{ name: 'HbA1c', value: '6.1', unit: '%', ref_range: '' }] })
+    // A saved lab report can be used to find a doctor at once (lab-report-doctor-search).
+    expect(screen.getByRole('link', { name: 'Find a doctor for this report' })).toHaveAttribute(
+      'href',
+      '/doctor/lab?report=doc-1',
+    )
+    expect(screen.getByRole('link', { name: 'Back to My documents' })).toHaveAttribute('href', '/documents')
   })
 })
 

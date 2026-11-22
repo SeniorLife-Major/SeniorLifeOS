@@ -1,12 +1,13 @@
 import { Icon } from '../components/Icon'
 import { STAGES } from './search'
 
-/** The stages of a search, ticked off as the backend finishes them (the mockup's Searching screen). */
-export function SearchProgress({ done }) {
+/** The stages of a search, ticked off as the backend finishes them (the mockup's Searching screen).
+ *  stages: STAGES, or LAB_STAGES for a search from a lab report. */
+export function SearchProgress({ done, stages = STAGES }) {
   return (
     <>
       <ol className="search-steps" aria-label="What we are doing">
-        {STAGES.map((label, index) => {
+        {stages.map((label, index) => {
           const state = index < done ? 'done' : index === done ? 'now' : 'later'
           return (
             <li key={label} className={`search-step search-step--${state}`}>
@@ -24,7 +25,7 @@ export function SearchProgress({ done }) {
       </ol>
       {/* One short sentence for screen readers as each stage starts. */}
       <p className="visually-hidden" role="status">
-        {done < STAGES.length ? `${STAGES[done]}…` : 'Almost done…'}
+        {done < stages.length ? `${stages[done]}…` : 'Almost done…'}
       </p>
     </>
   )

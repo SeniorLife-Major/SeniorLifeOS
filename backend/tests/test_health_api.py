@@ -15,11 +15,12 @@ from unittest.mock import patch
 from backend.core.config import LimitsSection
 from backend.api import deps, health_requests
 from backend.api.deps import StorageUnavailable
-from backend.storage.health_service import HealthService
+from backend.storage.health_service import NOT_A_LAB_REPORT, HealthService
 from backend.tools.specialties import SPECIALTIES
 from backend.utils.checkpoints import close_checkpointer
 from test_auth_api import CONFIG_USERS, ApiCase, config
 from test_health_graph import FAKE_DOCTORS, IN_ANDHERI, FakeStructuredModel, not_fetched, no_network, reading
+from test_privacy import FAKE_HASH_KEY, hash_key_env
 from test_storage_db import URL, DatabaseCase
 
 HERE = {"lat": IN_ANDHERI["lat"], "lon": IN_ANDHERI["lon"]}
@@ -248,6 +249,61 @@ class StreamTests(HealthApiCase):
                 return listed
             time.sleep(0.05)
         self.fail("the search did not finish")
+
+
+class LabReportApiTests(HealthApiCase):
+    """labReportId instead of query (lab-report-doctor-search)."""
+
+    def lab_report(self, headers=None, document_type="lab_report", **fields):
+        owner = self.client.get("/api/v1/auth/me", headers=headers or self.headers).json()["data"]["userId"]
+        base = ({"lab_name": "Demo Path Labs", "report_date": "2026-11-02",
+                 "tests": [{"name": "LDL Cholesterol", "value": "172", "unit": "mg/dL", "ref_range": "< 100"}]}
+                if document_type == "lab_report" else {})
+        with patch("backend.utils.privacy.find_env_file", return_value=None), hash_key_env(FAKE_HASH_KEY):
+            return self.service.create_manual(owner, document_type, {"name": "Meera Rao", **base, **fields})["document_id"]
+
+    def test_find_a_doctor_from_a_saved_lab_report(self):
+        document_id = self.lab_report()
+        response = self.ask({"labReportId": document_id, "currentLocation": HERE})
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()["data"]
+        self.assertEqual((data["status"], data["specialty"]["key"]), ("doctors_found", "cardiologist"))
+        lab = data["labReport"]
+        self.assertEqual((lab["documentId"], lab["reportDate"], lab["labName"], lab["seeToday"], lab["unjudged"]),
+                         (document_id, "2026-11-02", "Demo Path Labs", False, 0))
+        self.assertEqual(lab["findings"], [{"test": "LDL Cholesterol", "flag": "high", "specialty": "cardiologist",
+                                            "specialtyLabel": "Cardiologist (heart)"}])
+        self.assertNotIn("172", response.text)  # never the values
+        listed = self.client.get("/api/v1/health-requests", headers=self.headers).json()["data"]
+        self.assertEqual(listed[0]["fromLabReport"], True)
+
+    def test_a_search_from_words_has_no_lab_report(self):
+        data = self.ask({"query": "heart doctor near me", "currentLocation": HERE}).json()["data"]
+        self.assertIsNone(data["labReport"])
+        listed = self.client.get("/api/v1/health-requests", headers=self.headers).json()["data"]
+        self.assertEqual(listed[0]["fromLabReport"], False)
+
+    def test_the_steps_are_streamed(self):
+        events = sse_events(self.ask({"labReportId": self.lab_report(), "currentLocation": HERE}, stream=True).text)
+        self.assertEqual([data["step"] for _, data in events[:3]], ["validate_request", "read_lab_report",
+                                                                    "map_specialty"])
+        self.assertEqual(events[-1][1]["data"]["status"], "doctors_found")
+
+    def test_words_or_a_lab_report_not_both(self):
+        for body in ({"query": "knee", "labReportId": "x"}, {"labReportId": ""}, {"labReportId": "x" * 65},
+                     {"labReportId": 7}):
+            with self.subTest(body=str(body)[:50]):
+                self.assertEqual(self.ask(body).status_code, 422)
+
+    def test_someone_elses_or_not_a_lab_report(self):
+        other = self.bearer(self.token(login="9123456789", name="Ravi"))
+        response = self.ask({"labReportId": self.lab_report()}, headers=other)
+        self.assertEqual(response.status_code, 404)
+        prescription = self.lab_report(document_type="prescription", doctor_name="Dr. Shah",
+                                       prescription_date="2026-11-02", medicines=[{"name": "Metformin 500 mg"}])
+        response = self.ask({"labReportId": prescription}, stream=True)  # refused before the search starts
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["message"], NOT_A_LAB_REPORT)
 
 
 class ServiceSetupTests(DatabaseCase):

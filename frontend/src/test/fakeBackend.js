@@ -376,6 +376,18 @@ export const ALL_STEPS = [
   'explain',
 ]
 
+/** The steps of a search from a lab report that finds doctors (no safety_check or understand_request). */
+export const LAB_STEPS = [
+  'validate_request',
+  'read_lab_report',
+  'map_specialty',
+  'locate',
+  'search_doctors',
+  'verify',
+  'rank',
+  'explain',
+]
+
 /** A reply sent as server-sent events: each step, then the result (in the envelope). */
 export function streamed(result, steps = ALL_STEPS, status = 201) {
   return { status, events: [...steps.map((step) => ['step', { step }]), ['result', ok(result).body]] }
@@ -447,6 +459,22 @@ export function makeSearch(changes = {}) {
     question: null,
     options: [],
     emergency: null,
+    labReport: null,
+    ...changes,
+  }
+}
+
+/** What a search from a lab report says about it (LabReportDto): LDL high, for a heart doctor. */
+export function makeLabReport(changes = {}) {
+  return {
+    documentId: 'lab-1',
+    reportDate: '2026-11-02',
+    labName: 'Demo Path Labs',
+    summary:
+      'Your lab report has results outside the normal range printed on it that a Cardiologist (heart) looks after: LDL Cholesterol (high).',
+    seeToday: false,
+    unjudged: 0,
+    findings: [{ test: 'LDL Cholesterol', flag: 'high', specialty: 'cardiologist', specialtyLabel: 'Cardiologist (heart)' }],
     ...changes,
   }
 }
@@ -461,6 +489,7 @@ export function serveSearches(backend, searches = [], summaries) {
           status: search.status,
           specialty: search.specialty,
           createdAt: '2026-11-19T04:30:00Z',
+          fromLabReport: Boolean(search.labReport),
         })),
     ),
   )

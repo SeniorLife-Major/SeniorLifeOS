@@ -4,7 +4,10 @@ import {
   directionsLink,
   distanceWords,
   doneWhenAsked,
+  endWords,
   isSelfHarm,
+  LAB_STAGES,
+  labFlagWord,
   resultsHeading,
   safeLink,
   searchChip,
@@ -12,7 +15,46 @@ import {
   sourceWords,
   STAGES,
   stagesDone,
+  stagesFor,
+  unjudgedWords,
 } from './search'
+
+describe('a search from a lab report', () => {
+  it('ticks off its own first stage when the report is read, then the same stages as from words', () => {
+    const steps = ['validate_request', 'read_lab_report', 'map_specialty', 'locate', 'search_doctors', 'verify', 'rank', 'explain']
+    const seen = []
+    steps.reduce((done, step) => {
+      const next = stagesDone(done, step)
+      seen.push(next)
+      return next
+    }, 0)
+    expect(seen).toEqual([0, 1, 2, 2, 3, 4, 4, 5])
+    expect(LAB_STAGES).toHaveLength(STAGES.length)
+    expect(stagesFor(makeSearch({ labReport: { findings: [] } }))).toBe(LAB_STAGES)
+    expect(stagesFor(makeSearch())).toBe(STAGES)
+    expect(stagesFor(null)).toBe(STAGES)
+  })
+
+  it('says high, low and the words found, and how many results were not compared', () => {
+    expect(['high', 'low', 'positive', 'reactive', 'present'].map(labFlagWord)).toEqual([
+      'High',
+      'Low',
+      'Positive',
+      'Reactive',
+      'Present',
+    ])
+    expect(labFlagWord('odd')).toBe('odd')
+    expect(unjudgedWords(0)).toBeNull()
+    expect(unjudgedWords(undefined)).toBeNull()
+    expect(unjudgedWords(1)).toBe('1 result had no normal range we could read, so it was not compared.')
+    expect(unjudgedWords(3)).toBe('3 results had no normal range we could read, so they were not compared.')
+  })
+
+  it('says a refused lab report has no results, not that the words were too long', () => {
+    expect(endWords('rejected', { fromLabReport: true }).heading).toBe('No results on this lab report')
+    expect(endWords('rejected').heading).toBe('That was too long')
+  })
+})
 
 describe('the stages of a search', () => {
   it('are ticked off only when the step that finishes each one is done, never going back', () => {

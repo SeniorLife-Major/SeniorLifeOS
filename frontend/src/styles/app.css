@@ -1604,6 +1604,74 @@ select.input {
   color: var(--color-primary);
 }
 
+.recent__from {
+  font-size: 1.0625rem;
+  color: var(--color-muted);
+}
+
+/* Doctor search from a lab report (pages/LabReportSearchPage.jsx, doctor/LabReportPanel.jsx) */
+.report-choice {
+  width: 100%;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.report-choice[aria-pressed='true'] {
+  border: var(--line) solid var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.see-today {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  font-size: 1.3125rem;
+  font-weight: 800;
+}
+
+.see-today > svg {
+  flex: 0 0 auto;
+}
+
+.lab-panel__summary {
+  margin: 0;
+  font-size: 1.1875rem;
+  line-height: 1.4;
+}
+
+.lab-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lab-findings > li + li {
+  border-top: var(--line-thin) solid var(--color-divider);
+}
+
+.lab-finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.75rem;
+  padding: 0.625rem 0;
+}
+
+.lab-finding__test {
+  font-size: 1.1875rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.lab-finding__doctor {
+  flex-basis: 100%;
+  font-size: 1.0625rem;
+  color: var(--color-muted);
+}
+
 .notice__title {
   margin: 0 0 0.375rem;
   font-size: 1.1875rem;

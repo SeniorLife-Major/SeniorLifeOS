@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { listSearches, startSearch } from '../api/doctors'
-import { Button } from '../components/Button'
+import { Button, ButtonLink } from '../components/Button'
 import { TextField } from '../components/Field'
 import { Icon } from '../components/Icon'
 import { Screen } from '../components/Screen'
@@ -16,6 +16,7 @@ const EXAMPLES = ['Knee pain', 'Sugar check-up', 'Eye problem', 'Ghutno mein dar
 
 // /doctor (the mockup's Ask and Searching screens): the person says what is wrong in their own
 // words; while the backend works, its steps are ticked off; the result opens at /doctor/:requestId.
+// Or they use a saved lab report instead (/doctor/lab, LabReportSearchPage).
 
 export function DoctorPage() {
   const navigate = useNavigate()
@@ -78,6 +79,15 @@ export function DoctorPage() {
           {ready ? 'Find doctors' : 'Tell us the problem first'}
         </Button>
       </form>
+      <section className="panel" aria-labelledby="from-lab">
+        <h2 id="from-lab" className="panel__title">
+          Have a lab report?
+        </h2>
+        <p className="panel__hint">We look at the results outside the normal range and find the right kind of doctor.</p>
+        <ButtonLink to="/doctor/lab" variant="secondary" icon="document">
+          Use my lab report
+        </ButtonLink>
+      </section>
       {/* Always: doctor search always uses the AI (Decision 73); the Settings switches are for documents. */}
       <p className="fine-print">
         <Icon name="lock" size={18} /> An AI service reads your words to choose the right kind of doctor. Your name is
@@ -120,6 +130,7 @@ function RecentSearches() {
               <Link className="recent" to={`/doctor/${encodeURIComponent(search.requestId)}`}>
                 <span className="recent__text">
                   <span className="recent__title">{search.specialty?.label ?? 'Doctor search'}</span>
+                  {search.fromLabReport && <span className="recent__from">From your lab report</span>}
                   <span className={`chip chip--${chip.kind}`}>{chip.word}</span>
                 </span>
                 {date && <span className="recent__date">{date}</span>}

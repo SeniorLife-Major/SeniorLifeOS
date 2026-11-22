@@ -14,12 +14,14 @@ from langgraph.types import Command
 
 from backend.graphs.health_graph import (
     CLARIFYING_QUESTION, GENERAL_PHYSICIAN_FIRST, HERE_LABEL, HOME_LABEL, LOCATION_NOT_FOUND, LOCATION_QUESTIONS,
-    MAX_QUERY_CHARS,
+    MAX_QUERY_CHARS, NO_LAB_RESULTS,
     CALL_QUESTION, NO_DOCTORS, NO_TOP_CHOICE, NONE_VERIFIED, OLD_DETAILS, RELAXED_NOTES, SEARCH_UNAVAILABLE,
     VAGUE_NEED, build_health_graph, map_specialty,
 )
+from backend.tools.doctor_explain import URGENCY_NOTES
 from backend.tools.doctor_search import DoctorListError
 from backend.tools.geocode import ATTRIBUTION, GeocodeError
+from backend.tools.lab_specialty import SEE_TODAY
 from backend.tools.provider_import import today_utc
 from test_doctor_search import REGISTERED, doctor
 from backend.tools.specialties import GENERAL_PHYSICIAN, SPECIALTIES
@@ -796,6 +798,92 @@ class PauseAndValidationTests(unittest.TestCase):
                 result = build_health_graph().invoke(bad)
                 self.assertEqual(result["status"], "rejected")
                 self.assertEqual(result["events"], ["validate_request"])
+
+
+def lab_row(name, value, unit, ref_range):
+    return {"name": name, "value": value, "unit": unit, "ref_range": ref_range, "flag": None}
+
+
+def lab_report(*rows):
+    return {"document_id": "lab-1", "report_date": "2026-11-02", "lab_name": "Demo Path Labs", "tests": list(rows)}
+
+
+LDL_HIGH = lab_row("LDL Cholesterol", 172, "mg/dL", "< 100")
+HBA1C_HIGH = lab_row("HbA1c", 8.2, "%", "4.0 - 5.6")
+TROPONIN_HIGH = lab_row("Troponin I", 0.9, "ng/mL", "< 0.04")
+
+
+def from_lab(report, **extra):
+    """A search from a lab report: no words. The model must never be asked."""
+    def no_model(*args, **kwargs):
+        raise AssertionError("a lab report search asked the model")
+
+    with patch("backend.agents.llm_agents.structured_model", no_model):
+        return build_health_graph().invoke({"actor_id": "senior-meera", "lab_report": report, "use_llm": True,
+                                            "medical_cloud_consent": True, **extra})
+
+
+class LabReportTests(unittest.TestCase):
+    """A search from a saved lab report (lab-report-doctor-search): the fixed table picks the kind
+    of doctor (tools/lab_specialty.py); the rest of the search is the same."""
+
+    def test_results_for_one_specialist_find_that_specialist(self):
+        result = from_lab(lab_report(LDL_HIGH), current_location=IN_ANDHERI)
+        self.assertEqual(result["events"][:4], ["validate_request:lab_report", "read_lab_report:cardiologist:1",
+                                                "map_specialty:cardiologist", "locate:phone"])
+        self.assertNotIn("safety_check", " ".join(result["events"]))  # no words to check
+        self.assertEqual((result["status"], result["specialty"], result["urgency"]),
+                         ("doctors_found", "cardiologist", "routine"))
+        self.assertEqual(result["reading_source"], "lab_report")
+        self.assertEqual({d["specialty"] for d in result["doctors"]}, {"cardiologist"})
+        self.assertEqual([item["test"] for item in result["lab_reading"]["findings"]], ["LDL Cholesterol"])
+        self.assertIn(result["lab_reading"]["reason"], result["answer"])
+        self.assertNotIn(SEE_TODAY, result["answer"])
+
+    def test_results_for_several_specialists_find_a_general_physician(self):
+        result = from_lab(lab_report(LDL_HIGH, HBA1C_HIGH), current_location=IN_ANDHERI)
+        self.assertEqual(result["specialty"], GENERAL_PHYSICIAN)
+        self.assertEqual([d["doctor_id"] for d in result["doctors"]], ["practo:5"])
+        self.assertIsNone(result["doctor_fallback"])  # a general physician was asked for, not a stand-in
+        self.assertIn("more than one kind of doctor", result["answer"])
+
+    def test_a_very_abnormal_value_says_see_a_doctor_today(self):
+        result = from_lab(lab_report(TROPONIN_HIGH), current_location=IN_ANDHERI)
+        self.assertEqual((result["specialty"], result["urgency"]), ("cardiologist", "urgent"))
+        self.assertTrue(result["lab_reading"]["see_today"])
+        self.assertIn("read_lab_report:cardiologist:1:see_today", result["events"])
+        self.assertIn(SEE_TODAY, result["answer"])
+        self.assertIn(URGENCY_NOTES["urgent"], result["answer"])
+
+    def test_no_specialist_near_gives_a_general_physician_first_and_still_says_why(self):
+        result = from_lab(lab_report(HBA1C_HIGH), current_location=IN_ANDHERI)  # no endocrinologist listed
+        self.assertEqual((result["specialty"], result["doctor_fallback"]), ("endocrinologist", GENERAL_PHYSICIAN))
+        lines = result["answer"].splitlines()
+        self.assertLess(lines.index(result["lab_reading"]["reason"]),
+                        lines.index(GENERAL_PHYSICIAN_FIRST.format(label=SPECIALTIES["endocrinologist"], km=20)))
+
+    def test_without_the_phone_location_it_asks_where(self):
+        result = from_lab(lab_report(LDL_HIGH))
+        self.assertEqual((result["status"], result["question"]), ("needs_location", LOCATION_QUESTIONS["where"]))
+        self.assertEqual(result["specialty"], "cardiologist")
+
+    def test_real_pause_for_the_location_keeps_the_reading(self):
+        graph = build_health_graph(checkpointer=make_checkpointer(TEST_CHECKPOINT_KEY))
+        config = {"configurable": {"thread_id": "health-lab-1"}}
+        paused = graph.invoke({"actor_id": "senior-meera", "lab_report": lab_report(TROPONIN_HIGH),
+                               "use_interrupt": True}, config)
+        self.assertEqual(paused["__interrupt__"][0].value["question"], LOCATION_QUESTIONS["where"])
+        result = graph.invoke(Command(resume={"lat": IN_ANDHERI["lat"], "lon": IN_ANDHERI["lon"]}), config)
+        self.assertEqual((result["status"], result["specialty"]), ("doctors_found", "cardiologist"))
+        self.assertTrue(result["lab_reading"]["see_today"])
+        self.assertIn(SEE_TODAY, result["answer"])
+
+    def test_a_report_with_no_results_is_rejected(self):
+        for report in (lab_report(), {"document_id": "lab-1"}, "not a report"):
+            with self.subTest(report=report):
+                result = from_lab(report)
+                self.assertEqual((result["status"], result["errors"]), ("rejected", [NO_LAB_RESULTS]))
+                self.assertEqual(result["events"], ["validate_request:lab_report"])
 
 
 if __name__ == "__main__":
